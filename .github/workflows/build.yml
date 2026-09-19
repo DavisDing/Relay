@@ -1,0 +1,77 @@
+name: Build Relay
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*.*.*'
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: relay-build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build macOS arm64 package
+    runs-on: macos-26
+    outputs:
+      version: ${{ steps.version.outputs.marketing_version }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Calculate version
+        id: version
+        shell: bash
+        run: scripts/ci-version.sh >> "$GITHUB_OUTPUT"
+
+      - name: Run offline regression checks
+        run: scripts/test-regressions.sh
+
+      - name: Build and package
+        env:
+          RELAY_VERSION: ${{ steps.version.outputs.marketing_version }}
+          SWIFT_SCRATCH_PATH: ${{ runner.temp }}/relay-swift-build
+        run: scripts/package-app.sh "$GITHUB_WORKSPACE/.build/package"
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Relay-${{ steps.version.outputs.marketing_version }}-macos-arm64
+          path: |
+            .build/package/Relay-${{ steps.version.outputs.marketing_version }}-macos-arm64.zip
+            .build/package/Relay-${{ steps.version.outputs.marketing_version }}-metadata.txt
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download package artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: Relay-${{ needs.build.outputs.version }}-macos-arm64
+          path: .build/package
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            .build/package/Relay-*-macos-arm64.zip \
+            .build/package/Relay-${{ needs.build.outputs.version }}-metadata.txt \
+            --title "Relay $GITHUB_REF_NAME" \
+            --generate-notes

@@ -1,8 +1,8 @@
 # Relay / 驿站 · 需求文档
 
-**版本**：v1.5-draft
+**版本**：v1.7-draft
 **日期**：2026-09-18
-**状态**：designing
+**状态**：implementation
 
 ## 1. 项目目标
 
@@ -19,7 +19,7 @@ Relay（驿站）是一款仅面向 Apple Silicon 的 macOS 菜单栏应用，�
 - 只读监控，不充值、不扣费、不代理模型调用。
 - 本地优先；单账户失败不能影响其他账户。
 - 不伪造缺失指标：未知、未支持和真实的 0 必须区分。
-- 系统令牌和 Pipio 用户标识的真实值仅在请求期间短暂驻留内存，持久化时只进入 Keychain；不得写入项目源码、文档、普通文件、SwiftData、同步文件、日志或 CloudKit，文档只能使用抽象字段名或占位符。
+- 系统令牌和 Pipio 用户标识的真实值仅在请求期间短暂驻留内存，持久化时只进入 Relay 私有应用数据目录中的凭据文件；该文件不进入 iCloud 云盘同步目录、项目源码、文档、SwiftData 或日志，文档只能使用抽象字段名或占位符。
 
 ## 2. 目标平台与形态
 
@@ -27,19 +27,19 @@ Relay（驿站）是一款仅面向 Apple Silicon 的 macOS 菜单栏应用，�
 - 形态：菜单栏常驻，默认不显示 Dock 图标；可从设置打开独立窗口。
 - UI：遵循 macOS 27 Liquid Glass；视觉细节由 UI 阶段确定。
 - 网络：应用直接访问供应商 API，不经过 Relay 自建服务器。
-- 同步：首期使用用户选择的文件夹同步非秘密数据；文件夹可以位于 iCloud 云盘。由于当前无付费开发者账户和稳定签名，首期不依赖 CloudKit Container，也不承诺凭据跨设备同步。
+- 同步：不使用 CloudKit Container；使用 iCloud 云盘中的普通文件同步非秘密数据。默认逻辑目录为 `iCloud Drive/文稿/Relay`（系统路径语义为 `iCloud Drive/Documents/Relay`）；凭据始终只存本机 Relay 私有应用数据目录，不通过 iCloud 云盘或其他 iCloud 机制同步。
 
 ## 3. 首期范围
 
 ### P0：可用闭环
 
 1. Pipio 单/多账户添加、编辑、启用、禁用和删除。
-2. Keychain 安全保存运行时认证信息（系统令牌和数值用户 ID）；项目与文档不记录真实值。
+2. Relay 私有应用数据目录保存运行时认证信息（系统令牌和数值用户 ID）；项目与文档不记录真实值。
 3. 读取站点状态、账户余额/累计数据、今日统计（接口支持时）。
 4. 菜单栏摘要、首页账户列表、账户详情。
 5. 手动刷新、定时刷新、失败保留旧数据、退避重试。
 6. 本地历史数据和设置持久化。
-7. 首期通过用户选择的同步文件夹保存账户元数据、偏好和聚合历史；目录可选择在 iCloud 云盘，令牌和用户 ID 不进入同步文件。
+7. 首期通过 `iCloud Drive/文稿/Relay` 中的版本化同步文件保存账户元数据、偏好和聚合历史；令牌、用户 ID 和其他凭据不进入同步文件。
 
 ### P1：产品完整度
 
@@ -100,10 +100,10 @@ Pipio-User: <numeric-user-id>
 
 - 支持 Pipio、DeepSeek；“自定义站点”延后至 P2。
 - 同一供应商可添加多个账户。
-- Pipio 必填：站点 URL、系统令牌、数值用户 ID、账户显示名；令牌和用户 ID 仅运行时输入并写入 Keychain，不进入账户元数据。
+- Pipio 必填：站点 URL、系统令牌、数值用户 ID、账户显示名；令牌和用户 ID 仅运行时输入并写入本机凭据文件，不进入账户元数据。
 - 添加时依次验证站点状态、账户自查接口和统计接口。
 - 用户可以禁用账户；禁用不删除已有历史数据。
-- 删除账户时删除本地数据和 Keychain 项；同步文件通过 tombstone 传播删除。
+- 删除账户时删除本地数据和本机凭据文件项；同步文件通过 tombstone 传播删除。
 
 ### 5.2 菜单栏
 
@@ -136,10 +136,10 @@ Pipio-User: <numeric-user-id>
 
 ### 5.6 文件夹同步
 
-- 首期不使用 CloudKit Container；用户在设置中选择一个同步目录，该目录可以位于 iCloud 云盘。
+- 不使用 CloudKit Container。同步只使用 iCloud 云盘普通文件，默认逻辑目录为 `iCloud Drive/文稿/Relay`。
 - 同步文件只包含账户元数据、聚合历史、用户偏好和删除 tombstone，不包含令牌、Pipio 用户 ID、API Key、userToken、Cookie 或原始日志。
-- 凭据首期只保存在当前 Mac 的本地 Keychain。待未来具备稳定签名和相应能力后，再单独验证 iCloud Keychain 同步。
-- 同步目录未选择、不可访问、冲突或离线时，本机功能必须继续可用。
+- 凭据始终只保存在当前 Mac 的 Relay 私有应用数据目录，不通过 iCloud Keychain、iCloud 云盘同步文件或其他 iCloud 同步机制跨设备同步；其他 Mac 必须重新录入凭据。
+- 首次启用时通过系统目录选择器确认 iCloud 云盘的“文稿/Relay”目录；实现不得拼接本地化显示路径，而应保存用户确认目录的持久化 bookmark。目录不可访问、冲突或离线时，本机功能必须继续可用。
 - 关闭同步只停止读写同步文件，不删除本地数据；删除同步文件需二次确认。
 
 ### 5.7 汇率、历史和低余额
@@ -166,7 +166,8 @@ Pipio-User: <numeric-user-id>
 
 ### 安全
 
-- Keychain 条目按账户隔离。
+- 凭据文件按账户引用隔离；文件目录权限为 0700，凭据文件权限为 0600。
+- 该方案不具备 Keychain 的硬件保护和系统级访问控制，属于用户明确选择的安全降级；应用必须在设置和文档中明确提示。
 - 所有日志默认脱敏；禁止输出令牌、用户 ID、`Pipio-User`、Cookie、Authorization 和完整响应体中的个人信息。
 - 只允许 HTTPS；自定义站点若支持，默认拒绝无效证书和 HTTP。
 
@@ -186,7 +187,7 @@ Pipio-User: <numeric-user-id>
 
 ### AC-001 Pipio 添加账户
 
-给定有效站点、系统令牌和数值用户 ID；当用户验证并保存；则应用应确认 `/api/status` 与 `/api/user/self` 可用，将凭据写入 Keychain，并创建首个本地快照。
+给定有效站点、系统令牌和数值用户 ID；当用户验证并保存；则应用应确认 `/api/status` 与 `/api/user/self` 可用，将凭据写入 Relay 私有凭据文件，并创建首个本地快照。
 
 ### AC-002 缺少用户 ID
 
@@ -202,7 +203,7 @@ Pipio-User: <numeric-user-id>
 
 ### AC-005 凭据保护
 
-当添加、刷新、同步、导出或记录错误时；系统令牌和 Pipio 用户 ID 的真实值均不得出现在项目文件、文档、SwiftData、同步文件、CloudKit 记录、控制台日志、诊断导出和 UI 回显中。
+当添加、刷新、同步、导出或记录错误时；系统令牌和 Pipio 用户 ID 的真实值只能出现在 Relay 私有凭据文件和请求期间的内存中，不得出现在项目文件、文档、SwiftData、iCloud 云盘同步文件、控制台日志、诊断导出和 UI 回显中。
 
 ### AC-006 今日数据不完整
 
@@ -210,27 +211,73 @@ Pipio-User: <numeric-user-id>
 
 ### AC-007 文件夹同步
 
-当用户选择 iCloud 云盘或其他文件夹作为同步目录时，同步文件不得包含令牌、Pipio 用户 ID 或其他凭据；目录不可用时本地刷新和查看仍正常工作。
+当用户启用 `iCloud Drive/文稿/Relay` 文件同步时，同步文件不得包含令牌、Pipio 用户 ID、API Key 或其他凭据；目录不可用时本地刷新和查看仍正常工作，其他 Mac 导入元数据后必须重新录入凭据。
 
 ## 9. 非目标
 
 - 自动充值、扣费或调用模型。
 - Relay 自建账号、服务器或跨 Apple ID 数据共享。
+- CloudKit Container、CloudKit Database 和凭据 iCloud 同步。
 - 浏览器爬虫、复制浏览器会话、私有网页接口和绕过站点认证。
 - iPhone、iPad、Android、Web 客户端。
 - 深度财务分析和税务/账单核对。
 
-## 10. NEEDS_CONFIRMATION
+## 10. 安全设计变更记录
 
-1. iCloud 云盘同步目录的默认建议位置尚未确定；实现上不硬编码路径，由用户首次启用时选择。
+### SEC-001：凭据从 Keychain 改为软件内部文件
 
-以下事项已由用户确认，不再列为待确认：
+- 日期：2026-09-18。
+- 变更：移除 `Security.framework`、Keychain service 和 Keychain 读写逻辑，改用 `FileCredentialStore`。
+- 文件：默认位于 `~/Library/Application Support/cloud.dinghao.relay/relay-credentials-v1.json`。
+- 保护：父目录创建为 0700，凭据文件创建/写入后设置为 0600；采用临时文件原子写入；不放入 iCloud Drive 同步文件。
+- 限制：普通文件不等同于 Keychain，拥有本机用户权限的进程仍可能读取；当前不实现额外主密码或自定义加密。
+- 迁移：旧 Keychain 数据不自动迁移；当前代码已不再读取 Keychain。
+
+### SWIFT-001：SwiftData 不作为当前运行时前提
+
+SwiftData 是随 Apple 系统提供的原生框架，不是需要单独购买的第三方依赖；当前代码继续使用版本化本地 JSON repository，以便在免费 Apple 账户和现有命令行工具链下编译、运行和分发。未来完整 Xcode 工具链可用时，如确有查询/迁移需求，再评估把 `LocalRepository` 替换为 SwiftData 实现。
+
+## 11. NEEDS_CONFIRMATION
+
+`NONE`：当前 Architecture 阶段无待确认项。
+
+以下事项已由用户确认：
 
 - Bundle ID 使用 `cloud.dinghao.relay`。
-- 当前没有付费开发者账户；首期不用 CloudKit Container，改为用户选择文件夹的文件同步。
+- 不考虑使用 CloudKit Container；同步固定采用 iCloud 云盘普通文件，默认逻辑目录为 `iCloud Drive/文稿/Relay`。
+- 凭据不通过 iCloud Keychain、iCloud 云盘文件或其他 iCloud 机制同步，只保存在每台 Mac 的 Relay 私有应用数据目录中。
 - GitHub Releases 发布，不在 App Store 上架。
 - DeepSeek 首期只使用官方接口，不复制浏览器会话或调用私有网页接口。
 - Pipio 汇率/换算参数由站点提供，刷新频率可配置，默认每 7 天。
 - 历史默认保留 1 年，用户可切换为永久。
 - 低余额阈值按账户配置，默认值为 20。
 - 今日数据不完整时隐藏今日消费字段。
+
+## 13. 本轮实现记录（2026-09-18）
+
+- 已将 UI 的添加账号、真实测活、保存、删除、手动刷新接入 `AccountService`、`RefreshCoordinator` 和 `FileCredentialStore`，移除原型中的延迟模拟和硬编码余额。
+- 已新增 `RelayStore` 作为菜单栏 UI 与本地业务层的连接层；首屏读取本地快照，刷新失败保留旧快照。
+- 已将余额改为可为空；余额未知显示 `--`，不再把未知数据伪造为 `0.00`。
+- 已删除 `Sources/Relay/Mock/MockDataProvider.swift` 及其空目录。
+- 安全设计详见 `docs/SECURITY_DESIGN.md`。
+
+## 12. 2026-09-19 Implementation Status Update
+
+已补齐或接入：
+
+- 自动刷新间隔设置为 1/5/15/30 分钟，默认 5 分钟。
+- 历史保留策略可选 1 年或永久。
+- 账户编辑失败回滚旧凭据，保存失败不关闭编辑弹窗。
+- Pipio 当日日志按模型聚合请求数、Token 和消费；接口不可用时隐藏该能力，不伪造 0。
+- 账户详情显示已保存的 7/30 日每日聚合趋势，并在存在可靠数据时显示模型消耗分析。
+- iCloud 普通文件同步使用文件协调读写，并尝试合并冲突版本；首次启用先导入再导出，云盘不可用时本地功能继续工作。
+- 删除账号增加二次确认。
+- iCloud 同步目录改为系统目录选择器确认，并持久化安全作用域 bookmark；同步读写使用该 bookmark，不拼接本地化路径。
+- 低余额系统通知按账户和自然日持久化去重；未获授权或排队失败时不会提前记录已通知状态。
+- 登录项设置接入 `SMAppService.mainApp`；在未打包的 SwiftPM 命令行环境中注册失败时向用户显示错误，不伪造成功。
+
+仍未完成的产品项：
+
+- 全局快捷键。
+- DeepSeek 历史用量和模型用量（官方余额接口不提供时保持未知）。
+- iCloud 冲突合并的用户可见提示、下载状态和真实多设备运行验证。

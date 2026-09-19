@@ -1,6 +1,6 @@
 # Relay / 驿站 · 技术设计
 
-**版本**：v1.1-draft
+**版本**：v1.3-draft
 **日期**：2026-09-18
 **阶段**：Architecture
 
@@ -9,15 +9,15 @@
 | 层 | 方案 | 原因 |
 |---|---|---|
 | UI | SwiftUI + 少量 AppKit | SwiftUI 实现页面；AppKit 负责状态栏、窗口层级和必要的 macOS 生命周期控制 |
-| 语言 | Swift（macOS 27 SDK） | 原生平台能力、Keychain、菜单栏、文件协调和 Liquid Glass 支持最好 |
+| 语言 | Swift（macOS 27 SDK） | 原生平台能力、菜单栏、文件协调和 Liquid Glass 支持最好 |
 | 并发/网络 | Swift Concurrency + URLSession | 不引入第三方网络框架；便于账户级隔离、取消和限流 |
 | 图表 | Swift Charts | 7/30 日趋势，无需第三方图表库 |
-| 本地数据 | SwiftData（首选） | 项目目前无既有代码；日聚合数据规模小，原生且足够简单 |
-| 文件同步 | 用户选择目录 + `NSFileCoordinator` | 无付费开发者账户时不依赖 CloudKit Container；目录可位于 iCloud 云盘 |
-| 凭据 | Security.framework Keychain | 普通持久化层只保存 credential reference |
+| 本地数据 | 版本化 JSON `FileLocalRepository`（当前实现） | 无第三方依赖、免费账户可直接编译运行；通过 `LocalRepository` 协议保留未来替换空间 |
+| 文件同步 | iCloud Drive 普通文件 + `NSFileCoordinator` | 不使用 CloudKit；默认逻辑目录为 `iCloud Drive/文稿/Relay`，仅同步非秘密数据 |
+| 凭据 | `FileCredentialStore` 私有应用支持目录 | 用户已明确选择不使用 Keychain；目录/文件使用 0700/0600，不进入同步文件 |
 | 启动项 | ServiceManagement | 原生登录项管理 |
 
-项目当前只有文档，没有可复用业务代码或既有技术栈。SwiftData 作为本机事实源；同步文件是可合并副本，不直接替代本地数据库。
+项目当前只有文档，没有可复用业务代码或既有技术栈。版本化本地 JSON 是当前本机事实源；iCloud 云盘同步文件是可合并副本，不直接替代本地数据。SwiftData 作为未来可替换实现，不是当前运行前提。CloudKit 不在当前或后续已规划范围内。
 
 ## 2. 系统结构
 
@@ -34,9 +34,9 @@ Menu Bar / SwiftUI Views
           │               ├── PipioAdapter ── URLSession ── pipio.io
           │               └── DeepSeekAdapter ─ URLSession ─ deepseek.com
           │
-          ├── CredentialStore ── macOS Keychain
-          ├── LocalRepository ── SwiftData
-          └── FileSyncService ── User-selected Folder / iCloud Drive
+          ├── CredentialStore ── Application Support/relay-credentials-v1.json
+          ├── LocalRepository ── relay-local-v1.json
+          └── FileSyncService ── iCloud Drive/Documents/Relay
 ```
 
 Relay 无自建后端。前端、业务层和供应商访问均运行在本机；“前后端职责”在本项目中对应 UI 层与本地业务/数据层。
@@ -66,7 +66,7 @@ Relay 无自建后端。前端、业务层和供应商访问均运行在本机�
 
 ### 3.3 AccountService
 
-职责：账户增删改、启用禁用、验证、Keychain 引用维护、删除数据和文件同步 tombstone。
+职责：账户增删改、启用禁用、验证、本地凭据引用维护、删除数据和文件同步 tombstone。
 
 添加 Pipio 账户流程：
 
@@ -75,7 +75,7 @@ Relay 无自建后端。前端、业务层和供应商访问均运行在本机�
 3. 校验令牌非空、`pipioUserId` 为正整数。
 4. 请求 `GET {origin}/api/user/self`。
 5. 请求统计接口并生成 `ProviderCapabilities`。
-6. 先写 Keychain，成功后写账户元数据；任一步失败则回滚本次新建数据。
+6. 先写本地凭据文件，成功后写账户元数据；任一步失败则回滚本次新建数据。
 7. 保存首个快照和按日聚合。
 
 ### 3.4 ProviderAdapter
@@ -167,11 +167,12 @@ amount = quota / quota_per_unit
 
 ### 3.6 CredentialStore
 
-- Bundle ID：`cloud.dinghao.relay`。
-- Keychain service：`cloud.dinghao.relay.credentials`。
-- account key：稳定的本地 `accountId`，不把站点令牌、用户 ID、邮箱或其哈希拼进 key。
-- Keychain value：版本化的 credential payload，包含令牌和供应商所需的用户 ID；这些值不进入 SwiftData、同步文件、源码、文档或日志。
-- 用户已允许凭据通过 iCloud 同步，但 GitHub 首期版本没有可用于对外分发的 Developer ID 稳定签名与可依赖的 Keychain access group 身份，因此凭据只存本机 Keychain；不把 iCloud Keychain 同步作为首期已承诺能力。未来具备稳定签名后，再验证 `kSecAttrSynchronizable`、迁移和删除传播语义。
+- 实现：`FileCredentialStore`，不依赖 `Security.framework`。
+- 默认文件：`~/Library/Application Support/cloud.dinghao.relay/relay-credentials-v1.json`。
+- 文件内容：版本化 JSON map，key 为稳定的本地 `accountId` 引用，value 为令牌和供应商所需的用户 ID。
+- 文件权限：父目录 0700，凭据文件 0600；写入使用 `.atomic`。
+- 该文件只属于当前 Mac 的本地应用数据，不进入 SwiftData、iCloud Drive 同步文件、源码、文档、日志或诊断导出。
+- 这是用户明确选择的安全降级：普通文件不具备 Keychain 的硬件保护、系统访问控制和授权提示。当前不自创主密码或加密算法，避免产生虚假的安全保证。
 - 只向业务层返回短生命周期值，不进入可观察 UI state。
 
 ### 3.7 LocalRepository
@@ -182,12 +183,13 @@ amount = quota / quota_per_unit
 
 ### 3.8 FileSyncService
 
-- 首次启用时通过系统目录选择器让用户选择同步目录；目录可以是 iCloud 云盘中的文件夹，不硬编码用户路径。这是对普通文件的读写：Finder/iCloud Drive 客户端负责上传下载，Relay 不创建 CloudKit Container，也不读取用户的 iCloud 账户凭据。
-- 首期 GitHub 构建不启用 App Sandbox，保存普通持久化 URL bookmark；bookmark 失效或目录不可访问时要求用户重新选择，不阻塞本地功能。未来若启用沙盒，再迁移为安全作用域书签。
+- 不创建或使用 CloudKit Container。同步只读写 iCloud 云盘普通文件；Finder/iCloud Drive 客户端负责上传下载，Relay 不读取用户的 iCloud 账户凭据。
+- 默认逻辑目录为 `iCloud Drive/Documents/Relay`，中文 Finder 中显示为 `iCloud Drive/文稿/Relay`。不得硬编码 `~/Library/Mobile Documents/...` 或本地化的“文稿”字符串。首次启用时用系统目录选择器定位 iCloud Drive，并让用户确认“文稿/Relay”；保存确认后目录的持久化 URL bookmark。
+- 当前保存带安全作用域的持久化 URL bookmark；bookmark 失效或目录不可访问时要求用户重新选择，不阻塞本地功能。即使当前 GitHub 构建不启用 App Sandbox，也保持该授权模型，避免未来迁移时改变数据路径语义。
 - 同步文件名固定为 `relay-sync-v1.json`，使用版本化 schema、临时文件和原子替换，并通过 `NSFileCoordinator` 协调读写。
 - 同步账户元数据、日/模型聚合、用户主动设置和 tombstone；不含令牌、用户 ID、API Key、Cookie、原始日志或认证响应。
 - 合并以记录 UUID、`updatedAt` 和 tombstone 为依据；检测到无法自动解决的 iCloud 冲突版本时保留双方文件并提示用户。
-- 同步失败不阻塞本地写入；SwiftData 始终是本机事实源。
+- 同步失败不阻塞本地写入；`FileLocalRepository` 始终是当前本机事实源。
 - 其他设备导入账户元数据后显示“需要在此设备补充凭据”。
 
 ### 3.9 RateService
@@ -197,11 +199,20 @@ amount = quota / quota_per_unit
 - 缓存来源、获取时间和有效状态；失败时保留最后一次成功值并标记过期。
 - 仅当所有参与金额都有同源或明确可比较的未过期换算信息时才允许汇总。
 
-### 3.10 Distribution
+### 3.10 SwiftData 与账户/发布限制
+
+- SwiftData 是 Apple 平台随系统提供的原生框架，不是需要单独购买或单独下载的第三方 SDK；没有按数据量或调用量收费。
+- SwiftData 没有一个适用于所有 App 的固定“占用多少 MB”数字；它由系统提供，最终应用包体受链接、优化和实际使用 API 影响，当前不为它单独估算包体。
+- 代码体积没有 Apple 官方固定数字；实际包体增量取决于链接方式、优化和最终使用的 API，不能在设计阶段承诺一个固定 MB 数。
+- 免费 Apple 账户可以用于本地 Xcode 开发、编译和在自己的 Mac 上运行调试版本；不需要先购买 Apple Developer Program。
+- 付费 Apple Developer Program 主要影响 Developer ID 签名、公证、App Store/TestFlight 等分发能力，不是 SwiftData 的使用门槛；Apple 官方标准价格为 99 USD/年（地区可能显示本地货币）。
+- 因此当前不把 SwiftData 作为必要依赖；现有 `LocalRepository` 已支持将来替换。
+
+### 3.11 Distribution
 
 - Bundle ID：`cloud.dinghao.relay`。
 - 发布渠道：GitHub Releases，不提交 Mac App Store。
-- 当前没有付费 Apple Developer Program 账户，因此不能把 Developer ID 签名、公证和 CloudKit Container 作为首期前提。
+- 当前使用免费 Apple 账户，因此不能把 Developer ID 签名和公证作为首期前提；CloudKit Container 已明确不采用，与未来是否付费无关。
 - Release 构建至少执行 ad-hoc code signing 以固定应用包内部签名结构，但它不等同于 Apple 信任的 Developer ID 签名或公证。首期不启用 App Sandbox，以避免依赖当前不可稳定分发的沙盒授权与安全作用域书签身份。
 - 安装文档优先说明首次尝试打开后，到“系统设置 → 隐私与安全性 → 仍要打开”的流程；不把 `sudo xattr` 作为默认安装步骤。
 - `xattr -d/-rd com.apple.quarantine` 仅删除下载文件的 quarantine 扩展属性，不是代码签名、开发者认证或公证。普通用户对自己拥有的 App 通常不需要 `sudo`；该命令只作为高级故障排查说明，并附带来源校验警告。
@@ -221,9 +232,9 @@ amount = quota / quota_per_unit
 
 ### 数据层
 
-- Keychain 管秘密。
-- SwiftData 管本地业务数据。
-- FileSyncService 管用户选择目录中的可同步非秘密数据。
+- `FileCredentialStore` 管本机凭据文件；不使用 Keychain。
+- `FileLocalRepository` 管当前本地业务数据；SwiftData 不是当前运行前提。
+- FileSyncService 管 `iCloud Drive/文稿/Relay` 中的可同步非秘密数据。
 
 ### 外部服务层
 
@@ -245,7 +256,7 @@ App Launch
 ### 5.2 Pipio 刷新
 
 ```text
-Account metadata + Keychain credential
+Account metadata + local credential file
   → PipioAdapter 构造 management request
   → /api/user/self + /api/log/self/stat
   → DTO 校验与单位换算
@@ -324,13 +335,13 @@ GET https://api.deepseek.com/user/balance
 Authorization: Bearer <deepseek-api-key>
 ```
 
-只解析官方返回的可用状态、币种和余额字段。DeepSeek 官方 API Key 存本机 Keychain；不接受浏览器 Cookie、网页 userToken 或网站内部接口凭据。
+只解析官方返回的可用状态、币种和余额字段。DeepSeek 官方 API Key 存本机 Relay 凭据文件；不接受浏览器 Cookie、网页 userToken 或网站内部接口凭据。
 
 ## 7. 数据设计
 
 ### DATABASE
 
-本地数据库：`REQUIRED`（SwiftData）。
+本地数据库：`REQUIRED`（当前为版本化 JSON；SwiftData 不是运行前提）。
 服务器数据库：`NOT_REQUIRED`。
 
 ### Account
@@ -341,7 +352,7 @@ Authorization: Bearer <deepseek-api-key>
 | providerKind | enum | pipio/deepSeek |
 | displayName | String | 用户可编辑 |
 | siteOrigin | URL/String | 规范化 origin，不含令牌 |
-| credentialRef | String | Keychain 引用；Pipio 用户 ID 与令牌仅保存在 Keychain |
+| credentialRef | String | 本地凭据文件 map key；Pipio 用户 ID 与令牌仅保存在私有应用数据目录 |
 | enabled | Bool | 是否刷新和汇总 |
 | lowBalanceThreshold | Decimal? | 账户级阈值 |
 | sortOrder | Int | 默认手动顺序 |
@@ -385,7 +396,7 @@ Authorization: Bearer <deepseek-api-key>
 
 ### AppSettings
 
-刷新间隔、状态栏显示项、外观、默认页面、低余额默认值（20）、历史保留策略（默认 1 年/可选永久）、同步目录书签、文件同步开关、汇率刷新频率（默认 7 天）。
+刷新间隔、状态栏显示项、外观、默认页面、低余额默认值（20）、历史保留策略（默认 1 年/可选永久）、iCloud Drive 同步目录书签、文件同步开关、汇率刷新频率（默认 7 天）。
 
 ### SyncEnvelope
 
@@ -454,7 +465,7 @@ Pipio 表单明确区分：
 - 刷新、汇率与低余额
 - 状态栏与外观
 - 登录项/快捷键
-- 文件夹同步（可选择 iCloud 云盘）
+- iCloud 云盘文件同步（默认 `文稿/Relay`）
 - 高级（缓存、数据保留、诊断信息）
 
 诊断导出必须脱敏，不包含令牌、Pipio 用户 ID、Cookie、邮箱、姓名或原始认证响应。
@@ -473,7 +484,7 @@ Pipio 表单明确区分：
 | JSON 字段变化 | responseIncompatible | 当前账户标记部分失败；仅保存错误代码和结构版本，不保存原始响应或身份字段 |
 | 指标缺失 | unsupported/unknown | 隐藏或标注未知，不显示 0 |
 | 同步目录不可用/冲突 | syncUnavailable/syncConflict | 本地照常工作；提示重新授权目录或处理冲突 |
-| Keychain 读取失败 | credentialUnavailable | 提示重新授权/录入 |
+| 本地凭据文件读取失败 | credentialUnavailable | 提示重新录入 |
 
 ## 10. 安全设计
 
@@ -482,7 +493,7 @@ Pipio 表单明确区分：
 - UI state 不存明文 credential；验证表单离开后清空。
 - 不枚举 `Pipio-User`，不尝试访问不属于用户的账户。
 - 站点 URL 只允许 HTTPS；重定向到不同 origin 时默认拒绝携带认证头。
-- 同步文件、SwiftData migration 和诊断导出需检查令牌、用户 ID 及其派生值永不进入序列化模型。
+- 同步文件、本地 JSON 序列化和诊断导出需检查令牌、用户 ID 及其派生值永不进入序列化模型；凭据只能进入独立的本机凭据文件。
 
 ## 11. 测试关注点
 
@@ -499,9 +510,9 @@ Pipio 表单明确区分：
 ### 集成测试
 
 - MockURLProtocol 覆盖 status/self/stat/log 的 2xx、401、403、429、5xx、超时和畸形 JSON；夹具只使用明显的虚构占位值。
-- Keychain 新增、覆盖、删除、不可用和迁移；验证 SwiftData、同步文件、日志及诊断导出均不出现令牌或用户 ID。
+- 本地凭据文件新增、覆盖、删除、不可用和权限检查；验证本地 JSON、同步文件、日志及诊断导出均不出现令牌或用户 ID。
 - 单账户失败不影响其他账户。
-- 删除账户时本地数据、Keychain 与 tombstone 一致。
+- 删除账户时本地数据、本机凭据文件与 tombstone 一致。
 - iCloud 云盘离线、目录书签失效、文件冲突、schema 升级和恢复同步。
 - 一年/永久保留策略切换及清理边界。
 - 默认低余额阈值 20 的币种显示与用户覆盖。
@@ -532,16 +543,16 @@ Pipio 表单明确区分：
 
 ## 13. NEEDS_CONFIRMATION
 
-1. iCloud 云盘同步目录的默认建议位置尚未确定；实现不依赖固定路径，由用户首次启用时选择。
+`NONE`：当前 Architecture 阶段无待确认项。
 
-已确认：Bundle ID 为 `cloud.dinghao.relay`；GitHub Releases 发布；当前无付费开发者账户；首期改用用户选择目录的文件同步；DeepSeek 仅使用官方接口；汇率默认每 7 天刷新；历史默认 1 年并可选永久；低余额默认 20；今日数据不完整时隐藏该字段。
+已确认：Bundle ID 为 `cloud.dinghao.relay`；GitHub Releases 发布；不使用 CloudKit Container；同步使用 `iCloud Drive/文稿/Relay` 普通文件；凭据不通过任何 iCloud 机制同步；凭据存放在本机私有应用数据目录而不是 Keychain；DeepSeek 仅使用官方接口；汇率默认每 7 天刷新；历史默认 1 年并可选永久；低余额默认 20；今日数据不完整时隐藏该字段。
 
 ## 14. 设计决策
 
 ### D-001 原生单体应用
 
 **决定**：SwiftUI/AppKit 单体，无 Relay 后端。
-**原因**：需求只需要本机读取供应商 API 和用户选择目录的文件同步，自建服务增加隐私与维护成本。
+**原因**：需求只需要本机读取供应商 API 和 iCloud 云盘普通文件同步，自建服务增加隐私与维护成本。
 **日期**：2026-09-18。
 
 ### D-002 供应商适配器 + 统一领域模型
@@ -552,8 +563,8 @@ Pipio 表单明确区分：
 
 ### D-003 凭据与同步数据分离
 
-**决定**：令牌和供应商用户 ID 仅在请求期间短暂驻留内存，持久化时只存本机 Keychain；SwiftData 和同步文件只存非秘密数据。首期不承诺凭据跨设备同步。
-**原因**：用户允许 iCloud 凭据同步，但当前没有可用于对外分发的 Developer ID 稳定签名和 CloudKit Container 条件；同步型 Keychain 项依赖稳定应用身份和 access group，首期先保证本机凭据安全，其他设备由用户重新录入。
+**决定**：令牌和供应商用户 ID 仅在请求期间短暂驻留内存，持久化时只存当前 Mac 的非同步 Relay 凭据文件；本地 JSON repository 和 iCloud 云盘同步文件只存非秘密数据。凭据不跨设备同步。
+**原因**：用户已明确选择不使用 Keychain，同时禁止凭据通过 iCloud Keychain、iCloud 云盘文件或其他 iCloud 机制同步；其他设备必须重新录入。
 **日期**：2026-09-18。
 
 ### D-004 Pipio 双基址
@@ -562,10 +573,10 @@ Pipio 表单明确区分：
 **原因**：2026-09-18 实测 `/v1/api/...` 为 404，而 `/api/status` 可用。
 **日期**：2026-09-18。
 
-### D-005 用户选择目录的文件同步
+### D-005 iCloud 云盘文件同步
 
-**决定**：以版本化 JSON 同步文件替代首期 CloudKit；目录由用户选择，可位于 iCloud 云盘。
-**原因**：当前无付费开发者账户，同时仍需提供可选的跨 Mac 非秘密数据同步。
+**决定**：不使用 CloudKit；采用版本化 JSON 普通文件同步，默认逻辑目录为 `iCloud Drive/文稿/Relay`。首次设置时通过系统目录选择器确认实际目录并保存 bookmark，不硬编码本地化物理路径。
+**原因**：用户明确选择 iCloud 云盘文件同步，同时要求凭据不参与同步。
 **日期**：2026-09-18。
 
 ### D-006 GitHub 非 App Store 发布
@@ -579,3 +590,20 @@ Pipio 表单明确区分：
 **决定**：汇率默认每 7 天刷新；历史默认保留 1 年并可选永久；低余额阈值默认 20；今日数据不完整时隐藏今日消费字段。
 **原因**：用户已明确产品行为。
 **日期**：2026-09-18。
+
+## 13. 本轮实现记录（2026-09-18）
+
+- `RelayStore` 已接入菜单栏 UI，负责本地缓存加载、账户添加、真实测活、保存、刷新、删除和错误状态。
+- `AccountAddModalView` 不再构造假的 `AccountModel`，而是创建 `AccountDraft`，由业务层真实调用供应商接口。
+- `MainPopoverView` 不再维护孤立的内存账号数组；账户列表、汇总和刷新状态都来自 `RelayStore`。
+- `AccountModel.balance` 已改为可选，未知余额显示 `--`。
+- `FileLocalRepository` 也使用 `0700` 目录和 `0600` 文件权限；凭据仍只由 `FileCredentialStore` 保存。
+- 独立安全设计变更见 `docs/SECURITY_DESIGN.md`。
+
+## 14. 2026-09-19 Implementation Update
+
+- 账户编辑采用凭据先验证、元数据提交、失败回滚旧凭据的事务式顺序；UI 仅在 `async throws` 成功后关闭。
+- `ProviderSnapshot.modelUsages` 为可选的模型聚合列表，Pipio 通过 `/api/log/self` 当日分页日志聚合模型、请求数、Token 和消费；解析失败只降级该能力。
+- 设置持久化支持历史保留策略（1 年/永久）和 1/5/15/30 分钟自动刷新频率，默认 5 分钟。
+- iCloud 普通文件路径使用 `NSFileCoordinator` 协调读写，导入时尝试合并可解码的冲突版本；首次启用先导入再导出，凭据仍不进入 payload。
+- 删除账户 UI 增加二次确认，避免误删本地凭据和同步 tombstone。
