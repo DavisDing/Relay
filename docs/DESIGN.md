@@ -607,3 +607,21 @@ Pipio 表单明确区分：
 - 设置持久化支持历史保留策略（1 年/永久）和 1/5/15/30 分钟自动刷新频率，默认 5 分钟。
 - iCloud 普通文件路径使用 `NSFileCoordinator` 协调读写，导入时尝试合并可解码的冲突版本；首次启用先导入再导出，凭据仍不进入 payload。
 - 删除账户 UI 增加二次确认，避免误删本地凭据和同步 tombstone。
+
+## 15. 2026-09-20 本轮设计落地
+
+### D-008 全局快捷键运行时
+
+使用 AppKit `NSStatusItem + NSPopover` 作为菜单栏面板的显式控制目标；Carbon `RegisterEventHotKey` 负责注册快捷键。快捷键服务通过 runtime 抽象隔离系统注册，支持事务性回滚和离线契约测试。快捷键配置只保存 key code 与 modifier，不同步凭据或业务数据。
+
+### D-009 DeepSeek 用量能力降级
+
+DeepSeek 适配器只使用官方余额接口；历史/分模型账户用量在无官方端点时返回 `unsupported + nil`，不调用私有网页接口。UI 只展示实际支持的字段，不把未知能力转换为 0。
+
+### D-010 iCloud 冲突状态机
+
+`FileSyncService` 在发现多个远端候选或 unresolved conflict versions 时生成不可变 `SyncConflictReport`，并暂停本次自动合并写回。`RelayStore.resolveSyncConflict` 通过 `FileSyncService.resolve` 应用用户明确选择的 resolution；候选文件保留，不由 resolution 自动删除。同步目录不可用时使用 `unavailable` 状态，同时保持本机 repository 可用。
+
+### D-011 验证边界
+
+确定性同步脚本的退出码 2 表示无 fixture 失败但缺少真实第二台 Mac；此结果是环境阻塞而非通过。当前命令行工具链的 SDK/compiler mismatch 使 `swift build` 无法完成，交付报告必须单独列出该阻塞。

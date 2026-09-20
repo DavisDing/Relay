@@ -15,6 +15,8 @@ public final class RelayStore: ObservableObject {
     @Published public private(set) var lastSyncedAt: Date?
     @Published public private(set) var globalErrorMessage: String?
     @Published public private(set) var syncErrorMessage: String?
+    @Published public private(set) var syncStatus: SyncStatus = .idle
+    @Published public private(set) var syncConflictReport: SyncConflictReport?
     @Published public private(set) var presentationDate = Date()
     @Published public private(set) var accountErrors: [String: String] = [:]
     @Published public private(set) var settings: RelaySettings
@@ -138,6 +140,30 @@ public final class RelayStore: ObservableObject {
             accountErrors.removeValue(forKey: accountID.uuidString)
         }
         reloadFromRepository()
+    }
+
+    /// Applies a user's explicit conflict decision. A failed decision leaves
+    /// the report visible and keeps local data available for another attempt.
+    @discardableResult
+    public func resolveSyncConflict(_ decision: SyncConflictDecision) -> String? {
+        guard let report = syncConflictReport else {
+            let message = SyncConflictError.noPendingConflict.localizedDescription
+            syncErrorMessage = message
+            return message
+        }
+        do {
+            _ = try FileSyncService.resolve(repository: repository, report: report, decision: decision)
+            syncStatus = .merged
+            syncConflictReport = nil
+            syncErrorMessage = nil
+            reloadFromRepository(synchronize: false)
+            return nil
+        } catch {
+            let message = "无法处理同步冲突：" + Self.userFacingMessage(for: error)
+            syncStatus = .conflicted
+            syncErrorMessage = message
+            return message
+        }
     }
 
     public func deleteAccount(id: UUID) async {
@@ -275,11 +301,26 @@ public final class RelayStore: ObservableObject {
     private func reloadFromRepository(synchronize: Bool = true, now: Date = Date()) {
         do {
             if synchronize {
-                do {
-                    try FileSyncService.exportIfEnabled(repository: repository, settings: repository.settings())
+                let syncSettings = try repository.settings()
+                if !syncSettings.iCloudFileSyncEnabled {
+                    syncStatus = .idle
+                    syncConflictReport = nil
                     syncErrorMessage = nil
-                } catch {
-                    syncErrorMessage = "文件同步失败：" + Self.userFacingMessage(for: error)
+                } else if !FileSyncService.hasConfiguredDirectory() {
+                    syncStatus = .unavailable
+                    syncConflictReport = nil
+                    syncErrorMessage = "尚未选择 iCloud 同步文件夹；本机数据仍然可用。"
+                } else {
+                    do {
+                        try FileSyncService.exportIfEnabled(repository: repository, settings: syncSettings)
+                        syncStatus = FileSyncService.lastSyncStatus
+                        syncConflictReport = FileSyncService.lastConflictReport
+                        syncErrorMessage = syncStatus == .conflicted ? "存在待用户处理的同步冲突。" : nil
+                    } catch {
+                        syncStatus = .failed
+                        syncConflictReport = FileSyncService.lastConflictReport
+                        syncErrorMessage = "文件同步失败：" + Self.userFacingMessage(for: error)
+                    }
                 }
             }
             // Read AFTER the exchange so remote changes appear in this update.

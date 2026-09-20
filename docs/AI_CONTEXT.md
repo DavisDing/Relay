@@ -146,3 +146,13 @@ SwiftData 是 Apple 系统框架，不单独收费，也没有固定独立包体
 - iCloud 同步目录由系统目录选择器确认，并保存安全作用域 bookmark；同步服务不再根据本地化路径拼接目录。
 - 低余额通知去重状态按账户 UUID 与自然日持久化在本机 UserDefaults；通知授权失败不会消耗当天额度。
 - 设置页接入 macOS `SMAppService.mainApp` 登录项开关；裸 SwiftPM 可执行文件没有应用包身份时，UI 显示真实注册错误。
+
+## 14. 2026-09-20 Implementation Update
+
+- 全局快捷键已接入 AppKit 菜单栏控制器：支持显示/隐藏 Relay 面板和刷新全部账户；未新增“打开设置”快捷键。快捷键配置仅保存到本机 UserDefaults，注册失败不会覆盖上一次有效配置；未打包的 SwiftPM 环境明确显示未注册。
+- 菜单栏可见面板由 `RelayMenuBarController` 持有 `NSStatusItem + NSPopover`，用于提供可被全局快捷键控制的显式显示/隐藏目标；SwiftUI `Settings { EmptyView() }` 仅保持 App 生命周期，并保留退出命令。
+- DeepSeek 官方接口能力探测已明确区分余额与历史/分模型用量：当前官方 API 不提供账户历史或分模型聚合端点，因此用量报告返回 `unsupported`，`daily` 与 `models` 保持 `nil`；不读取 Cookie、userToken 或私有网页接口。
+- iCloud 同步状态已接入设置页；检测到 unresolved conflict versions 时只生成冲突报告并保留本机/远端候选，不在用户决策前修改本机 repository 或覆盖主同步文件。用户选择“保留本机 / 保留远端 / 接受合并结果”后，才通过显式 resolve API 应用结果；解析过程不自动删除冲突候选。
+- 同步目录缺失时状态显示为 `unavailable`，本机数据仍可读取和刷新；同步异常状态不会阻断本机业务路径。同步 payload 继续通过安全投影排除凭据。
+- `scripts/verify-icloud-sync.sh --mode deterministic` 的 SYNC-001 至 SYNC-004 已通过；SYNC-005 因没有第二台真实 Mac 标记 `blocked`，不能以 fixture 结果替代实机验证。
+- 当前 `swiftc -parse-as-library -typecheck` 全量类型检查通过，仅有既有 SwiftUI 本地化插值弃用警告。`scripts/test-regressions.sh`、三组独立 contract tests 均通过。`swift build` 仍受本机 Swift 编译器与 macOS SDK 版本不匹配阻塞，不能视为构建通过。

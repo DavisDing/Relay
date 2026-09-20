@@ -9,9 +9,17 @@ public struct MainPopoverView: View {
     @State private var selectedDetailAccount: AccountModel?
     @State private var selectedEditAccount: AccountModel?
     @State private var accountPendingDeletion: AccountModel?
+    private let initialGlobalShortcutConfiguration: GlobalShortcutConfiguration
+    private let onApplyGlobalShortcut: ((GlobalShortcutConfiguration) -> GlobalShortcutRegistrationOutcome)?
 
-    public init(store: RelayStore) {
+    public init(
+        store: RelayStore,
+        initialGlobalShortcutConfiguration: GlobalShortcutConfiguration = GlobalShortcutConfigurationStore.load(),
+        onApplyGlobalShortcut: ((GlobalShortcutConfiguration) -> GlobalShortcutRegistrationOutcome)? = nil
+    ) {
         self.store = store
+        self.initialGlobalShortcutConfiguration = initialGlobalShortcutConfiguration
+        self.onApplyGlobalShortcut = onApplyGlobalShortcut
     }
 
     private var totalBalanceCNY: Decimal? { store.balanceTotalCNY.value?.amount }
@@ -145,6 +153,11 @@ public struct MainPopoverView: View {
         .sheet(isPresented: $showSettings) {
             SettingsWindowView(
                 initialSettings: store.settings,
+                initialGlobalShortcutConfiguration: initialGlobalShortcutConfiguration,
+                onApplyGlobalShortcut: onApplyGlobalShortcut,
+                syncStatus: store.syncStatus,
+                syncConflictReport: store.syncConflictReport,
+                onResolveSyncConflict: { decision in store.resolveSyncConflict(decision) },
                 onClose: { showSettings = false },
                 onSave: { store.updateSettings($0) }
             )

@@ -16,18 +16,36 @@ public struct SettingsWindowView: View {
     @State private var iCloudDirectoryError: String?
     @State private var launchAtLoginEnabled: Bool
     @State private var launchAtLoginError: String?
-    
+    @State private var showGlobalShortcutSettings = false
+    @State private var showSyncConflict = false
+    @State private var syncConflictActionError: String?
+
     private let schemaVersion: Int
+    private let syncStatus: SyncStatus
+    private let syncConflictReport: SyncConflictReport?
+    private let onResolveSyncConflict: ((SyncConflictDecision) -> String?)?
+    private let initialGlobalShortcutConfiguration: GlobalShortcutConfiguration
+    private let onApplyGlobalShortcut: ((GlobalShortcutConfiguration) -> GlobalShortcutRegistrationOutcome)?
 
     public var onClose: () -> Void
     public var onSave: (RelaySettings) -> Void
     
     public init(
         initialSettings: RelaySettings = RelaySettings(),
+        initialGlobalShortcutConfiguration: GlobalShortcutConfiguration = GlobalShortcutConfigurationStore.load(),
+        onApplyGlobalShortcut: ((GlobalShortcutConfiguration) -> GlobalShortcutRegistrationOutcome)? = nil,
+        syncStatus: SyncStatus = .idle,
+        syncConflictReport: SyncConflictReport? = nil,
+        onResolveSyncConflict: ((SyncConflictDecision) -> String?)? = nil,
         onClose: @escaping () -> Void = {},
         onSave: @escaping (RelaySettings) -> Void = { _ in }
     ) {
         self.schemaVersion = initialSettings.schemaVersion
+        self.initialGlobalShortcutConfiguration = initialGlobalShortcutConfiguration
+        self.onApplyGlobalShortcut = onApplyGlobalShortcut
+        self.syncStatus = syncStatus
+        self.syncConflictReport = syncConflictReport
+        self.onResolveSyncConflict = onResolveSyncConflict
         self.onClose = onClose
         self.onSave = onSave
         _showTodayInMenuBar = State(initialValue: initialSettings.showTodayInMenuBar)
@@ -185,6 +203,80 @@ public struct SettingsWindowView: View {
                     
                     Divider().opacity(0.4)
                     
+                    if let onApplyGlobalShortcut {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("全局快捷键")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(.secondary)
+                            Text("在后台快速显示/隐藏面板，或刷新全部账户。快捷键配置仅保存在本机。")
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
+                            Button("配置全局快捷键…") {
+                                showGlobalShortcutSettings = true
+                            }
+                            .sheet(isPresented: $showGlobalShortcutSettings) {
+                                GlobalShortcutSettingsView(
+                                    initialConfiguration: initialGlobalShortcutConfiguration,
+                                    onApply: { configuration in
+                                        let result = onApplyGlobalShortcut(configuration)
+                                        if result.isRegistered || configuration.isEmpty {
+                                            try? GlobalShortcutConfigurationStore.save(configuration)
+                                        }
+                                        return result
+                                    },
+                                    onCancel: { showGlobalShortcutSettings = false }
+                                )
+                            }
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("同步状态")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(.secondary)
+                        HStack {
+                            Image(systemName: syncStatus == .failed || syncStatus == .conflicted ? "exclamationmark.triangle" : "checkmark.icloud")
+                                .foregroundColor(syncStatus == .failed || syncStatus == .conflicted ? .orange : .secondary)
+                            Text(syncStatus.title)
+                                .font(.system(size: 11, weight: .medium))
+                            Spacer()
+                            if syncConflictReport != nil {
+                                Button("查看详情…") { showSyncConflict = true }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                            }
+                        }
+                        Text("同步异常不会阻断本机账号数据；冲突候选在用户决策前保留。")
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                    }
+                    .sheet(isPresented: $showSyncConflict) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            SyncConflictView(
+                                state: SyncConflictState(
+                                    status: syncStatus,
+                                    report: syncConflictReport,
+                                    localDataAvailable: true
+                                ),
+                                onDecision: { decision in
+                                    if let error = onResolveSyncConflict?(decision) {
+                                        syncConflictActionError = error
+                                    } else {
+                                        syncConflictActionError = nil
+                                        showSyncConflict = false
+                                    }
+                                },
+                                onDismiss: { showSyncConflict = false }
+                            )
+                            if let syncConflictActionError {
+                                Text(syncConflictActionError)
+                                    .font(.footnote)
+                                    .foregroundStyle(.red)
+                                    .padding(.horizontal, 20)
+                            }
+                        }
+                    }
+
                     // 5. iCloud 云盘普通文件同步
                     VStack(alignment: .leading, spacing: 8) {
                         Text("多设备配置同步 (iCloud Drive 文件同步)")

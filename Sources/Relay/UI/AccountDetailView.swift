@@ -5,15 +5,18 @@ public struct AccountDetailView: View {
     public let account: AccountModel
     public let spendPoints: [DailySpendPoint]
     public let modelUsages: [ModelUsageItem]
+    public let deepSeekUsageReport: DeepSeekUsageReport?
     public var onClose: () -> Void
     
     public init(account: AccountModel,
                 spendPoints: [DailySpendPoint] = [],
                 modelUsages: [ModelUsageItem] = [],
+                deepSeekUsageReport: DeepSeekUsageReport? = nil,
                 onClose: @escaping () -> Void = {}) {
         self.account = account
         self.spendPoints = spendPoints
         self.modelUsages = modelUsages
+        self.deepSeekUsageReport = deepSeekUsageReport
         self.onClose = onClose
     }
     
@@ -95,6 +98,13 @@ public struct AccountDetailView: View {
             }
             .padding(.horizontal, 20)
             
+            if account.kind == .deepseek {
+                DeepSeekUsageSection(
+                    report: deepSeekUsageReport ?? UUID(uuidString: account.id).map { DeepSeekUsageReport.unsupported(accountID: $0) }
+                )
+                .padding(.horizontal, 20)
+            }
+
             // 模型调用细分明细 (Top)
             VStack(alignment: .leading, spacing: 6) {
                 Text("模型消耗分析 (Top)")

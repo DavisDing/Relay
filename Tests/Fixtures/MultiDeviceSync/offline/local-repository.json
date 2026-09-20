@@ -1,0 +1,12 @@
+{
+  "localDataAvailable": true,
+  "cloudDataAvailable": false,
+  "accounts": [
+    {
+      "id": "22222222-2222-4222-8222-222222222222",
+      "displayName": "Local account retained offline",
+      "providerKind": "DeepSeek",
+      "credentialReference": "22222222-2222-4222-8222-222222222222"
+    }
+  ]
+}

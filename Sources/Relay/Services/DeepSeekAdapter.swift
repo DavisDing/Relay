@@ -27,6 +27,30 @@ public struct DeepSeekAdapter: ProviderAdapter {
         _ = try await fetchBalance(account: account, credential: credential)
     }
 
+    /// Queries the usage capability without changing the existing balance path.
+    /// The official DeepSeek API currently does not expose historical or
+    /// account-level model usage, so the service returns `.unsupported` with
+    /// nil usage collections and does not call undocumented endpoints.
+    public func fetchUsage(
+        for account: AccountConfiguration,
+        credential: ProviderCredential,
+        startAt: Date,
+        endAt: Date,
+        calendar: Calendar = .current
+    ) async throws -> DeepSeekUsageReport {
+        let query = DeepSeekUsageQuery(
+            accountID: account.id,
+            siteOrigin: account.siteOrigin,
+            startAt: startAt,
+            endAt: endAt,
+            calendar: calendar
+        )
+        return try await DeepSeekUsageService(client: client).fetchUsage(
+            query: query,
+            credential: credential
+        )
+    }
+
     public func fetchSnapshot(
         for account: AccountConfiguration,
         credential: ProviderCredential,
