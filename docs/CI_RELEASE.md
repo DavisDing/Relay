@@ -22,6 +22,8 @@
 
 构建产物是 ad-hoc 签名的 `Relay.app` zip 包。当前设计没有 Developer ID 证书或公证流程；这与项目的 GitHub Releases 首期发布决策一致。用户首次打开时可能需要在 macOS 的“隐私与安全性”中手动允许。
 
+CI 构建使用 GitHub Actions 的 `xcode-27` arm64 runner，因为 `Package.swift` 的最低 macOS 部署目标为 27.0；`macos-26` 的 SDK 无法满足该目标。
+
 ## 本地打包
 
 在 macOS 上执行：

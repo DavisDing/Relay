@@ -19,7 +19,9 @@ permissions:
 jobs:
   build:
     name: Build macOS arm64 package
-    runs-on: macos-26
+    # Package.swift targets macOS 27; use the arm64 macOS 27 runner image
+    # instead of macos-26, whose SDK cannot satisfy that deployment target.
+    runs-on: xcode-27
     outputs:
       version: ${{ steps.version.outputs.marketing_version }}
     steps:
