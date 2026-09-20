@@ -4,6 +4,13 @@ set -euo pipefail
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root_dir"
 
+# Only the cleaned ICNS is shipped; the PNG master stays in the source tree.
+icon_path="$root_dir/Resources/AppIcon.icns"
+if [[ ! -f "$icon_path" ]] || ! file "$icon_path" | grep -q 'Mac OS X icon'; then
+    echo "Missing or invalid ICNS app icon: $icon_path" >&2
+    exit 1
+fi
+
 output_dir="${1:-$root_dir/.build/package}"
 scratch_path="${SWIFT_SCRATCH_PATH:-$root_dir/.build/ci-scratch}"
 configuration="${SWIFT_CONFIGURATION:-release}"
@@ -40,6 +47,7 @@ app_dir="$output_dir/$app_name"
 rm -rf "$app_dir"
 mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
 cp "$binary" "$app_dir/Contents/MacOS/Relay"
+cp "$icon_path" "$app_dir/Contents/Resources/AppIcon.icns"
 chmod 755 "$app_dir/Contents/MacOS/Relay"
 
 cat > "$app_dir/Contents/Info.plist" <<PLIST
@@ -53,6 +61,8 @@ cat > "$app_dir/Contents/Info.plist" <<PLIST
     <string>Relay</string>
     <key>CFBundleExecutable</key>
     <string>Relay</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon.icns</string>
     <key>CFBundleIdentifier</key>
     <string>cloud.dinghao.relay</string>
     <key>CFBundleInfoDictionaryVersion</key>

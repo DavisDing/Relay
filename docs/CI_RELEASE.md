@@ -24,6 +24,10 @@
 
 CI 构建使用 GitHub Actions 的 `xcode-27` arm64 runner，因为 `Package.swift` 的最低 macOS 部署目标为 27.0；`macos-26` 的 SDK 无法满足该目标。
 
+## 应用图标
+
+正式图标位于 `Resources/AppIcon.icns`；`Resources/AppIcon.png` 是 1024×1024 透明底母图，不随应用分发。`scripts/package-app.sh` 检查 ICNS 格式，将图标复制到 `Relay.app/Contents/Resources/AppIcon.icns`，并写入 `CFBundleIconFile=AppIcon.icns`，随后对完整应用包签名。应用图标不替换菜单栏按钮或页面内的功能图标。
+
 ## 本地打包
 
 在 macOS 上执行：
