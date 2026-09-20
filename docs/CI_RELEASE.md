@@ -6,7 +6,7 @@
 
 - 普通分支提交：版本为 `0.1.<提交总数>`，例如 `0.1.42`。
 - `vX.Y.Z` 标签构建：版本使用标签去掉 `v` 后的值，例如 `v1.2.0` 生成 `1.2.0`。
-- `CFBundleVersion` 始终使用提交总数，作为单调递增的构建号。
+- `CFBundleVersion` 始终使用提交数，作为单调递增的构建号。
 - 可通过 `RELAY_VERSION` 覆盖营销版本；可通过 `RELAY_VERSION_PREFIX` 修改普通提交的主/次版本前缀。
 
 版本计算依赖完整 Git 历史，因此 GitHub Actions 使用 `fetch-depth: 0`。
