@@ -6,7 +6,7 @@
 
 - 普通分支提交：版本为 `0.1.<提交总数>`，例如 `0.1.42`。
 - `vX.Y.Z` 标签构建：版本使用标签去掉 `v` 后的值，例如 `v1.2.0` 生成 `1.2.0`。
-- `CFBundleVersion` 始终使用提交总数，作为单调递增的构建号。
+- `CFBundleVersion` 始终使用提交数，作为单调递增的构建号。
 - 可通过 `RELAY_VERSION` 覆盖营销版本；可通过 `RELAY_VERSION_PREFIX` 修改普通提交的主/次版本前缀。
 
 版本计算依赖完整 Git 历史，因此 GitHub Actions 使用 `fetch-depth: 0`。
@@ -21,6 +21,8 @@
 - 手动运行：执行一次构建验证。
 
 构建产物是 ad-hoc 签名的 `Relay.app` zip 包。当前设计没有 Developer ID 证书或公证流程；这与项目的 GitHub Releases 首期发布决策一致。用户首次打开时可能需要在 macOS 的“隐私与安全性”中手动允许。
+
+CI 构建使用 GitHub Actions 的 `xcode-27` arm64 runner，因为 `Package.swift` 的最低 macOS 部署目标为 27.0；`macos-26` 的 SDK 无法满足该目标。
 
 ## 本地打包
 
