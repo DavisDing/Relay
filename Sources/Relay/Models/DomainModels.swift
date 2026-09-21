@@ -99,6 +99,7 @@ public struct ModelUsageItem: Identifiable, Sendable {
     public let id: String
     public let modelName: String
     public let tokens: String
+    public let tokenCount: Int64?
     public let cost: Decimal?
     public let currency: Currency
     public let percentage: Double?
@@ -110,10 +111,12 @@ public struct ModelUsageItem: Identifiable, Sendable {
                 cost: Decimal?,
                 currency: Currency,
                 percentage: Double?,
-                cacheHitRate: Decimal? = nil) {
+                cacheHitRate: Decimal? = nil,
+                tokenCount: Int64? = nil) {
         self.id = id
         self.modelName = modelName
         self.tokens = tokens
+        self.tokenCount = tokenCount
         self.cost = cost
         self.currency = currency
         self.percentage = percentage
@@ -125,14 +128,15 @@ extension ModelUsageItem {
     static func items(from summaries: [ModelUsageSummary], currency: Currency) -> [ModelUsageItem] {
         let complete = summaries.allSatisfy { $0.spend?.currency == currency }
         let total = summaries.reduce(Decimal.zero) { $0 + ($1.spend?.amount ?? .zero) }
-        return summaries.map { summary in
+        return summaries.sorted(by: ModelUsageSummary.spendDescending).map { summary in
             let cost = summary.spend?.amount
             return ModelUsageItem(
                 id: summary.id, modelName: summary.modelName,
                 tokens: summary.tokenCount.map { $0.formatted() } ?? "--",
                 cost: cost, currency: summary.spend?.currency ?? currency,
                 percentage: complete && total > 0 ? cost.map { NSDecimalNumber(decimal: $0 / total).doubleValue } : nil,
-                cacheHitRate: summary.cacheHitRate
+                cacheHitRate: summary.cacheHitRate,
+                tokenCount: summary.tokenCount
             )
         }
     }

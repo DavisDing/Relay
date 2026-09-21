@@ -172,6 +172,18 @@ public struct ModelUsageSummary: Codable, Sendable, Equatable, Identifiable {
     }
 }
 
+extension ModelUsageSummary {
+    /// Known spends first (including free models), then unknown; stable ties by name.
+    static func spendDescending(_ lhs: ModelUsageSummary, _ rhs: ModelUsageSummary) -> Bool {
+        switch (lhs.spend?.amount, rhs.spend?.amount) {
+        case let (left?, right?) where left != right: return left > right
+        case (_?, nil): return true
+        case (nil, _?): return false
+        default: return lhs.modelName < rhs.modelName
+        }
+    }
+}
+
 public struct ProviderSnapshot: Codable, Sendable, Equatable {
     public let accountID: UUID
     public let balance: MoneyValue?

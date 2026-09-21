@@ -2,7 +2,7 @@ import Foundation
 
 /// The public Pipio analytics UI's model-token table uses /api/data/self,
 /// not request logs or /api/data/flow/self. Rows are time buckets per model.
-/// Keep optional metrics unknown when the provider hasn't tracked full coverage.
+/// Prefer the provider total and cache contract; derive missing metrics only from valid raw counts.
 enum PipioDashboardParser {
     private struct Envelope: Decodable {
         let success: Bool?
@@ -25,6 +25,18 @@ enum PipioDashboardParser {
         let cacheMetricsRequestCount: Int64?
         let cacheEligibleInputTokens: Int64?
 
+        // Cache reads are part of input_tokens, not additional tokens.
+        func resolvedTokenCount() throws -> Int64? {
+            if let tokenUsed { return tokenUsed >= 0 ? tokenUsed : nil }
+            return try PipioDashboardParser.sum([inputTokens, outputTokens])
+        }
+
+        var hasValidCacheInputs: Bool {
+            guard let inputTokens, inputTokens >= 0,
+                  let cacheReadTokens, cacheReadTokens >= 0 else { return false }
+            return cacheReadTokens <= inputTokens
+        }
+
         var hasCacheContract: Bool {
             guard let tokens = tokenUsed, tokens >= 0,
                   let tracked = tokenBreakdownTrackedTokenUsed, tracked == tokens,
@@ -40,8 +52,32 @@ enum PipioDashboardParser {
         }
     }
 
+    struct Usage {
+        let spend: MoneyValue?
+        let models: [ModelUsageSummary]?
+    }
+
+    /// The website's overview and model analysis both aggregate the same dashboard buckets.
+    /// Compute the total from raw quotas, never from rounded UI strings or log/stat.
+    static func usage(from data: Data, range: DateInterval, quotaPerUnit: Decimal, currency: Currency) throws -> Usage {
+        guard quotaPerUnit > 0 else { throw ProviderError.missingRate }
+        let points = try points(from: data, range: range)
+        let quota: Decimal? = points.allSatisfy { $0.quota != nil }
+            ? points.reduce(.zero) { $0 + ($1.quota ?? .zero) } : nil
+        let spend = quota.flatMap { total -> MoneyValue? in
+            let amount = total / quotaPerUnit
+            return amount.isNaN ? nil : MoneyValue(amount: amount, currency: currency)
+        }
+        // Optional token breakdown failures must not discard a valid monetary total.
+        return Usage(spend: spend, models: try? models(points: points, quotaPerUnit: quotaPerUnit, currency: currency))
+    }
+
     static func models(from data: Data, range: DateInterval, quotaPerUnit: Decimal, currency: Currency) throws -> [ModelUsageSummary] {
         guard quotaPerUnit > 0 else { throw ProviderError.missingRate }
+        return try models(points: points(from: data, range: range), quotaPerUnit: quotaPerUnit, currency: currency)
+    }
+
+    private static func points(from data: Data, range: DateInterval) throws -> [Point] {
         let envelope: Envelope
         do {
             let decoder = JSONDecoder()
@@ -51,12 +87,16 @@ enum PipioDashboardParser {
         guard envelope.success != false, let points = envelope.data else { throw ProviderError.incompatibleResponse }
         let start = Int64(range.start.timeIntervalSince1970)
         let end = Int64(range.end.timeIntervalSince1970)
-        let groups = Dictionary(grouping: points.filter { $0.createdAt >= start && $0.createdAt <= end }) {
+        return points.filter { $0.createdAt >= start && $0.createdAt <= end }
+    }
+
+    private static func models(points: [Point], quotaPerUnit: Decimal, currency: Currency) throws -> [ModelUsageSummary] {
+        let groups = Dictionary(grouping: points) {
             let name = $0.modelName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             return name.isEmpty ? "未标明模型" : name
         }
         return try groups.compactMap { name, rows in
-            let tokens = try sum(rows.map(\.tokenUsed))
+            let tokens = try sum(rows.map { try $0.resolvedTokenCount() })
             let count = try sum(rows.map(\.count))
             let quota: Decimal? = rows.allSatisfy { $0.quota != nil }
                 ? rows.reduce(.zero) { $0 + ($1.quota ?? .zero) } : nil
@@ -69,17 +109,19 @@ enum PipioDashboardParser {
                let read = try sum(rows.map(\.cacheReadTokens)), read <= eligible {
                 cacheShare = Decimal(read) / Decimal(eligible)
             }
+            // User-selected fallback for N/A: weighted model-level cache reads / all inputs.
+            // Do not average bucket percentages, treat missing counts as zero, or divide by zero.
+            if cacheShare == nil, rows.allSatisfy(\.hasValidCacheInputs),
+               let input = try sum(rows.map(\.inputTokens)), input > 0,
+               let read = try sum(rows.map(\.cacheReadTokens)) {
+                cacheShare = Decimal(read) / Decimal(input)
+            }
             return ModelUsageSummary(
                 modelName: name, tokenCount: tokens, requestCount: count,
                 cacheHitRate: cacheShare,
                 spend: quota.map { MoneyValue(amount: $0 / quotaPerUnit, currency: currency) }
             )
-        }.sorted {
-            let lhsTokens = $0.tokenCount ?? 0
-            let rhsTokens = $1.tokenCount ?? 0
-            if lhsTokens != rhsTokens { return lhsTokens > rhsTokens }
-            return $0.modelName < $1.modelName
-        }
+        }.sorted(by: ModelUsageSummary.spendDescending)
     }
 
     private static func sum(_ values: [Int64?]) throws -> Int64? {

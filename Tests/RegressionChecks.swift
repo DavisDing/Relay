@@ -125,6 +125,8 @@ struct RegressionChecks {
         try BusinessLogicSelfCheck.run()
         print("PASSED: existing business logic self-check")
         try await PipioDashboardContractChecks.run()
+        try MenuBarPresentationChecks.run()
+        try await AccountFeedbackChecks.run()
         try await credentials(root)
         print("PASSED: credential load failure, retry, atomic write and permissions")
         try repositoryTransactions(root)

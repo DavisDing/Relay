@@ -45,7 +45,7 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
         statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         statusItem.button?.imagePosition = .imageLeading
         statusItem.button?.toolTip = "Relay（左键打开，右键显示菜单）"
-        statusItem.button?.cell?.usesSingleLineMode = false
+        statusItem.button?.cell?.usesSingleLineMode = true
         statusItem.button?.cell?.lineBreakMode = .byTruncatingTail
 
         // Do not use .transient here. A transient popover is allowed to dismiss
@@ -187,9 +187,12 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
         NSApplication.shared.terminate(nil)
     }
 
+    private var returnsToDashboardOnClose = false
+
     private func presentAuxiliaryWindow<Content: View>(
         title: String,
         size: NSSize,
+        returnsToDashboard: Bool = false,
         @ViewBuilder content: () -> Content
     ) {
         // Capture the dashboard content frame before dismissing its popover.
@@ -199,7 +202,9 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
         }
         let screen = statusItem.button?.window?.screen
         close()
+        returnsToDashboardOnClose = false
         auxiliaryWindowController?.close()
+        returnsToDashboardOnClose = returnsToDashboard
 
         let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: size),
@@ -277,7 +282,7 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
         spendPoints: [DailySpendPoint],
         modelUsages: [ModelUsageItem]
     ) {
-        presentAuxiliaryWindow(title: "账号详情", size: NSSize(width: 400, height: 520)) {
+        presentAuxiliaryWindow(title: "账号详情", size: NSSize(width: 400, height: 520), returnsToDashboard: true) {
             AccountDetailView(
                 account: account,
                 spendPoints: spendPoints,
@@ -309,39 +314,41 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
     public func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? NSWindow,
               window === auxiliaryWindowController?.window else { return }
+        let returnHome = returnsToDashboardOnClose
+        returnsToDashboardOnClose = false
         auxiliaryWindowController = nil
+        if returnHome {
+            // Wait until AppKit finishes closing the detail window before opening the popover.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.auxiliaryWindowController == nil,
+                      !self.popover.isShown, let button = self.statusItem.button else { return }
+                NSApp.activate(ignoringOtherApps: true)
+                self.popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+                self.popover.contentViewController?.view.window?.makeKey()
+            }
+        }
     }
 
     private func updateStatusItem() {
         guard let button = statusItem.button else { return }
-        let balance = store.balanceTotalCNY.value.map {
-            RelayNumberFormatter.money($0.amount, currency: store.settings.baseCurrency)
-        }
-        let today: String? = {
-            guard store.settings.showTodayInMenuBar,
-                  store.todaySpendTotalCNY.isComplete,
-                  let amount = store.todaySpendTotalCNY.value?.amount else { return nil }
-            return RelayNumberFormatter.money(amount, currency: store.settings.baseCurrency)
-        }()
-        let indicator = store.isRefreshing ? "↻" : (store.hasAnyWarning || store.hasLowBalance ? "⚠︎" : "⚡")
-        let lines = [balance, today.map { "今日 " + $0 }].compactMap { $0 }
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.alignment = .center
-        paragraph.lineBreakMode = .byTruncatingTail
-        if lines.count > 1 {
-            paragraph.minimumLineHeight = 10
-            paragraph.maximumLineHeight = 10
-        }
-        button.attributedTitle = NSAttributedString(
-            string: lines.isEmpty ? indicator : indicator + " " + lines.joined(separator: "\n"),
-            attributes: [.font: NSFont.systemFont(ofSize: lines.count > 1 ? 9 : 11, weight: .semibold),
-                         .paragraphStyle: paragraph]
+        let total = store.todaySpendTotalCNY
+        let presentation = MenuBarStatusPresentation(
+            todaySpendAmount: total.isComplete && store.settings.showTodayInMenuBar ? total.value?.amount : nil,
+            isRefreshing: store.isRefreshing,
+            hasWarning: store.hasAnyWarning || store.hasLowBalance
         )
-        button.image = nil
-        button.toolTip = (["Relay " + indicator] + lines + ["左键打开，右键显示菜单"]).joined(separator: " · ")
+        let image = NSImage(systemSymbolName: presentation.symbolName, accessibilityDescription: presentation.statusDescription)
+        image?.isTemplate = true
+        button.image = image
+        button.contentTintColor = nil
+        button.imagePosition = presentation.title.isEmpty ? .imageOnly : .imageLeading
+        button.title = presentation.title
+        button.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+        button.toolTip = presentation.toolTip
+        button.setAccessibilityLabel(presentation.toolTip)
         let fixedWidth = UserDefaults.standard.object(forKey: "fixedMenuBarWidth") as? Bool ?? true
         // Keep Relay accessible, but don't reserve empty metric space or show --.
-        statusItem.length = lines.isEmpty ? NSStatusItem.squareLength
+        statusItem.length = presentation.title.isEmpty ? NSStatusItem.squareLength
             : (fixedWidth ? fixedStatusItemLength : NSStatusItem.variableLength)
     }
 }

@@ -101,7 +101,7 @@ public struct SettingsWindowView: View {
                     
                     Divider().opacity(0.4)
                     
-                    // 2. 菜单栏定宽与跑马灯滚动
+                    // 2. 菜单栏消费显示与定宽
                     VStack(alignment: .leading, spacing: 8) {
                         Text("macOS 菜单栏常驻显示")
                             .font(.system(size: 12, weight: .semibold))
@@ -109,9 +109,9 @@ public struct SettingsWindowView: View {
                         
                         Toggle(isOn: $fixedMenuBarWidth) {
                             VStack(alignment: .leading, spacing: 2) {
-                                Text("固定菜单栏最大宽度 (≤ 140pt)")
+                                Text("固定菜单栏宽度 (70pt)")
                                     .font(.system(size: 12, weight: .medium))
-                                Text("若多币种或长数字溢出，启用双侧渐隐与平滑跑马灯微动滚动")
+                                Text("仅显示今日消费数值，不含币种；长数字可在悬停提示中查看")
                                     .font(.system(size: 10))
                                     .foregroundColor(.secondary)
                             }

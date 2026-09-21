@@ -63,7 +63,7 @@ public struct AccountDetailView: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                 }
-                Button("关闭", action: onClose)
+                Button("返回首页", action: onClose)
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
             }
@@ -99,6 +99,8 @@ public struct AccountDetailView: View {
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
+            .help("返回首页")
+            .accessibilityLabel("返回首页")
         }
         .padding(.horizontal, 18)
         .padding(.top, 14)
@@ -174,10 +176,11 @@ public struct AccountDetailView: View {
                     .foregroundStyle(.secondary)
                     .padding(.vertical, 5)
             } else {
-                HStack {
+                HStack(spacing: 8) {
                     Text("模型")
                     Spacer()
-                    Text("Token")
+                    Text("总 Token")
+                        .frame(width: 76, alignment: .trailing)
                     Text("缓存读取")
                         .frame(width: 58, alignment: .trailing)
                     Text("消耗")
@@ -185,6 +188,7 @@ public struct AccountDetailView: View {
                 }
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(.secondary)
+                .padding(.horizontal, 9)
 
                 ForEach(modelUsages) { item in
                     HStack(spacing: 8) {
@@ -193,11 +197,15 @@ public struct AccountDetailView: View {
                             .lineLimit(1)
                             .truncationMode(.tail)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .layoutPriority(1)
-                        Text(item.tokens)
+                        Text(item.tokenCount.map { RelayNumberFormatter.tokens($0) } ?? item.tokens)
                             .font(.system(size: 10))
+                            .monospacedDigit()
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+                            .frame(width: 76, alignment: .trailing)
+                            .help("\(item.tokens) Token")
+                            .accessibilityLabel("总 Token：\(item.tokens)")
                         Text(item.cacheHitRate.map(RelayNumberFormatter.percent) ?? "--")
                             .font(.system(size: 10))
                             .foregroundStyle(.secondary)

@@ -9,6 +9,10 @@ swiftc -swift-version 5 -D DEBUG -parse-as-library \
   "$ROOT"/Sources/Relay/Models/*.swift \
   "$ROOT"/Sources/Relay/Persistence/*.swift \
   "$ROOT"/Sources/Relay/Services/*.swift \
+  "$ROOT/Sources/Relay/UI/RelayNumberFormatter.swift" \
+  "$ROOT/Sources/Relay/UI/MenuBarStatusPresentation.swift" \
+  "$ROOT/Tests/MenuBarPresentationChecks.swift" \
+  "$ROOT/Tests/AccountFeedbackChecks.swift" \
   "$ROOT/Tests/PipioDashboardContractChecks.swift" \
   "$ROOT/Tests/RegressionChecks.swift" -o "$WORK/relay-regressions"
 "$WORK/relay-regressions"

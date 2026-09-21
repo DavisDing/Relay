@@ -231,7 +231,7 @@ public struct MainPopoverView: View {
     }
 
     private func summaryCard(title: String, value: String, subtitle: String, accent: Color) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .center, spacing: 4) {
             Text(title)
                 .font(.system(size: 10))
                 .foregroundStyle(.secondary)
@@ -245,7 +245,8 @@ public struct MainPopoverView: View {
                 .foregroundStyle(subtitle.contains("运行正常") ? .green : .secondary)
                 .lineLimit(1)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .multilineTextAlignment(.center)
+        .frame(maxWidth: .infinity, alignment: .center)
         .padding(11)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(.separator.opacity(0.45), lineWidth: 1))

@@ -22,6 +22,22 @@ public struct AccountDraft: Sendable {
     }
 }
 
+extension AccountDraft {
+    /// Validate all missing fields before URL parsing, provider calls or persistence.
+    func validateRequiredFields() throws {
+        guard providerKind != .custom else { throw ProviderError.unsupportedProvider }
+        func isBlank(_ value: String?) -> Bool {
+            value?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true
+        }
+        var fields: [String] = []
+        if isBlank(displayName) { fields.append("账号显示名称") }
+        if isBlank(baseURL) { fields.append("站点地址") }
+        if providerKind == .pipio, isBlank(credential.pipioUserID) { fields.append("Pipio 用户 ID") }
+        if isBlank(credential.secret) { fields.append(providerKind == .pipio ? "Pipio 系统令牌" : "DeepSeek API Key") }
+        if !fields.isEmpty { throw AccountServiceError.missingRequiredFields(fields) }
+    }
+}
+
 @MainActor
 public final class AccountService {
     private let repository: any LocalRepository
@@ -110,8 +126,10 @@ public final class AccountService {
     }
 
     private func makeAccount(from draft: AccountDraft) throws -> AccountConfiguration {
+        try draft.validateRequiredFields()
         let name = draft.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty, let inputURL = URL(string: draft.baseURL) else {
+        let address = draft.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let inputURL = URL(string: address) else {
             throw ProviderError.invalidBaseURL
         }
 
@@ -145,7 +163,7 @@ public final class AccountService {
     ) async throws {
         guard var account = try repository.account(id: accountID) else { return }
         let name = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty else { throw ProviderError.invalidBaseURL }
+        guard !name.isEmpty else { throw AccountServiceError.missingRequiredFields(["账号显示名称"]) }
 
         if case let .set(value) = manualUSDToCNY {
             if let value, !USDToCNYRate.isValid(value) {
@@ -218,11 +236,14 @@ public final class AccountService {
 }
 
 public enum AccountServiceError: LocalizedError {
+    case missingRequiredFields([String])
     case credentialRollbackFailed
     case invalidExchangeRate
 
     public var errorDescription: String? {
         switch self {
+        case .missingRequiredFields(let fields):
+            return "请填写：" + fields.joined(separator: "、") + "。"
         case .credentialRollbackFailed:
             return "账户保存失败，且无法恢复本机凭据。请检查本地存储后重新录入凭据。"
         case .invalidExchangeRate:

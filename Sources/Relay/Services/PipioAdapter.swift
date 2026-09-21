@@ -73,17 +73,12 @@ public struct PipioAdapter: ProviderAdapter {
         let dayStart = calendar.startOfDay(for: now)
         let monthStart = calendar.date(from: calendar.dateComponents([.year, .month], from: now)) ?? dayStart
 
-        async let todayResult = fetchStat(
-            urls: urls,
-            credential: credential,
-            range: DateInterval(start: dayStart, end: now)
-        )
         async let monthResult = fetchStat(
             urls: urls,
             credential: credential,
             range: DateInterval(start: monthStart, end: now)
         )
-        async let modelResult = fetchModelUsages(
+        async let dashboardResult = fetchDashboardUsage(
             urls: urls,
             credential: credential,
             range: DateInterval(start: dayStart, end: now),
@@ -91,12 +86,12 @@ public struct PipioAdapter: ProviderAdapter {
             currency: rate.nativeCurrency
         )
 
-        let today = try? await todayResult
         let month = try? await monthResult
-        let modelUsages = try? await modelResult
+        let dashboard = try? await dashboardResult
+        let modelUsages = dashboard?.models
         let currency = rate.nativeCurrency
         let balance = current.quota.map { MoneyValue(amount: $0 / quotaPerUnit, currency: currency) }
-        let todaySpend = today?.quota.map { MoneyValue(amount: $0 / quotaPerUnit, currency: currency) }
+        let todaySpend = dashboard?.spend
         let monthSpend = month?.quota.map { MoneyValue(amount: $0 / quotaPerUnit, currency: currency) }
 
         var capabilities: ProviderCapabilities = []
@@ -115,7 +110,7 @@ public struct PipioAdapter: ProviderAdapter {
             requestCount: current.requestCount,
             modelUsages: modelUsages,
             capabilities: capabilities,
-            freshness: (today != nil && month != nil) ? .fresh : .partial,
+            freshness: (todaySpend != nil && monthSpend != nil) ? .fresh : .partial,
             fetchedAt: now,
             rate: rate
         )
@@ -140,9 +135,9 @@ public struct PipioAdapter: ProviderAdapter {
         var records: [DailyUsageRecord] = []
 
         // `/api/log/self/stat` accepts an arbitrary timestamp range. Query each
-        // calendar day so the chart can be populated immediately, then keep the
-        // returned daily aggregates locally for future offline viewing.
-        for offset in 0..<count {
+        // completed calendar day for history. Today's record is already seeded
+        // from the snapshot's dashboard data; never overwrite it with log/stat.
+        for offset in 1..<count {
             guard let day = calendar.date(byAdding: .day, value: -offset, to: today),
                   let nextDay = calendar.date(byAdding: .day, value: 1, to: day) else { continue }
             let end = min(nextDay, now)
@@ -224,13 +219,13 @@ public struct PipioAdapter: ProviderAdapter {
         return value
     }
 
-    private func fetchModelUsages(
+    private func fetchDashboardUsage(
         urls: NormalizedProviderURLs,
         credential: ProviderCredential,
         range: DateInterval,
         quotaPerUnit: Decimal,
         currency: Currency
-    ) async throws -> [ModelUsageSummary] {
+    ) async throws -> PipioDashboardParser.Usage {
         var components = URLComponents(
             url: urls.managementBaseURL.appendingPathComponent("data/self"),
             resolvingAgainstBaseURL: false
@@ -242,7 +237,7 @@ public struct PipioAdapter: ProviderAdapter {
         guard let url = components?.url else { throw ProviderError.invalidBaseURL }
         let (data, response) = try await client.data(for: authorizedRequest(url: url, credential: credential))
         try HTTPResponseValidator.validate(response)
-        return try PipioDashboardParser.models(from: data, range: range, quotaPerUnit: quotaPerUnit, currency: currency)
+        return try PipioDashboardParser.usage(from: data, range: range, quotaPerUnit: quotaPerUnit, currency: currency)
     }
 
     private func decode<T: Decodable>(_ data: Data) throws -> T {
