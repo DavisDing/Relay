@@ -646,7 +646,7 @@ Pipio 换算按账户读取公开 `usd_exchange_rate`，有效正数才允许 US
 
 替代前述菜单栏余额/今日双行显示和缓存比例无回退的约定：`MenuBarStatusPresentation` 统一数值与状态符号，AppKit 用模板 `NSImage(systemSymbolName:)` 交给系统着色；只给完整且已启用显示的今日消费生成两位小数文本。金额换算逻辑不变，首页余额不受影响。
 
-`PipioDashboardParser` 继续只请求公开 `/api/data/self` 数据契约。`token_used` 缺失时使用该桶有效非负输入+输出计数，再跨桶求和；提供商明确返回的总数优先。原缓存覆盖契约可用时不改结果，否则对每桶输入/读取数检查非负及上下界后，用模型级总读取/总输入计算比例。该回退按用户确认不再依赖旧覆盖计数字段，输入缺失或总分母为零仍未知。
+`PipioDashboardParser` 继续只请求公开 `/api/data/self` 数据契约。`token_used` 缺失时使用该桶有效非负普通输入+缓存读取+缓存写入+输出计数，再跨桶求和；提供商明确返回的总数优先。原缓存覆盖契约可用时不改结果，否则以 `sum(cache_read_tokens) / sum(input_tokens + cache_read_tokens + cache_write_tokens)` 计算模型级加权比例。三个输入分量均须存在且非负，分母须大于零；缓存读取可以大于普通输入，明确零读取返回零占比。该回退按用户确认不再依赖旧覆盖计数字段；覆盖不完整时只代表已获取明细，禁止用可能覆盖不同请求的 `token_used - output_tokens` 替代分母。合成测试包含用户表格转录的五模型数据、多模型交错桶、非零写入和缺失/溢出边界，不代表认证 API 已对账。
 
 `ModelUsageSummary.spendDescending` 在解析与展示入口复用，保留免费/未知模型并稳定排序。Token 展示列固定宽度以避免被长模型名挤占。现有持久化与同步 schema 不变；派生总数与缓存比例在下次刷新时获得，无需迁移，排序立即应用于旧快照。
 
@@ -657,3 +657,11 @@ Pipio 换算按账户读取公开 `usd_exchange_rate`，有效正数才允许 US
 `AccountDraft` 统一收集空字段，业务层在 URL 归一化、选取适配器、网络和持久化之前抛出带字段名的 `AccountServiceError`。展示模型保留原始 `tokenCount` 和完整字符串；`RelayNumberFormatter.tokens` 只负责显示缩写，临界四舍五入到 1000 时提升单位。首页汇总卡片仅调整内部对齐。
 
 `RelayMenuBarController` 给详情窗口标记关闭后返回首页；原生 `windowWillClose` 先释放详情引用，再在下一主线程事件重新展示现有 Popover。切换辅助窗口前清除返回标记，避免误弹首页；`orderOut` 隐藏不触发返回。详情底部按钮明确命名“返回首页”，右上角按钮增加相同辅助说明。
+
+### 辅助窗口统一返回首页
+
+替代 `returnsToDashboard` 逐页开关：所有通过 `RelayMenuBarController.presentAuxiliaryWindow` 打开的窗口统一由 `windowWillClose` 清理引用并在下一主队列事件展示首页。设置完成、表单取消/保存成功及自定义关闭沿用公共 `closeAuxiliaryWindow`，原生窗口关闭使用同一委托路径。页面保存失败不调用关闭回调。
+
+替换旧页面前先移除旧窗口委托，再关闭旧窗口，避免触发返回首页。`pendingDashboardReturn` 请求标识使延迟返回可以被 `close()`、`toggle()` 或页面替换取消，避免已收起或已切换后又意外弹出首页。隐藏仍使用 `orderOut`，不释放页面状态。页面结构不变，设置/添加/编辑的右上角按钮补充“返回首页”悬停和辅助功能标签。
+
+`scripts/test-window-navigation.sh` 是需登录图形会话的独立 AppKit 集成检查，使用内存数据和实际首页回调，检查四类页面的窗口关闭、隐藏/恢复、页面替换及延迟返回取消；不调用服务商接口。不纳入仅业务层的离线回归脚本。

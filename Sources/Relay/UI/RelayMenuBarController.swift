@@ -87,6 +87,7 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
     }
 
     public func toggle() {
+        pendingDashboardReturn = nil
         guard let button = statusItem.button else { return }
         // Restore the existing hosting controller, including SwiftUI form state.
         // Only an explicit cancel/save/close may destroy a draft.
@@ -110,6 +111,7 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
     }
 
     public func close() {
+        pendingDashboardReturn = nil
         if popover.isShown { popover.performClose(nil) }
         auxiliaryWindowController?.window?.orderOut(nil)
     }
@@ -187,12 +189,12 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
         NSApplication.shared.terminate(nil)
     }
 
-    private var returnsToDashboardOnClose = false
+    // Every auxiliary page returns home on explicit close; hiding remains separate.
+    private var pendingDashboardReturn: UUID?
 
     private func presentAuxiliaryWindow<Content: View>(
         title: String,
         size: NSSize,
-        returnsToDashboard: Bool = false,
         @ViewBuilder content: () -> Content
     ) {
         // Capture the dashboard content frame before dismissing its popover.
@@ -202,9 +204,11 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
         }
         let screen = statusItem.button?.window?.screen
         close()
-        returnsToDashboardOnClose = false
+        // Replacing a page is not user navigation back to the dashboard.
+        // Detach before closing so the old window cannot schedule a return home.
+        auxiliaryWindowController?.window?.delegate = nil
         auxiliaryWindowController?.close()
-        returnsToDashboardOnClose = returnsToDashboard
+        auxiliaryWindowController = nil
 
         let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: size),
@@ -240,8 +244,8 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
     }
 
     private func closeAuxiliaryWindow() {
+        // windowWillClose owns cleanup and the common return-to-home behavior.
         auxiliaryWindowController?.close()
-        auxiliaryWindowController = nil
     }
 
     private func showAddAccountWindow() {
@@ -282,7 +286,7 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
         spendPoints: [DailySpendPoint],
         modelUsages: [ModelUsageItem]
     ) {
-        presentAuxiliaryWindow(title: "账号详情", size: NSSize(width: 400, height: 520), returnsToDashboard: true) {
+        presentAuxiliaryWindow(title: "账号详情", size: NSSize(width: 400, height: 520)) {
             AccountDetailView(
                 account: account,
                 spendPoints: spendPoints,
@@ -314,18 +318,19 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
     public func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? NSWindow,
               window === auxiliaryWindowController?.window else { return }
-        let returnHome = returnsToDashboardOnClose
-        returnsToDashboardOnClose = false
         auxiliaryWindowController = nil
-        if returnHome {
-            // Wait until AppKit finishes closing the detail window before opening the popover.
-            DispatchQueue.main.async { [weak self] in
-                guard let self, self.auxiliaryWindowController == nil,
-                      !self.popover.isShown, let button = self.statusItem.button else { return }
-                NSApp.activate(ignoringOtherApps: true)
-                self.popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-                self.popover.contentViewController?.view.window?.makeKey()
-            }
+        let request = UUID()
+        pendingDashboardReturn = request
+        // Wait for AppKit to finish closing any auxiliary page, not just details.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.pendingDashboardReturn == request else { return }
+            self.pendingDashboardReturn = nil
+            // A later hide/toggle/page change cancels this pending return.
+            guard self.auxiliaryWindowController == nil,
+                  !self.popover.isShown, let button = self.statusItem.button else { return }
+            NSApp.activate(ignoringOtherApps: true)
+            self.popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            self.popover.contentViewController?.view.window?.makeKey()
         }
     }
 

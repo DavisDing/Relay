@@ -41,6 +41,8 @@ public struct AccountAddModalView: View {
                         .foregroundColor(.secondary)
                 }
                 .buttonStyle(.plain)
+                .help("返回首页")
+                .accessibilityLabel("返回首页")
             }
             .padding(.horizontal, 20)
             .padding(.top, 16)

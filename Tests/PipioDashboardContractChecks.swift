@@ -48,7 +48,7 @@ enum PipioDashboardContractChecks {
         let range = DateInterval(start: start, end: now)
         func row(_ name: String, quota: Int, tokens: Int, read: Int = 250, eligible: Int = 1000) -> [String: Any] {
             ["created_at": timestamp, "model_name": name, "quota": quota, "count": 1,
-             "token_used": tokens, "input_tokens": eligible, "output_tokens": 200,
+             "token_used": tokens, "input_tokens": eligible - read, "output_tokens": 200,
              "cache_read_tokens": read, "cache_write_tokens": 0,
              "token_breakdown_count": 1, "token_breakdown_request_count": 1,
              "token_breakdown_tracked_token_used": tokens, "cache_metrics_request_count": 1,
@@ -96,16 +96,15 @@ enum PipioDashboardContractChecks {
         var fallback = row("fallback", quota: 1, tokens: 1200)
         fallback.removeValue(forKey: "token_used")
         fallback.removeValue(forKey: "cache_eligible_input_tokens")
-        fallback.removeValue(forKey: "cache_write_tokens")
         let derived = try parseRows([fallback])
-        try verify(derived[0].tokenCount == 1200, "derive missing total from input + output, not cache counts again")
-        try verify(derived[0].cacheHitRate == Decimal(string: "0.25"), "cache fallback doesn't require unrelated write counters")
+        try verify(derived[0].tokenCount == 1200, "derive missing total from ordinary input + read + write + output")
+        try verify(derived[0].cacheHitRate == Decimal(string: "0.25"), "cache fallback includes reads in total input")
         var secondBucket = fallback
-        secondBucket["input_tokens"] = 3000
+        secondBucket["input_tokens"] = 1500
         secondBucket["cache_read_tokens"] = 1500
         let weighted = try parseRows([fallback, secondBucket])
         try verify(weighted[0].tokenCount == 4400, "derive then sum token counts across time buckets")
-        try verify(weighted[0].cacheHitRate == Decimal(string: "0.4375"), "fallback uses sum(read) / sum(input), not average percentages")
+        try verify(weighted[0].cacheHitRate == Decimal(string: "0.4375"), "fallback uses sum(read) / sum(all input components), not average percentages")
         let mixed = try parseRows([fallback, row("fallback", quota: 1, tokens: 9000)])
         try verify(mixed[0].tokenCount == 10200, "prefer provider total in buckets where present")
         var authoritative = row("original", quota: 1, tokens: 9000, read: 500, eligible: 2000)
@@ -113,21 +112,124 @@ enum PipioDashboardContractChecks {
         let preferred = try parseRows([authoritative])
         try verify(preferred[0].tokenCount == 9000, "don't replace explicit provider token total with a different breakdown")
         try verify(preferred[0].cacheHitRate == Decimal(string: "0.25"), "retain existing valid provider cache contract before fallback")
+        // Mixed five-model response: one provider ratio plus four independent fallbacks.
+        // Interleave repeated buckets so neither grouping nor display order can hide a model.
+        var multipleModels = [authoritative]
+        var expectedRates: [String: Decimal] = ["original": Decimal(string: "0.25")!]
+        for index in 1...4 {
+            let name = "fallback-model-\(index)"
+            var first = fallback
+            first["model_name"] = name
+            first["input_tokens"] = 1000
+            first["cache_read_tokens"] = index * 100
+            var second = first
+            second["input_tokens"] = 3000
+            second["cache_read_tokens"] = index * 300
+            multipleModels.insert(first, at: 0)
+            multipleModels.append(second)
+            expectedRates[name] = Decimal(index * 400) / Decimal(4000 + index * 400)
+        }
+        let mixedModels = try parseRows(multipleModels)
+        try verify(mixedModels.count == 5, "one provider plus four fallback models all survive grouping")
+        for model in mixedModels {
+            try verify(model.cacheHitRate == expectedRates[model.modelName], "each model independently resolves its weighted cache share")
+        }
+        let mixedItems = ModelUsageItem.items(from: mixedModels, currency: .usd)
+        try verify(mixedItems.count == 5 && mixedItems.allSatisfy { $0.cacheHitRate == expectedRates[$0.modelName] },
+                   "all five independent ratios reach the model table")
+        var incompleteBucket = fallback
+        incompleteBucket["model_name"] = "fallback-model-4"
+        incompleteBucket.removeValue(forKey: "cache_read_tokens")
+        let isolated = try parseRows(multipleModels + [incompleteBucket])
+        try verify(isolated.count == 5, "incomplete cache data does not remove model rows")
+        for model in isolated {
+            let expected = model.modelName == "fallback-model-4" ? nil : expectedRates[model.modelName]
+            try verify(model.cacheHitRate == expected, "a missing bucket affects only its own model, not sibling fallbacks")
+        }
         for (input, read, expected) in [(1000, 0, Decimal.zero as Decimal?),
-                                        (1000, 1000, Decimal(1)), (0, 0, nil),
-                                        (1000, 1001, nil), (-1, 0, nil), (1000, -1, nil)] {
+                                        (1000, 1000, Decimal(string: "0.5")), (0, 0, nil),
+                                        (0, 1000, Decimal(1)),
+                                        (1000, 1001, Decimal(1001) / Decimal(2001)), (-1, 0, nil), (1000, -1, nil)] {
             var invalid = fallback
             invalid["input_tokens"] = input
             invalid["cache_read_tokens"] = read
             let parsed = try parseRows([invalid])
-            try verify(parsed[0].cacheHitRate == expected, "cache fallback guards zero, negative and out-of-range counts")
+            try verify(parsed[0].cacheHitRate == expected, "cache fallback accepts reads above ordinary input, guards zero denominator and negative counts")
         }
-        for key in ["input_tokens", "cache_read_tokens"] {
+        for key in ["input_tokens", "cache_read_tokens", "cache_write_tokens"] {
             var missing = fallback
             missing.removeValue(forKey: key)
             let parsed = try parseRows([fallback, missing])
-            try verify(parsed[0].cacheHitRate == nil, "a missing bucket must not silently become zero or be excluded")
+            try verify(parsed[0].cacheHitRate == nil && parsed[0].tokenCount == nil,
+                       "a missing input component must not silently become zero or be excluded")
         }
+        var withWrites = fallback
+        withWrites["cache_write_tokens"] = 1000
+        let written = try parseRows([withWrites])
+        try verify(written[0].tokenCount == 2200 && written[0].cacheHitRate == Decimal(string: "0.125"),
+                   "cache writes contribute to total input and total tokens, not the hit numerator")
+        withWrites["cache_write_tokens"] = -1
+        let negativeWrite = try parseRows([withWrites])
+        try verify(negativeWrite[0].tokenCount == nil && negativeWrite[0].cacheHitRate == nil,
+                   "negative writes cannot produce derived totals or ratios")
+        var zeroOrdinaryInput = fallback
+        zeroOrdinaryInput["input_tokens"] = 0
+        let allCached = try parseRows([zeroOrdinaryInput])
+        try verify(allCached[0].tokenCount == 450 && allCached[0].cacheHitRate == 1,
+                   "all-cached input is valid even with zero ordinary input")
+
+        // Transcribed from the user's website table, NOT a captured API response.
+        // Partial coverage is intentional: provider token_used stays authoritative while
+        // the requested fallback ratio describes the available token breakdown only.
+        let website: [(name: String, calls: Int, total: Int, covered: Int, expected: Int,
+                       input: Int, output: Int, read: Int, cents: Int, percent: String)] = [
+            ("gpt-5.6-terra", 417, 31_117_317, 411, 413, 3_665_337, 240_525, 27_036_288, 1287, "88.06%"),
+            ("gpt-6-astra", 259, 19_015_989, 258, 259, 957_313, 98_099, 17_947_520, 2622, "94.94%"),
+            ("deepseek-v4.1-flash", 86, 7_405_441, 82, 86, 6_577_120, 6_973, 0, 9, "0.00%"),
+            ("codex-auto-review", 82, 2_987_985, 79, 82, 697_691, 28_790, 2_261_504, 439, "76.42%"),
+            ("gpt-5.6-sol", 28, 2_484_821, 28, 28, 185_677, 5_256, 2_293_888, 179, "92.51%")
+        ]
+        let websiteRows: [[String: Any]] = website.map { sample in
+            var point = row(sample.name, quota: sample.cents * 5000, tokens: sample.total,
+                            read: sample.read, eligible: sample.input + sample.read)
+            point["count"] = sample.calls
+            point["input_tokens"] = sample.input
+            point["output_tokens"] = sample.output
+            point["token_breakdown_count"] = sample.covered
+            point["token_breakdown_request_count"] = sample.expected
+            point["token_breakdown_tracked_token_used"] = sample.input + sample.output + sample.read
+            // The table doesn't expose these API fields. Simulate a valid contract only
+            // for sol (its raw ratio rounds to the website's 92.5%); others exercise N/A.
+            if sample.name == "gpt-5.6-sol" {
+                point["cache_metrics_request_count"] = sample.covered
+            } else {
+                point.removeValue(forKey: "cache_metrics_request_count")
+                point.removeValue(forKey: "cache_eligible_input_tokens")
+            }
+            return point
+        }
+        let websiteModels = try parseRows(websiteRows)
+        try verify(websiteModels.map(\.modelName) == ["gpt-6-astra", "gpt-5.6-terra", "codex-auto-review", "gpt-5.6-sol", "deepseek-v4.1-flash"],
+                   "website models remain sorted by spend, not tokens or cache rate")
+        for sample in website {
+            let model = websiteModels.first { $0.modelName == sample.name }!
+            try verify(model.tokenCount == Int64(sample.total) && model.requestCount == Int64(sample.calls),
+                       "website totals and request counts survive partial breakdown coverage")
+            try verify(model.spend?.amount == Decimal(sample.cents) / 100,
+                       "cache fallback never changes model spend")
+            let expectedRate = Decimal(sample.read) / Decimal(sample.input + sample.read)
+            try verify(model.cacheHitRate == expectedRate, "every website model has its own cache ratio")
+            try verify(model.cacheHitRate.map(RelayNumberFormatter.percent) == sample.percent,
+                       "website fallback percentages render correctly, including explicit zero")
+        }
+        let websiteItems = ModelUsageItem.items(from: websiteModels, currency: .usd)
+        try verify(websiteItems.count == 5 && websiteItems.allSatisfy { $0.cacheHitRate != nil },
+                   "all five website cache ratios reach presentation")
+        let websiteUsage = try PipioDashboardParser.usage(from: envelope(websiteRows), range: range,
+                                                         quotaPerUnit: 500000, currency: .usd)
+        try verify(websiteUsage.spend?.amount == Decimal(string: "45.36"),
+                   "website table amount remains independent of corrected token calculations")
+
         var missingOutput = fallback
         missingOutput.removeValue(forKey: "output_tokens")
         let partialTotal = try parseRows([fallback, missingOutput])
@@ -142,6 +244,13 @@ enum PipioDashboardContractChecks {
         do {
             _ = try parseRows([overflow])
             throw PipioCheckFailure(message: "token fallback overflow must fail safely")
+        } catch ProviderError.incompatibleResponse {}
+        var inputOverflow = fallback
+        inputOverflow["token_used"] = 1200
+        inputOverflow["input_tokens"] = Int64.max
+        do {
+            _ = try parseRows([inputOverflow])
+            throw PipioCheckFailure(message: "cache denominator overflow must fail safely even with provider total")
         } catch ProviderError.incompatibleResponse {}
         var unknownCost = row("unknown-cost", quota: 1, tokens: 999999)
         unknownCost.removeValue(forKey: "quota")

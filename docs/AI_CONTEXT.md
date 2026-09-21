@@ -160,7 +160,7 @@ SwiftData 是 Apple 系统框架，不单独收费，也没有固定独立包体
 ## 15. 2026-09-21 Data and panel corrections
 
 - Pipio 分模型数据改用数据看板“模型 Token 明细”同源的 `GET /api/data/self`，按查询时间范围合并各模型时间桶；不再用最多 10 页请求日志推算看板总量。`token_used` 为总 Token；消费为 `quota / quota_per_unit`。免费模型、消费缺失但存在用量的模型不因金额为零/未知而从 UI 删除。
-- 缓存读取占比优先保留覆盖契约完整时的 `cache_read_tokens / cache_eligible_input_tokens`；按 2026-09-21 用户确认的新规则，原本未知时回退为同一模型所有时间桶的 `sum(cache_read_tokens) / sum(input_tokens)`。回退要求每桶计数有效、缓存读取不大于输入、总输入大于 0；不平均各桶百分比，不将缺失值补零。公开前端契约与合成 fixture 不代表真实账户已对账。
+- 缓存读取占比优先保留覆盖契约完整时的 `cache_read_tokens / cache_eligible_input_tokens`；原本未知时回退为同一模型所有时间桶的 `sum(cache_read_tokens) / sum(input_tokens + cache_read_tokens + cache_write_tokens)`。官网模型明细中的普通输入、缓存读取和缓存写入是独立分量，不能用读取大于普通输入来判定无效。回退要求每桶三个输入分量均存在且非负、总分母大于 0；不平均各桶百分比，不将缺失值补零。明细覆盖不完整时，该回退只代表已获取明细，不用 `token_used - output_tokens` 补出分母。公开前端契约与合成 fixture 不代表真实账户已对账。
 - Pipio `/api/status` 的正值 `usd_exchange_rate` 用于该账户 USD→CNY 汇总；不硬编码汇率。旧快照 USD 汇率缺少该字段时在下次刷新重取，不等待每周过期。获取失败不伪造转换值。
 - 菜单栏点击外部只隐藏当前页面；重新点开恢复同一个表单/详情窗口。草稿仅驻留内存，明确取消、保存、关闭或退出后不保留。辅助窗口跟随首页内容位置并限制在对应屏幕内，不再居中。
 - 固定菜单栏宽度为 70 点；只显示今日消费数值，不显示余额、币种或“今日”前缀。使用系统模板 SF Symbol，跟随菜单栏外观，不使用彩色 Emoji。关闭今日消费显示或数据不完整时只保留入口图标。账户详情更新时间使用本地时区 `MM/dd HH:mm`。
@@ -176,7 +176,7 @@ SwiftData 是 Apple 系统框架，不单独收费，也没有固定独立包体
 
 ### 菜单栏与模型消费分析（2026-09-21）
 
-- 模型总 Token 优先读取 `token_used`；缺失时按时间桶使用有效非负 `input_tokens + output_tokens`，不重复加缓存 Token；缺失分量或无效原始总数不伪造结果，整数溢出安全失败。
+- 模型总 Token 优先读取 `token_used`；缺失时按时间桶使用有效非负 `input_tokens + cache_read_tokens + cache_write_tokens + output_tokens`，独立分量各计一次；缺失分量或无效原始总数不伪造结果，整数溢出安全失败。
 - 分模型列表按原生消费金额降序排列，同额按模型名稳定排序；免费模型保留，未知消费排最后。解析层与展示层均应用排序，因此旧缓存无须迁移。
 - 详情页总 Token 列固定宽度、使用等宽数字及完整值悬停提示，避免被长模型名挤压。`scripts/test-regressions.sh` 同时验证模型计数/比例/排序和菜单栏展示内容。
 
@@ -187,3 +187,9 @@ SwiftData 是 Apple 系统框架，不单独收费，也没有固定独立包体
 - Pipio 今日消费改为与模型分析共用一次 `/api/data/self` 返回，按本地当天时间范围汇总原始 quota 后除以账户 `quota_per_unit`。公开官网概览脚本也从该看板数据汇总今日金额；真实账户具体差额未做认证请求对账。余额、月消费及已完成日期的历史查询接口保持不变。历史回填跳过今天，避免覆盖快照已经写入的今日记录。
 - 看板返回成功且当日数组为空时今日消费为 0；任一当日 quota 缺失或接口失败则今日消费未知，不回退到另一口径的 `/api/log/self/stat`。可选 Token 聚合失败不丢弃可确认的消费总额。
 - 详情页右上角关闭、底部“返回首页”和原生窗口关闭均通过窗口关闭代理重新打开首页；点击应用外部仍只隐藏并保留详情状态。其他辅助窗口关闭行为不变。
+
+### 通用导航：关闭辅助页面返回首页
+
+设置、添加账户、编辑账户和账户详情统一遵循“显式关闭返回首页；隐藏保留页面状态”的规则，不再仅为详情单独开启。公共窗口控制器处理自定义关闭、完成、取消、保存成功与原生窗口关闭；保存失败留在原页。后续同级辅助页面默认继承此行为，设置内部 sheet 保持返回父页面。
+
+替换窗口不触发旧窗口返回，延迟返回可被后续隐藏/切页取消。新增 `scripts/test-window-navigation.sh`，需 macOS 登录图形会话，使用模拟内存数据检查实际 AppKit 窗口导航。可按本机已核实的 SDK 设置执行：`SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk scripts/test-window-navigation.sh`；不要把该 SDK 选择理解为 GitHub 打包环境的修改。

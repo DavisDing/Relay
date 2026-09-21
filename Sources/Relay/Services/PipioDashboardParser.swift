@@ -25,16 +25,16 @@ enum PipioDashboardParser {
         let cacheMetricsRequestCount: Int64?
         let cacheEligibleInputTokens: Int64?
 
-        // Cache reads are part of input_tokens, not additional tokens.
-        func resolvedTokenCount() throws -> Int64? {
-            if let tokenUsed { return tokenUsed >= 0 ? tokenUsed : nil }
-            return try PipioDashboardParser.sum([inputTokens, outputTokens])
+        // Pipio reports ordinary input, cache reads and cache writes as separate components.
+        // Do not compare cache reads to ordinary input or substitute token_used - output:
+        // provider totals may cover more requests than the available token breakdown.
+        func resolvedInputTokenCount() throws -> Int64? {
+            try PipioDashboardParser.sum([inputTokens, cacheReadTokens, cacheWriteTokens])
         }
 
-        var hasValidCacheInputs: Bool {
-            guard let inputTokens, inputTokens >= 0,
-                  let cacheReadTokens, cacheReadTokens >= 0 else { return false }
-            return cacheReadTokens <= inputTokens
+        func resolvedTokenCount() throws -> Int64? {
+            if let tokenUsed { return tokenUsed >= 0 ? tokenUsed : nil }
+            return try PipioDashboardParser.sum([resolvedInputTokenCount(), outputTokens])
         }
 
         var hasCacheContract: Bool {
@@ -111,8 +111,8 @@ enum PipioDashboardParser {
             }
             // User-selected fallback for N/A: weighted model-level cache reads / all inputs.
             // Do not average bucket percentages, treat missing counts as zero, or divide by zero.
-            if cacheShare == nil, rows.allSatisfy(\.hasValidCacheInputs),
-               let input = try sum(rows.map(\.inputTokens)), input > 0,
+            if cacheShare == nil,
+               let input = try sum(rows.map { try $0.resolvedInputTokenCount() }), input > 0,
                let read = try sum(rows.map(\.cacheReadTokens)) {
                 cacheShare = Decimal(read) / Decimal(input)
             }

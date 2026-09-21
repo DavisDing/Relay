@@ -35,6 +35,8 @@ public struct AccountEditModalView: View {
                 Spacer()
                 Button(action: onDismiss) { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
                     .buttonStyle(.plain)
+                    .help("返回首页")
+                    .accessibilityLabel("返回首页")
             }
 
             ScrollView {
