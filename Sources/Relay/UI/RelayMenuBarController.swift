@@ -178,7 +178,7 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
     private func presentAuxiliaryWindow<Content: View>(
         title: String,
         size: NSSize,
-        content: Content
+        @ViewBuilder content: () -> Content
     ) {
         close()
         auxiliaryWindowController?.close()
@@ -192,7 +192,7 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
         window.title = title
         window.isReleasedWhenClosed = false
         window.isRestorable = false
-        window.contentViewController = NSHostingController(rootView: AnyView(content))
+        window.contentViewController = NSHostingController(rootView: AnyView(content()))
         window.delegate = self
 
         let controller = NSWindowController(window: window)
