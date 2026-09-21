@@ -124,12 +124,15 @@ struct RegressionChecks {
         defer { try? FileManager.default.removeItem(at: root) }
         try BusinessLogicSelfCheck.run()
         print("PASSED: existing business logic self-check")
+        try await PipioDashboardContractChecks.run()
         try await credentials(root)
         print("PASSED: credential load failure, retry, atomic write and permissions")
         try repositoryTransactions(root)
         print("PASSED: all repository writes preserve state on failure")
         try await accountEditing()
         print("PASSED: imported credential entry, replacement and rollback errors")
+        try await manualExchangeRates(root)
+        print("PASSED: manual FX validation, offline totals, isolation, rollback, persistence and sync")
         try mergeRules()
         print("PASSED: deterministic merge, timestamp ties and legacy JSON")
         try fileExchange(root)
@@ -223,6 +226,107 @@ struct RegressionChecks {
         try JSONSerialization.data(withJSONObject: legacy).write(to: url)
         let legacyRepo = try FileLocalRepository(fileURL: url)
         try check(try legacyRepo.account(id: a.id) != nil, "legacy local JSON remains readable")
+    }
+
+    @MainActor static func manualExchangeRates(_ root: URL) async throws {
+        try check(try USDToCNYRate.parseOverride(" 7.30 ") == Decimal(string: "7.3"), "positive manual FX")
+        try check(try USDToCNYRate.parseOverride("  ") == nil, "blank restores automatic FX")
+        for text in ["0", "-1", "nan", "inf", "7.3abc", "7,3", "7 3", "1e2", "7.3.1", ".", String(repeating: "9", count: 200)] {
+            do {
+                _ = try USDToCNYRate.parseOverride(text)
+                throw CheckFailure(description: "invalid FX accepted: \(text)")
+            } catch AccountServiceError.invalidExchangeRate {}
+        }
+
+        let repo = RejectingRepository()
+        let a = account("manual FX")
+        try repo.upsertAccount(a)
+        let now = Date()
+        func usdSnapshot(_ id: UUID, fx: Decimal?, expired: Bool = false) -> ProviderSnapshot {
+            ProviderSnapshot(accountID: id, balance: MoneyValue(amount: 10, currency: .usd),
+                todaySpend: MoneyValue(amount: 2, currency: .usd), monthSpend: nil, requestCount: nil,
+                capabilities: [.balance, .todayUsage], freshness: .fresh, fetchedAt: now,
+                rate: AccountRate(accountID: id, source: .pipioAccountStatus, nativeCurrency: .usd,
+                    quotaPerUnit: 500000, conversionToCNY: fx, fetchedAt: now,
+                    expiresAt: expired ? now.addingTimeInterval(-1) : now.addingTimeInterval(3600)))
+        }
+        let raw = usdSnapshot(a.id, fx: nil)
+        try repo.upsertSnapshot(raw)
+        // Empty registry and credential store prove metadata edits do not request a provider.
+        let credentials = InMemoryCredentialStore()
+        let store = RelayStore(repository: repo, credentialStore: credentials,
+            adapters: ProviderAdapterRegistry(adapters: []), automaticallyRefresh: false)
+        try check(store.balanceTotalCNY.value == nil, "missing site FX stays unknown")
+        try await store.updateAccount(accountID: a.id, displayName: a.displayName,
+            lowBalanceThreshold: 20, manualUSDToCNY: .set(7))
+        try check(store.balanceTotalCNY.value?.amount == 70 && store.todaySpendTotalCNY.value?.amount == 14,
+            "offline manual FX immediately updates home/menu totals")
+        try check(store.accounts[0].manualUSDToCNY == 7 && store.accounts[0].quotaPerUnit == 500000,
+            "edit projection separates manual FX and site quota")
+        try check(try repo.snapshot(accountID: a.id) == raw, "manual FX never rewrites native amounts or quota")
+        try await store.updateAccount(accountID: a.id, displayName: "renamed", lowBalanceThreshold: 15)
+        try check(try repo.account(id: a.id)?.manualUSDToCNY == 7, "unrelated edits preserve override")
+        let saved = try repo.account(id: a.id)!
+        for invalid in [Decimal.zero, Decimal(-1), Decimal.nan] {
+            do {
+                try await store.updateAccount(accountID: a.id, displayName: "invalid", lowBalanceThreshold: 20,
+                    replacementCredential: placeholder, manualUSDToCNY: .set(invalid))
+                throw CheckFailure(description: "invalid business-layer FX accepted")
+            } catch AccountServiceError.invalidExchangeRate {}
+        }
+        try check(try repo.account(id: a.id) == saved, "invalid FX is atomic and validated before credential calls")
+        repo.rejectWrites = true
+        try await rejectsAsync("manual FX write failure") {
+            try await store.updateAccount(accountID: a.id, displayName: "rejected", lowBalanceThreshold: 20,
+                manualUSDToCNY: .set(9))
+        }
+        repo.rejectWrites = false
+        try check(try repo.account(id: a.id) == saved && store.balanceTotalCNY.value?.amount == 70,
+            "failed save preserves override and totals")
+
+        let providerSnapshot = usdSnapshot(a.id, fx: 6)
+        let expired = usdSnapshot(a.id, fx: 6, expired: true)
+        try check(DashboardAggregator.balanceTotal(snapshots: [providerSnapshot], targetCurrency: .cny,
+            manualUSDToCNY: [a.id: 7]).value?.amount == 70, "manual overrides valid provider FX")
+        try check(DashboardAggregator.balanceTotal(snapshots: [expired], targetCurrency: .cny,
+            manualUSDToCNY: [a.id: 7]).value?.amount == 70, "manual FX does not inherit provider expiry")
+        try check(DashboardAggregator.balanceTotal(snapshots: [expired], targetCurrency: .cny).value == nil,
+            "automatic mode still rejects expired site FX")
+        let other = usdSnapshot(UUID(), fx: nil)
+        let isolated = DashboardAggregator.balanceTotal(snapshots: [raw, other], targetCurrency: .cny,
+            manualUSDToCNY: [a.id: 7])
+        try check(isolated.value?.amount == 70 && isolated.excludedAccountIDs == [other.accountID],
+            "manual rate cannot leak to another account")
+        try check(DashboardAggregator.balanceTotal(snapshots: [raw], targetCurrency: .usd,
+            manualUSDToCNY: [a.id: 7]).value?.amount == 10, "native USD remains unchanged")
+        try check(DashboardAggregator.balanceTotal(snapshots: [snapshot(a.id, at: now)], targetCurrency: .cny,
+            manualUSDToCNY: [a.id: 7]).value?.amount == 100, "native CNY is not multiplied")
+        try check(DashboardAggregator.balanceTotal(snapshots: [raw], targetCurrency: .cny,
+            manualUSDToCNY: [a.id: .nan]).value == nil, "invalid imported override never produces fake total")
+        try await store.updateAccount(accountID: a.id, displayName: "automatic", lowBalanceThreshold: 20,
+            manualUSDToCNY: .set(nil))
+        try check(store.balanceTotalCNY.value == nil, "clearing with no site FX restores unknown")
+        try repo.upsertSnapshot(providerSnapshot)
+        try await store.updateAccount(accountID: a.id, displayName: "automatic", lowBalanceThreshold: 20)
+        try check(store.balanceTotalCNY.value?.amount == 60, "clearing restores site FX")
+
+        let file = root.appendingPathComponent("manual-fx.json")
+        let disk = try FileLocalRepository(fileURL: file)
+        try disk.upsertAccount(saved)
+        let restarted = try FileLocalRepository(fileURL: file)
+        try check(try restarted.account(id: a.id)?.manualUSDToCNY == 7, "manual FX survives restart")
+        let safePayload = RelaySyncDataSafety.sanitized(try restarted.syncData())
+        let imported = InMemoryLocalRepository()
+        try imported.mergeSyncData(try decoded(encoded(safePayload)))
+        try check(try imported.account(id: a.id)?.manualUSDToCNY == 7, "safe sync projection retains manual FX")
+        // Decode a record written before this optional field existed.
+        var oldObject = try JSONSerialization.jsonObject(with: JSONEncoder().encode(saved)) as! [String: Any]
+        oldObject.removeValue(forKey: "manualUSDToCNY")
+        let old = try JSONDecoder().decode(AccountConfiguration.self, from: JSONSerialization.data(withJSONObject: oldObject))
+        try check(old.manualUSDToCNY == nil && old.id == saved.id, "legacy account JSON remains readable")
+        try disk.upsertAccount(try repo.account(id: a.id)!)
+        try imported.mergeSyncData(try decoded(encoded(RelaySyncDataSafety.sanitized(disk.syncData()))))
+        try check(try imported.account(id: a.id)?.manualUSDToCNY == nil, "newer clear synchronizes automatic mode")
     }
 
     @MainActor static func accountEditing() async throws {

@@ -8,6 +8,8 @@ public struct AccountConfiguration: Identifiable, Codable, Sendable, Equatable {
     public var credentialReference: String
     public var isEnabled: Bool
     public var lowBalanceThreshold: Decimal?
+    /// User override for USD → CNY only; never used to normalize provider quota.
+    public var manualUSDToCNY: Decimal?
     public var sortOrder: Int
     public var createdAt: Date
     public var updatedAt: Date
@@ -20,6 +22,7 @@ public struct AccountConfiguration: Identifiable, Codable, Sendable, Equatable {
         credentialReference: String? = nil,
         isEnabled: Bool = true,
         lowBalanceThreshold: Decimal? = Decimal(20),
+        manualUSDToCNY: Decimal? = nil,
         sortOrder: Int = 0,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
@@ -31,9 +34,33 @@ public struct AccountConfiguration: Identifiable, Codable, Sendable, Equatable {
         self.credentialReference = credentialReference ?? id.uuidString
         self.isEnabled = isEnabled
         self.lowBalanceThreshold = lowBalanceThreshold
+        self.manualUSDToCNY = manualUSDToCNY
         self.sortOrder = sortOrder
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+    }
+}
+
+/// Explicit change semantics keep unrelated edits from clearing a saved override.
+public enum ManualExchangeRateUpdate: Sendable {
+    case unchanged
+    case set(Decimal?)
+}
+
+public enum USDToCNYRate {
+    public static func isValid(_ value: Decimal) -> Bool {
+        !value.isNaN && value > 0
+    }
+
+    /// Blank restores automatic mode. Reject partial numbers (e.g. "7.3abc")
+    /// rather than relying on Decimal's permissive prefix parsing.
+    public static func parseOverride(_ text: String) throws -> Decimal? {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+        guard text.range(of: #"^[0-9]+(?:\.[0-9]+)?$"#, options: .regularExpression) != nil,
+              let value = Decimal(string: text, locale: Locale(identifier: "en_US_POSIX")),
+              isValid(value) else { throw AccountServiceError.invalidExchangeRate }
+        return value
     }
 }
 

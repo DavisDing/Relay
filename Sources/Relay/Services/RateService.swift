@@ -29,7 +29,13 @@ public actor RateService {
         now: Date = Date()
     ) async throws -> RateResolution {
         let candidate = cachedRates[account.id] ?? persistedRate
-        if !forceRefresh, let candidate, !candidate.isExpired(at: now) {
+        // Older Pipio snapshots omitted the published USD exchange rate. Re-fetch
+        // these incomplete rates instead of waiting for the weekly expiry.
+        let needsPipioConversion = candidate.map {
+            $0.source == .pipioAccountStatus && $0.nativeCurrency == .usd && $0.conversionToCNY == nil &&
+            !(account.manualUSDToCNY.map(USDToCNYRate.isValid) ?? false)
+        } ?? false
+        if !forceRefresh, !needsPipioConversion, let candidate, !candidate.isExpired(at: now) {
             cachedRates[account.id] = candidate
             return RateResolution(rate: candidate, isStale: false)
         }

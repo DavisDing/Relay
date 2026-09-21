@@ -20,7 +20,7 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
     private let onApplyGlobalShortcut: ((GlobalShortcutConfiguration) -> GlobalShortcutRegistrationOutcome)?
 
     private let statusItemAutosaveName = NSStatusItem.AutosaveName("cloud.dinghao.relay.status-item")
-    private let fixedStatusItemLength: CGFloat = 140
+    private let fixedStatusItemLength: CGFloat = 70
 
     public init(
         store: RelayStore,
@@ -45,6 +45,7 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
         statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         statusItem.button?.imagePosition = .imageLeading
         statusItem.button?.toolTip = "Relay（左键打开，右键显示菜单）"
+        statusItem.button?.cell?.usesSingleLineMode = false
         statusItem.button?.cell?.lineBreakMode = .byTruncatingTail
 
         // Do not use .transient here. A transient popover is allowed to dismiss
@@ -87,11 +88,21 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
 
     public func toggle() {
         guard let button = statusItem.button else { return }
+        // Restore the existing hosting controller, including SwiftUI form state.
+        // Only an explicit cancel/save/close may destroy a draft.
+        if let window = auxiliaryWindowController?.window {
+            if window.isVisible && NSApp.isActive && window.isKeyWindow {
+                window.orderOut(nil)
+            } else {
+                NSApp.activate(ignoringOtherApps: true)
+                window.deminiaturize(nil)
+                window.makeKeyAndOrderFront(nil)
+            }
+            return
+        }
         if popover.isShown {
             popover.performClose(nil)
         } else {
-            auxiliaryWindowController?.close()
-            auxiliaryWindowController = nil
             NSApp.activate(ignoringOtherApps: true)
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             popover.contentViewController?.view.window?.makeKey()
@@ -100,6 +111,7 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
 
     public func close() {
         if popover.isShown { popover.performClose(nil) }
+        auxiliaryWindowController?.window?.orderOut(nil)
     }
 
     @objc private func handleStatusItemClick(_ sender: Any?) {
@@ -180,6 +192,12 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
         size: NSSize,
         @ViewBuilder content: () -> Content
     ) {
+        // Capture the dashboard content frame before dismissing its popover.
+        let anchor: NSRect? = popover.contentViewController.map { controller in
+            let view = controller.view
+            return view.window?.convertToScreen(view.convert(view.bounds, to: nil)) ?? .zero
+        }
+        let screen = statusItem.button?.window?.screen
         close()
         auxiliaryWindowController?.close()
 
@@ -197,9 +215,22 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
 
         let controller = NSWindowController(window: window)
         auxiliaryWindowController = controller
+        if let screen {
+            let visible = screen.visibleFrame
+            let buttonFrame = statusItem.button?.window?.frame ?? visible
+            let contentTop = anchor.flatMap { $0 == .zero ? nil : $0 }
+            let rect = NSRect(
+                x: contentTop?.minX ?? (buttonFrame.midX - size.width / 2),
+                y: (contentTop?.maxY ?? visible.maxY) - size.height,
+                width: size.width, height: size.height
+            )
+            var frame = window.frameRect(forContentRect: rect)
+            frame.origin.x = max(visible.minX, min(frame.minX, visible.maxX - frame.width))
+            frame.origin.y = max(visible.minY, min(frame.minY, visible.maxY - frame.height))
+            window.setFrame(frame, display: false)
+        }
         NSApp.activate(ignoringOtherApps: true)
         controller.showWindow(nil)
-        window.center()
         window.makeKeyAndOrderFront(nil)
     }
 
@@ -261,13 +292,14 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
             AccountEditModalView(
                 account: account,
                 onDismiss: { [weak self] in self?.closeAuxiliaryWindow() },
-                onSave: { [weak self] name, threshold, credential in
+                onSave: { [weak self] name, threshold, credential, rateUpdate in
                     guard let self, let id = UUID(uuidString: account.id) else { return }
                     try await self.store.updateAccount(
                         accountID: id,
                         displayName: name,
                         lowBalanceThreshold: threshold,
-                        replacementCredential: credential
+                        replacementCredential: credential,
+                        manualUSDToCNY: rateUpdate
                     )
                 }
             )
@@ -282,29 +314,34 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
 
     private func updateStatusItem() {
         guard let button = statusItem.button else { return }
-        let balance: String
-        if let amount = store.balanceTotalCNY.value?.amount {
-            balance = RelayNumberFormatter.money(amount, currency: store.settings.baseCurrency)
-        } else {
-            balance = "--"
+        let balance = store.balanceTotalCNY.value.map {
+            RelayNumberFormatter.money($0.amount, currency: store.settings.baseCurrency)
         }
         let today: String? = {
             guard store.settings.showTodayInMenuBar,
                   store.todaySpendTotalCNY.isComplete,
                   let amount = store.todaySpendTotalCNY.value?.amount else { return nil }
-            return "今日 \(RelayNumberFormatter.money(amount, currency: store.settings.baseCurrency))"
+            return RelayNumberFormatter.money(amount, currency: store.settings.baseCurrency)
         }()
-        let suffix = today.map { " · \($0)" } ?? ""
-        button.title = "⚡ \(balance)\(suffix)"
-        button.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
-        button.image = nil
-        if store.isRefreshing {
-            button.title = "↻ \(balance)\(suffix)"
-        } else if store.hasAnyWarning || store.hasLowBalance {
-            button.title = "⚠︎ \(balance)\(suffix)"
+        let indicator = store.isRefreshing ? "↻" : (store.hasAnyWarning || store.hasLowBalance ? "⚠︎" : "⚡")
+        let lines = [balance, today.map { "今日 " + $0 }].compactMap { $0 }
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        paragraph.lineBreakMode = .byTruncatingTail
+        if lines.count > 1 {
+            paragraph.minimumLineHeight = 10
+            paragraph.maximumLineHeight = 10
         }
-
+        button.attributedTitle = NSAttributedString(
+            string: lines.isEmpty ? indicator : indicator + " " + lines.joined(separator: "\n"),
+            attributes: [.font: NSFont.systemFont(ofSize: lines.count > 1 ? 9 : 11, weight: .semibold),
+                         .paragraphStyle: paragraph]
+        )
+        button.image = nil
+        button.toolTip = (["Relay " + indicator] + lines + ["左键打开，右键显示菜单"]).joined(separator: " · ")
         let fixedWidth = UserDefaults.standard.object(forKey: "fixedMenuBarWidth") as? Bool ?? true
-        statusItem.length = fixedWidth ? fixedStatusItemLength : NSStatusItem.variableLength
+        // Keep Relay accessible, but don't reserve empty metric space or show --.
+        statusItem.length = lines.isEmpty ? NSStatusItem.squareLength
+            : (fixedWidth ? fixedStatusItemLength : NSStatusItem.variableLength)
     }
 }

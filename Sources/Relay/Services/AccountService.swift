@@ -140,11 +140,19 @@ public final class AccountService {
         accountID: UUID,
         displayName: String,
         lowBalanceThreshold: Decimal?,
-        replacementCredential: ProviderCredential? = nil
+        replacementCredential: ProviderCredential? = nil,
+        manualUSDToCNY: ManualExchangeRateUpdate = .unchanged
     ) async throws {
         guard var account = try repository.account(id: accountID) else { return }
         let name = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { throw ProviderError.invalidBaseURL }
+
+        if case let .set(value) = manualUSDToCNY {
+            if let value, !USDToCNYRate.isValid(value) {
+                throw AccountServiceError.invalidExchangeRate
+            }
+            account.manualUSDToCNY = value
+        }
 
         // Keep the previous credential until the metadata write succeeds. If the
         // repository fails after saving a replacement, restore the old value so an
@@ -211,8 +219,14 @@ public final class AccountService {
 
 public enum AccountServiceError: LocalizedError {
     case credentialRollbackFailed
+    case invalidExchangeRate
 
     public var errorDescription: String? {
-        "账户保存失败，且无法恢复本机凭据。请检查本地存储后重新录入凭据。"
+        switch self {
+        case .credentialRollbackFailed:
+            return "账户保存失败，且无法恢复本机凭据。请检查本地存储后重新录入凭据。"
+        case .invalidExchangeRate:
+            return "美元/人民币汇率必须是大于 0 的有效数字（例如 7.30）；留空使用站点汇率。"
+        }
     }
 }

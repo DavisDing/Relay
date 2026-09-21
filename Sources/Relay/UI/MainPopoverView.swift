@@ -222,23 +222,7 @@ public struct MainPopoverView: View {
         guard let id = UUID(uuidString: account.id),
               let snapshot = store.snapshots.first(where: { $0.accountID == id }),
               let summaries = snapshot.modelUsages else { return [] }
-        let priced = summaries.compactMap { summary -> (ModelUsageSummary, Decimal)? in
-            guard let spend = summary.spend else { return nil }
-            return (summary, spend.amount)
-        }
-        let total = priced.reduce(Decimal.zero) { $0 + $1.1 }
-        guard total > 0 else { return [] }
-        return priced.map { summary, cost in
-            ModelUsageItem(
-                id: summary.id,
-                modelName: summary.modelName,
-                tokens: summary.tokenCount.map { $0.formatted() } ?? "--",
-                cost: cost,
-                currency: account.currency,
-                percentage: NSDecimalNumber(decimal: cost / total).doubleValue,
-                cacheHitRate: summary.cacheHitRate
-            )
-        }
+        return ModelUsageItem.items(from: summaries, currency: account.currency)
     }
 
     private var lastSyncText: String {

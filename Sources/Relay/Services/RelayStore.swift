@@ -190,14 +190,16 @@ public final class RelayStore: ObservableObject {
         accountID: UUID,
         displayName: String,
         lowBalanceThreshold: Decimal?,
-        replacementCredential: ProviderCredential? = nil
+        replacementCredential: ProviderCredential? = nil,
+        manualUSDToCNY: ManualExchangeRateUpdate = .unchanged
     ) async throws {
         do {
             try await accountService.updateAccount(
                 accountID: accountID,
                 displayName: displayName,
                 lowBalanceThreshold: lowBalanceThreshold,
-                replacementCredential: replacementCredential
+                replacementCredential: replacementCredential,
+                manualUSDToCNY: manualUSDToCNY
             )
             accountErrors.removeValue(forKey: accountID.uuidString)
             reloadFromRepository()
@@ -225,12 +227,19 @@ public final class RelayStore: ObservableObject {
         accounts.first(where: { UUID(uuidString: $0.id) == id })
     }
 
+    private var manualExchangeRates: [UUID: Decimal] {
+        Dictionary(uniqueKeysWithValues: accounts.compactMap { account in
+            guard let id = UUID(uuidString: account.id), let rate = account.manualUSDToCNY else { return nil }
+            return (id, rate)
+        })
+    }
+
     public var balanceTotalCNY: DashboardTotal {
-        DashboardAggregator.balanceTotal(snapshots: snapshots, targetCurrency: settings.baseCurrency, now: presentationDate, expectedAccountIDs: expectedAccountIDs)
+        DashboardAggregator.balanceTotal(snapshots: snapshots, targetCurrency: settings.baseCurrency, now: presentationDate, expectedAccountIDs: expectedAccountIDs, manualUSDToCNY: manualExchangeRates)
     }
 
     public var todaySpendTotalCNY: DashboardTotal {
-        DashboardAggregator.todaySpendTotal(snapshots: snapshots, targetCurrency: settings.baseCurrency, now: presentationDate, expectedAccountIDs: expectedAccountIDs, calendar: calendar)
+        DashboardAggregator.todaySpendTotal(snapshots: snapshots, targetCurrency: settings.baseCurrency, now: presentationDate, expectedAccountIDs: expectedAccountIDs, calendar: calendar, manualUSDToCNY: manualExchangeRates)
     }
 
     public var hasLowBalance: Bool {
@@ -446,7 +455,11 @@ public final class RelayStore: ObservableObject {
             status: status,
             lastUpdated: snapshot?.fetchedAt,
             isEnabled: configuration.isEnabled,
-            lowBalanceThreshold: configuration.lowBalanceThreshold
+            lowBalanceThreshold: configuration.lowBalanceThreshold,
+            manualUSDToCNY: configuration.manualUSDToCNY,
+            quotaPerUnit: snapshot?.rate.quotaPerUnit,
+            siteUSDToCNY: snapshot?.rate.nativeCurrency == .usd ? snapshot?.rate.conversionToCNY : nil,
+            siteRateIsExpired: snapshot?.rate.isExpired(at: presentationDate) ?? false
         )
     }
 

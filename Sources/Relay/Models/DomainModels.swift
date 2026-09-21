@@ -43,6 +43,10 @@ public struct AccountModel: Identifiable, Sendable {
     public var lastUpdated: Date?
     public var isEnabled: Bool
     public var lowBalanceThreshold: Decimal?
+    public var manualUSDToCNY: Decimal?
+    public var quotaPerUnit: Decimal?
+    public var siteUSDToCNY: Decimal?
+    public var siteRateIsExpired: Bool
     
     public init(id: String = UUID().uuidString,
                 name: String,
@@ -55,7 +59,11 @@ public struct AccountModel: Identifiable, Sendable {
                 status: AccountStatus = .ok,
                 lastUpdated: Date? = Date(),
                 isEnabled: Bool = true,
-                lowBalanceThreshold: Decimal? = nil) {
+                lowBalanceThreshold: Decimal? = nil,
+                manualUSDToCNY: Decimal? = nil,
+                quotaPerUnit: Decimal? = nil,
+                siteUSDToCNY: Decimal? = nil,
+                siteRateIsExpired: Bool = false) {
         self.id = id
         self.name = name
         self.kind = kind
@@ -68,6 +76,10 @@ public struct AccountModel: Identifiable, Sendable {
         self.lastUpdated = lastUpdated
         self.isEnabled = isEnabled
         self.lowBalanceThreshold = lowBalanceThreshold
+        self.manualUSDToCNY = manualUSDToCNY
+        self.quotaPerUnit = quotaPerUnit
+        self.siteUSDToCNY = siteUSDToCNY
+        self.siteRateIsExpired = siteRateIsExpired
     }
 }
 
@@ -87,17 +99,17 @@ public struct ModelUsageItem: Identifiable, Sendable {
     public let id: String
     public let modelName: String
     public let tokens: String
-    public let cost: Decimal
+    public let cost: Decimal?
     public let currency: Currency
-    public let percentage: Double
+    public let percentage: Double?
     public let cacheHitRate: Decimal?
     
     public init(id: String = UUID().uuidString,
                 modelName: String,
                 tokens: String,
-                cost: Decimal,
+                cost: Decimal?,
                 currency: Currency,
-                percentage: Double,
+                percentage: Double?,
                 cacheHitRate: Decimal? = nil) {
         self.id = id
         self.modelName = modelName
@@ -106,6 +118,23 @@ public struct ModelUsageItem: Identifiable, Sendable {
         self.currency = currency
         self.percentage = percentage
         self.cacheHitRate = cacheHitRate
+    }
+}
+
+extension ModelUsageItem {
+    static func items(from summaries: [ModelUsageSummary], currency: Currency) -> [ModelUsageItem] {
+        let complete = summaries.allSatisfy { $0.spend?.currency == currency }
+        let total = summaries.reduce(Decimal.zero) { $0 + ($1.spend?.amount ?? .zero) }
+        return summaries.map { summary in
+            let cost = summary.spend?.amount
+            return ModelUsageItem(
+                id: summary.id, modelName: summary.modelName,
+                tokens: summary.tokenCount.map { $0.formatted() } ?? "--",
+                cost: cost, currency: summary.spend?.currency ?? currency,
+                percentage: complete && total > 0 ? cost.map { NSDecimalNumber(decimal: $0 / total).doubleValue } : nil,
+                cacheHitRate: summary.cacheHitRate
+            )
+        }
     }
 }
 

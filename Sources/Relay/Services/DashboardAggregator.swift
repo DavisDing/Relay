@@ -5,13 +5,15 @@ public enum DashboardAggregator {
         snapshots: [ProviderSnapshot],
         targetCurrency: Currency,
         now: Date = Date(),
-        expectedAccountIDs: Set<UUID>? = nil
+        expectedAccountIDs: Set<UUID>? = nil,
+        manualUSDToCNY: [UUID: Decimal] = [:]
     ) -> DashboardTotal {
         aggregate(
             snapshots: snapshots,
             targetCurrency: targetCurrency,
             now: now,
             expectedAccountIDs: expectedAccountIDs,
+            manualUSDToCNY: manualUSDToCNY,
             value: { $0.balance }
         )
     }
@@ -21,13 +23,15 @@ public enum DashboardAggregator {
         targetCurrency: Currency,
         now: Date = Date(),
         expectedAccountIDs: Set<UUID>? = nil,
-        calendar: Calendar = .current
+        calendar: Calendar = .current,
+        manualUSDToCNY: [UUID: Decimal] = [:]
     ) -> DashboardTotal {
         aggregate(
             snapshots: snapshots,
             targetCurrency: targetCurrency,
             now: now,
             expectedAccountIDs: expectedAccountIDs,
+            manualUSDToCNY: manualUSDToCNY,
             value: { $0.todaySpend(on: now, calendar: calendar) }
         )
     }
@@ -37,6 +41,7 @@ public enum DashboardAggregator {
         targetCurrency: Currency,
         now: Date,
         expectedAccountIDs: Set<UUID>?,
+        manualUSDToCNY: [UUID: Decimal],
         value: (ProviderSnapshot) -> MoneyValue?
     ) -> DashboardTotal {
         let expected = expectedAccountIDs ?? Set(snapshots.map(\.accountID))
@@ -49,7 +54,7 @@ public enum DashboardAggregator {
 
         for snapshot in snapshots where expected.contains(snapshot.accountID) {
             guard let money = value(snapshot),
-                  let converted = convert(money, using: snapshot.rate, target: targetCurrency, now: now) else {
+                  let converted = convert(money, using: snapshot.rate, target: targetCurrency, now: now, manualUSDToCNY: manualUSDToCNY[snapshot.accountID]) else {
                 excluded.insert(snapshot.accountID)
                 continue
             }
@@ -68,14 +73,21 @@ public enum DashboardAggregator {
         _ money: MoneyValue,
         using rate: AccountRate,
         target: Currency,
-        now: Date
+        now: Date,
+        manualUSDToCNY: Decimal?
     ) -> Decimal? {
         if money.currency == target { return money.amount }
+        // The snapshot's amounts are already in native currency. A user-set FX
+        // rate has no provider expiry and must not alter quota normalization.
+        if money.currency == .usd, target == .cny,
+           let manualUSDToCNY, USDToCNYRate.isValid(manualUSDToCNY) {
+            return money.amount * manualUSDToCNY
+        }
         guard !rate.isExpired(at: now), rate.nativeCurrency == money.currency else { return nil }
 
         switch (money.currency, target) {
         case (.usd, .cny):
-            guard let multiplier = rate.conversionToCNY, multiplier > 0 else { return nil }
+            guard let multiplier = rate.conversionToCNY, USDToCNYRate.isValid(multiplier) else { return nil }
             return money.amount * multiplier
         case (.cny, .usd):
             return nil

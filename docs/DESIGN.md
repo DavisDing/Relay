@@ -143,7 +143,7 @@ Pipio-User: <positive integer>
 amount = quota / quota_per_unit
 ```
 
-`quota_per_unit` 来自站点状态；缺失或非法时标记金额不可换算，而不是静默使用错误值。可配置的兜底值只用于明确为兼容 New API 的站点，并在 UI 标出来源。
+`quota_per_unit` 来自站点状态；缺失或非法时标记金额不可换算，而不是静默使用错误值。Pipio 不提供手动额度除数或猜测兜底值。
 
 #### DeepSeekAdapter
 
@@ -197,7 +197,7 @@ amount = quota / quota_per_unit
 - 读取 Pipio 站点发布的 `quota_per_unit`、币种和相关换算元数据。
 - 刷新频率可配置：每天、每 7 天（默认）、每月、仅手动。
 - 缓存来源、获取时间和有效状态；失败时保留最后一次成功值并标记过期。
-- 仅当所有参与金额都有同源或明确可比较的未过期换算信息时才允许汇总。
+- USD→CNY 优先读取账户配置中的有效手动外汇参数，否则使用未过期站点汇率；不改写用于额度归一化的 `AccountRate`。
 
 ### 3.10 SwiftData 与账户/发布限制
 
@@ -625,3 +625,19 @@ DeepSeek 适配器只使用官方余额接口；历史/分模型账户用量在�
 ### D-011 验证边界
 
 确定性同步脚本的退出码 2 表示无 fixture 失败但缺少真实第二台 Mac；此结果是环境阻塞而非通过。当前命令行工具链的 SDK/compiler mismatch 使 `swift build` 无法完成，交付报告必须单独列出该阻塞。
+
+### 2026-09-21：菜单栏状态保留与 Pipio 看板契约修正
+
+本段替代此前通过 `/api/log/self` 分页聚合模型明细的方案。Pipio 公开数据看板当前使用 `/api/data/self?start_timestamp=…&end_timestamp=…` 的数组数据进行模型 Token 明细聚合，`/api/data/flow/self` 属于另一块流量明细，不混用。独立 `PipioDashboardParser` 负责字段解码、时间筛选、模型合并和完整性判断，适配器继续隔离可选能力失败。余额、今日/月消费已有接口保持不变。
+
+`RelayMenuBarController` 保留辅助窗口及其 SwiftUI 状态；点击外部/再次点击入口使用 `orderOut`，再次打开复用窗口，显式关闭才释放。打开详情/设置/表单前记录首页内容屏幕坐标用于定位，并按屏幕可视区域限制边界。固定宽度 70 点，无金额时缩为仅图标入口；缩窄后的双行显示及多屏定位仍需打包 GUI 实测。
+
+Pipio 换算按账户读取公开 `usd_exchange_rate`，有效正数才允许 USD→CNY 汇总。真实账户模型数、金额及系统令牌授权范围仍需有效凭据验证，合成 fixture 不作为真实对账结论。
+
+### 2026-09-21：区分额度参数与外汇参数
+
+`AccountConfiguration.manualUSDToCNY: Decimal?` 是可选非秘密元数据，旧 JSON 缺少该字段时兼容解码为 nil。`ManualExchangeRateUpdate` 区分不修改、设置和清空，避免无关账户编辑清除手动值。业务层在凭据读写/验证之前校验正数，沿用事务写入和账户 `updatedAt` 合并语义；同步安全投影显式保留该字段。
+
+`AccountRate` 始终记录站点原始参数、来源、获取/过期时间，`quota_per_unit` 只用于适配器归一化。`RelayStore` 将账户级手动 FX 字典交给 `DashboardAggregator`，只在 USD→CNY 汇总时使用，保存立即重算，不重写快照或历史。无有效手动值时才回落到未过期站点汇率；已知原生金额配合手动 FX 不继承站点 FX 过期时间。手动值不会补全未知原生金额、过期今日消费或未知额度除数。
+
+编辑页保留原表单风格，增加独立汇率区；参数只读、手动输入留空恢复自动，内容区域滚动，按钮固定。仅更新本地元数据无需系统令牌；真实站点对账仍需单独验证。

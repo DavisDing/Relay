@@ -5,10 +5,11 @@ import SwiftUI
 public struct AccountEditModalView: View {
     public let account: AccountModel
     public var onDismiss: () -> Void
-    public var onSave: (String, Decimal?, ProviderCredential?) async throws -> Void
+    public var onSave: (String, Decimal?, ProviderCredential?, ManualExchangeRateUpdate) async throws -> Void
 
     @State private var displayName: String
     @State private var threshold: String
+    @State private var manualRate: String
     @State private var replacementSecret = ""
     @State private var replacementUserID = ""
     @State private var isSaving = false
@@ -17,11 +18,12 @@ public struct AccountEditModalView: View {
     public init(
         account: AccountModel,
         onDismiss: @escaping () -> Void = {},
-        onSave: @escaping (String, Decimal?, ProviderCredential?) async throws -> Void = { _, _, _ in }
+        onSave: @escaping (String, Decimal?, ProviderCredential?, ManualExchangeRateUpdate) async throws -> Void = { _, _, _, _ in }
     ) {
         self.account = account
         self.onDismiss = onDismiss
         self.onSave = onSave
+        _manualRate = State(initialValue: account.manualUSDToCNY.map { NSDecimalNumber(decimal: $0).stringValue } ?? "")
         _displayName = State(initialValue: account.name)
         _threshold = State(initialValue: account.lowBalanceThreshold.map { NSDecimalNumber(decimal: $0).stringValue } ?? "20")
     }
@@ -35,27 +37,38 @@ public struct AccountEditModalView: View {
                     .buttonStyle(.plain)
             }
 
-            Text(account.baseURL).font(.system(size: 11)).foregroundStyle(.secondary)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text(account.baseURL).font(.system(size: 11)).foregroundStyle(.secondary)
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text("显示名称").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
-                TextField("账号名称", text: $displayName).textFieldStyle(.roundedBorder)
-            }
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("显示名称").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
+                        TextField("账号名称", text: $displayName).textFieldStyle(.roundedBorder)
+                    }
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text("低余额阈值（账户原生币种）").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
-                TextField("20", text: $threshold).textFieldStyle(.roundedBorder)
-            }
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("低余额阈值（账户原生币种）").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
+                        TextField("20", text: $threshold).textFieldStyle(.roundedBorder)
+                    }
 
-            Divider()
-            Text("替换凭据（可选，留空保持不变）")
-                .font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
-            SecureField(account.kind == .pipio ? "新的管理令牌" : "新的 API Key", text: $replacementSecret)
-                .textFieldStyle(.roundedBorder)
-            if account.kind == .pipio {
-                TextField("新的 Pipio-User 数值 ID", text: $replacementUserID)
-                    .textFieldStyle(.roundedBorder)
+                    if account.kind == .pipio || account.currency == .usd {
+                        Divider()
+                        exchangeRateFields
+                    }
+
+                    Divider()
+                    Text("替换凭据（可选，留空保持不变）")
+                        .font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
+                    SecureField(account.kind == .pipio ? "新的管理令牌" : "新的 API Key", text: $replacementSecret)
+                        .textFieldStyle(.roundedBorder)
+                    if account.kind == .pipio {
+                        TextField("新的 Pipio-User 数值 ID", text: $replacementUserID)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                }
+                .padding(2)
             }
+            .disabled(isSaving)
 
             if let errorMessage {
                 Text(errorMessage).font(.system(size: 11)).foregroundStyle(.red)
@@ -75,6 +88,38 @@ public struct AccountEditModalView: View {
         }
         .padding(20)
         .frame(width: 400)
+        .frame(maxHeight: .infinity)
+    }
+
+    private var exchangeRateFields: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if account.kind == .pipio {
+                Text("额度换算参数（站点提供，只读）")
+                    .font(.system(size: 12, weight: .semibold))
+                Text("quota_per_unit：\(number(account.quotaPerUnit))")
+                    .font(.system(size: 12, design: .monospaced))
+                Text("原生金额 = 额度 ÷ quota_per_unit；此参数不是美元/人民币汇率。")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+            }
+            Text("美元 / 人民币汇率")
+                .font(.system(size: 12, weight: .semibold))
+            Text("站点汇率：\(number(account.siteUSDToCNY))\(account.siteRateIsExpired ? "（已过期）" : "")")
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+            HStack {
+                Text("1 USD =")
+                TextField("自动（可手动填写）", text: $manualRate)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("手动美元人民币汇率")
+                Text("CNY")
+            }
+            .font(.system(size: 12))
+            Text("手动值优先，自动刷新不会覆盖；留空恢复站点汇率。站点未提供且未填写时，不进行人民币换算。")
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+        }
+    }
+
+    private func number(_ value: Decimal?) -> String {
+        value.map { NSDecimalNumber(decimal: $0).stringValue } ?? "未获取"
     }
 
     private func save() {
@@ -82,6 +127,15 @@ public struct AccountEditModalView: View {
         guard !name.isEmpty else { errorMessage = "显示名称不能为空。"; return }
         let parsedThreshold = Decimal(string: threshold.trimmingCharacters(in: .whitespacesAndNewlines), locale: Locale(identifier: "en_US_POSIX"))
         guard parsedThreshold != nil else { errorMessage = "低余额阈值必须是数字。"; return }
+
+        let rateUpdate: ManualExchangeRateUpdate
+        do {
+            rateUpdate = account.kind == .pipio || account.currency == .usd
+                ? .set(try USDToCNYRate.parseOverride(manualRate)) : .unchanged
+        } catch {
+            errorMessage = error.localizedDescription
+            return
+        }
 
         let secret = replacementSecret.trimmingCharacters(in: .whitespacesAndNewlines)
         let userID = replacementUserID.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -96,7 +150,7 @@ public struct AccountEditModalView: View {
         errorMessage = nil
         Task { @MainActor in
             do {
-                try await onSave(name, parsedThreshold, credential)
+                try await onSave(name, parsedThreshold, credential, rateUpdate)
                 isSaving = false
                 onDismiss()
             } catch {

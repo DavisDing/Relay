@@ -203,9 +203,9 @@ public struct AccountDetailView: View {
                             .foregroundStyle(.secondary)
                             .frame(width: 58, alignment: .trailing)
                         VStack(alignment: .trailing, spacing: 1) {
-                            Text(RelayNumberFormatter.money(item.cost, currency: item.currency))
+                            Text(item.cost.map { RelayNumberFormatter.money($0, currency: item.currency) } ?? "--")
                                 .font(.system(size: 11, weight: .semibold))
-                            Text(String(format: "%.0f%%", item.percentage * 100))
+                            Text(item.percentage.map { String(format: "%.0f%%", $0 * 100) } ?? "--")
                                 .font(.system(size: 9))
                                 .foregroundStyle(.secondary)
                         }
@@ -244,7 +244,11 @@ public struct AccountDetailView: View {
 
     private var lastUpdatedText: String {
         guard let updated = account.lastUpdated else { return "尚未获得账户快照" }
-        return "数据更新：\(updated.formatted(date: .abbreviated, time: .shortened))"
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.dateFormat = "MM/dd HH:mm"
+        return "数据更新：\(formatter.string(from: updated))"
     }
 
     private var statusColor: Color {

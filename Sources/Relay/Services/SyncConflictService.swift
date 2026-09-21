@@ -390,6 +390,7 @@ public enum RelaySyncDataSafety {
                 credentialReference: nil,
                 isEnabled: account.isEnabled,
                 lowBalanceThreshold: account.lowBalanceThreshold,
+                manualUSDToCNY: account.manualUSDToCNY,
                 sortOrder: account.sortOrder,
                 createdAt: account.createdAt,
                 updatedAt: account.updatedAt

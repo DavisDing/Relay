@@ -156,3 +156,20 @@ SwiftData 是 Apple 系统框架，不单独收费，也没有固定独立包体
 - 同步目录缺失时状态显示为 `unavailable`，本机数据仍可读取和刷新；同步异常状态不会阻断本机业务路径。同步 payload 继续通过安全投影排除凭据。
 - `scripts/verify-icloud-sync.sh --mode deterministic` 的 SYNC-001 至 SYNC-004 已通过；SYNC-005 因没有第二台真实 Mac 标记 `blocked`，不能以 fixture 结果替代实机验证。
 - 当前 `swiftc -parse-as-library -typecheck` 全量类型检查通过，仅有既有 SwiftUI 本地化插值弃用警告。`scripts/test-regressions.sh`、三组独立 contract tests 均通过。`swift build` 仍受本机 Swift 编译器与 macOS SDK 版本不匹配阻塞，不能视为构建通过。
+
+## 15. 2026-09-21 Data and panel corrections
+
+- Pipio 分模型数据改用数据看板“模型 Token 明细”同源的 `GET /api/data/self`，按查询时间范围合并各模型时间桶；不再用最多 10 页请求日志推算看板总量。`token_used` 为总 Token；消费为 `quota / quota_per_unit`。免费模型、消费缺失但存在用量的模型不因金额为零/未知而从 UI 删除。
+- 缓存读取占比使用 `cache_read_tokens / cache_eligible_input_tokens`；仅当 Token 跟踪覆盖完整，且 `token_breakdown_count`、`token_breakdown_request_count`、`cache_metrics_request_count` 匹配时展示。缺失/部分覆盖保持未知，不能用 prompt token 或单条请求比率替代。公开前端契约与合成 fixture 已核对，不代表真实账户已对账。
+- Pipio `/api/status` 的正值 `usd_exchange_rate` 用于该账户 USD→CNY 汇总；不硬编码汇率。旧快照 USD 汇率缺少该字段时在下次刷新重取，不等待每周过期。获取失败不伪造转换值。
+- 菜单栏点击外部只隐藏当前页面；重新点开恢复同一个表单/详情窗口。草稿仅驻留内存，明确取消、保存、关闭或退出后不保留。辅助窗口跟随首页内容位置并限制在对应屏幕内，不再居中。
+- 固定菜单栏宽度由 140 缩至 70 点；可用金额分两行显示。无可用汇总时只保留入口图标，不显示 `--` 或预留金额宽度。账户详情更新时间使用本地时区 `MM/dd HH:mm`。
+- `scripts/test-regressions.sh` 包含 Pipio 看板合成契约测试（端点、五模型、多桶合并、Token、缓存覆盖、免费/未知模型、汇率和旧缓存重取）；不请求真实账户。
+
+- 本机使用第 9 节的 MacOSX26.5 SDK 与临时构建目录可完成 `swift build`（需要允许 SwiftPM manifest 的 sandbox-exec）；MacOSX27 SDK 的既往不匹配不能再概括为所有本机构建均失败。项目部署目标仍为 macOS 27，未降级。
+
+### 账户外汇参数（2026-09-21）
+
+- `quota_per_unit` 是额度到原生金额的除数，只信任站点返回值，不允许手动覆盖/默认猜值。`usd_exchange_rate` 是 USD→CNY 乘数，两者不可混用。
+- `AccountConfiguration.manualUSDToCNY` 为可选正数，编辑账户页可设置/清空；手动值优先，清空使用未过期站点值。手动值随非秘密账户配置持久化和同步，自动刷新不会覆盖。
+- `DashboardAggregator` 按账户应用手动 FX，保存配置可离线即时刷新首页/菜单栏合计，不修改原生快照、历史或模型金额。旧账户 JSON 自动兼容；无参数仍不伪造金额。
