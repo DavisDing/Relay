@@ -5,22 +5,30 @@ import SwiftUI
 public struct MainPopoverView: View {
     @ObservedObject private var store: RelayStore
     @AppStorage("appearanceMode") private var appearanceMode: AppearanceMode = .followSystem
-    @State private var showAddModal = false
-    @State private var showSettings = false
-    @State private var selectedDetailAccount: AccountModel?
-    @State private var selectedEditAccount: AccountModel?
     @State private var accountPendingDeletion: AccountModel?
     private let initialGlobalShortcutConfiguration: GlobalShortcutConfiguration
     private let onApplyGlobalShortcut: ((GlobalShortcutConfiguration) -> GlobalShortcutRegistrationOutcome)?
+    private let onPresentAddAccount: () -> Void
+    private let onPresentSettings: () -> Void
+    private let onPresentDetail: (AccountModel, [DailySpendPoint], [ModelUsageItem]) -> Void
+    private let onPresentEdit: (AccountModel) -> Void
 
     public init(
         store: RelayStore,
         initialGlobalShortcutConfiguration: GlobalShortcutConfiguration = GlobalShortcutConfigurationStore.load(),
-        onApplyGlobalShortcut: ((GlobalShortcutConfiguration) -> GlobalShortcutRegistrationOutcome)? = nil
+        onApplyGlobalShortcut: ((GlobalShortcutConfiguration) -> GlobalShortcutRegistrationOutcome)? = nil,
+        onPresentAddAccount: @escaping () -> Void = {},
+        onPresentSettings: @escaping () -> Void = {},
+        onPresentDetail: @escaping (AccountModel, [DailySpendPoint], [ModelUsageItem]) -> Void = { _, _, _ in },
+        onPresentEdit: @escaping (AccountModel) -> Void = { _ in }
     ) {
         self.store = store
         self.initialGlobalShortcutConfiguration = initialGlobalShortcutConfiguration
         self.onApplyGlobalShortcut = onApplyGlobalShortcut
+        self.onPresentAddAccount = onPresentAddAccount
+        self.onPresentSettings = onPresentSettings
+        self.onPresentDetail = onPresentDetail
+        self.onPresentEdit = onPresentEdit
     }
 
     private var totalBalance: Decimal? { store.balanceTotalCNY.value?.amount }
@@ -62,51 +70,6 @@ public struct MainPopoverView: View {
         .frame(width: 400, height: 520)
         .background(.regularMaterial)
         .preferredColorScheme(preferredColorScheme)
-        .sheet(isPresented: $showAddModal) {
-            AccountAddModalView(
-                onDismiss: { showAddModal = false },
-                onSave: { draft in try await store.addAccount(draft) },
-                onProbe: { draft in try await store.probe(draft) }
-            )
-            .preferredColorScheme(preferredColorScheme)
-        }
-        .sheet(isPresented: $showSettings) {
-            SettingsWindowView(
-                initialSettings: store.settings,
-                initialGlobalShortcutConfiguration: initialGlobalShortcutConfiguration,
-                onApplyGlobalShortcut: onApplyGlobalShortcut,
-                syncStatus: store.syncStatus,
-                syncConflictReport: store.syncConflictReport,
-                onResolveSyncConflict: { decision in store.resolveSyncConflict(decision) },
-                onClose: { showSettings = false },
-                onSave: { store.updateSettings($0) }
-            )
-        }
-        .sheet(item: $selectedDetailAccount) { account in
-            AccountDetailView(
-                account: UUID(uuidString: account.id).flatMap { store.accountModel(id: $0) } ?? account,
-                spendPoints: spendPoints(for: account),
-                modelUsages: modelUsages(for: account),
-                onClose: { selectedDetailAccount = nil }
-            )
-            .preferredColorScheme(preferredColorScheme)
-        }
-        .sheet(item: $selectedEditAccount) { account in
-            AccountEditModalView(
-                account: account,
-                onDismiss: { selectedEditAccount = nil },
-                onSave: { name, threshold, credential in
-                    guard let id = UUID(uuidString: account.id) else { return }
-                    try await store.updateAccount(
-                        accountID: id,
-                        displayName: name,
-                        lowBalanceThreshold: threshold,
-                        replacementCredential: credential
-                    )
-                }
-            )
-            .preferredColorScheme(preferredColorScheme)
-        }
         .alert("确认删除账号？", isPresented: Binding(
             get: { accountPendingDeletion != nil },
             set: { if !$0 { accountPendingDeletion = nil } }
@@ -128,7 +91,7 @@ public struct MainPopoverView: View {
             Text("Relay 额度监控")
                 .font(.system(size: 16, weight: .bold))
                 .contextMenu {
-                    Button { showSettings = true } label: {
+                    Button(action: onPresentSettings) {
                         Label("设置…", systemImage: "gearshape")
                     }
                     Divider()
@@ -229,12 +192,12 @@ public struct MainPopoverView: View {
                 .font(.system(size: 10))
                 .foregroundStyle(.secondary)
             Spacer(minLength: 4)
-            Button { showAddModal = true } label: {
+            Button(action: onPresentAddAccount) {
                 Label("添加", systemImage: "plus")
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            Button { showSettings = true } label: {
+            Button(action: onPresentSettings) {
                 Label("设置", systemImage: "gearshape")
             }
             .buttonStyle(.bordered)
@@ -307,7 +270,7 @@ public struct MainPopoverView: View {
     private func accountRow(_ account: AccountModel) -> some View {
         HStack(spacing: 5) {
             Button {
-                selectedDetailAccount = account
+                onPresentDetail(account, spendPoints(for: account), modelUsages(for: account))
             } label: {
                 HStack(spacing: 9) {
                     Circle()
@@ -355,8 +318,8 @@ public struct MainPopoverView: View {
             .accessibilityLabel("查看 \(account.name) 的详情与走势")
 
             Menu {
-                Button("查看详情与走势折线图") { selectedDetailAccount = account }
-                Button("编辑账号") { selectedEditAccount = account }
+                Button("查看详情与走势折线图") { onPresentDetail(account, spendPoints(for: account), modelUsages(for: account)) }
+                Button("编辑账号") { onPresentEdit(account) }
                 Button("立即手动同步") {
                     guard let id = UUID(uuidString: account.id) else { return }
                     Task { await store.refresh(accountID: id, forceRateRefresh: true) }
@@ -403,7 +366,7 @@ public struct MainPopoverView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .lineSpacing(3)
-            Button { showAddModal = true } label: {
+            Button(action: onPresentAddAccount) {
                 Label("添加首个账号", systemImage: "plus")
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)

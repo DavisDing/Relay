@@ -117,6 +117,11 @@ public struct SettingsWindowView: View {
                             }
                         }
                         .toggleStyle(.checkbox)
+
+                        Text("如果使用 Hidden Bar，请将 Relay 拖到右侧常驻区；Relay 会保持稳定的菜单栏身份，但第三方菜单栏工具仍可能按自己的分隔位置隐藏图标。")
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                         
                         Toggle(isOn: $showTodayInMenuBar) {
                             VStack(alignment: .leading, spacing: 2) {

@@ -15,10 +15,12 @@
 
 `.github/workflows/build.yml` 在以下场景运行：
 
-- `main` 分支 push：构建并上传 macOS Apple Silicon zip artifact。
+- `main` 分支 push：构建并上传 macOS Apple Silicon zip artifact，构建成功后自动创建 `v0.1.<提交数>` 标签并发布 GitHub Release。
 - Pull Request：构建验证，不发布 Release。
-- 推送 `vX.Y.Z` 标签：构建并发布 GitHub Release，附带带版本号的 zip 包和构建元数据文件。
-- 手动运行：执行一次构建验证。
+- 推送 `vX.Y.Z` 标签：构建并发布对应 GitHub Release，附带带版本号的 zip 包和构建元数据文件。
+- 手动运行：执行一次构建验证，不发布 Release。
+
+如果同一个版本的 Release 已存在，发布 job 会幂等退出，不会覆盖已有附件。需要重发时应增加提交或推送新的显式版本标签。
 
 构建产物是 ad-hoc 签名的 `Relay.app` zip 包。当前设计没有 Developer ID 证书或公证流程；这与项目的 GitHub Releases 首期发布决策一致。用户首次打开时可能需要在 macOS 的“隐私与安全性”中手动允许。
 
