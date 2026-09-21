@@ -1,9 +1,10 @@
-import SwiftUI
 import AppKit
+import SwiftUI
 
 /// 主弹出面板：只展示 RelayStore 的真实本地缓存和刷新结果。
 public struct MainPopoverView: View {
     @ObservedObject private var store: RelayStore
+    @AppStorage("appearanceMode") private var appearanceMode: AppearanceMode = .followSystem
     @State private var showAddModal = false
     @State private var showSettings = false
     @State private var selectedDetailAccount: AccountModel?
@@ -22,11 +23,15 @@ public struct MainPopoverView: View {
         self.onApplyGlobalShortcut = onApplyGlobalShortcut
     }
 
-    private var totalBalanceCNY: Decimal? { store.balanceTotalCNY.value?.amount }
-    private var totalTodaySpendCNY: Decimal? {
+    private var totalBalance: Decimal? { store.balanceTotalCNY.value?.amount }
+
+    private var totalTodaySpend: Decimal? {
         guard store.todaySpendTotalCNY.isComplete else { return nil }
         return store.todaySpendTotalCNY.value?.amount
     }
+
+    private var enabledAccountCount: Int { store.accounts.filter(\.isEnabled).count }
+
     private var hasAnyError: Bool {
         store.accounts.contains { account in
             if case .error = account.status { return true }
@@ -34,121 +39,36 @@ public struct MainPopoverView: View {
         }
     }
 
+    private var preferredColorScheme: ColorScheme? {
+        switch appearanceMode {
+        case .followSystem: return nil
+        case .light: return .light
+        case .dark: return .dark
+        }
+    }
+
     public var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text("Relay 额度监控")
-                    .font(.system(size: 16, weight: .bold))
-                    .contextMenu {
-                        Button { showSettings = true } label: {
-                            Label("设置…", systemImage: "gearshape")
-                        }
-
-                        Divider()
-
-                        Button(role: .destructive) {
-                            NSApplication.shared.terminate(nil)
-                        } label: {
-                            Label("退出 Relay", systemImage: "power")
-                        }
-                    }
-                Spacer()
-                if store.isRefreshing {
-                    ProgressView().controlSize(.small)
-                }
-                Button { Task { await store.refreshAll(forceRateRefresh: true) } } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .buttonStyle(.plain)
-                .help("立即同步并刷新账户级汇率")
-            }
-            .padding(.horizontal, 16)
-            .padding(.top, 14)
-            .padding(.bottom, 10)
-
-            Divider().opacity(0.3)
-
-            if let error = store.globalErrorMessage ?? store.syncErrorMessage {
-                Text(error)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.red)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-            }
+            header
 
             if store.accounts.isEmpty {
                 emptyStateView
             } else {
-                ScrollView(.vertical, showsIndicators: false) {
-                    VStack(spacing: 12) {
-                        if hasAnyError {
-                            HStack(spacing: 8) {
-                                Image(systemName: "exclamationmark.triangle.fill")
-                                    .foregroundStyle(.red)
-                                Text("部分账号同步失败，已保留上次成功数据；未知金额不会显示为 0")
-                                    .font(.system(size: 11, weight: .medium))
-                                    .foregroundStyle(.red)
-                                Spacer()
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(.red.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
-                        }
-
-                        HStack(spacing: 10) {
-                            summaryCard(
-                                title: "总可用折算余额",
-                                value: totalBalanceCNY.map { "\(store.settings.baseCurrency.symbol)\($0)" } ?? "--",
-                                subtitle: store.balanceTotalCNY.isComplete ? "\(store.accounts.filter(\.isEnabled).count) 个账号已纳入" : "部分账户缺少可靠数据或汇率"
-                            )
-                            if let todaySpend = totalTodaySpendCNY {
-                                summaryCard(
-                                    title: "今日总消耗 (已完整)",
-                                    value: "\(store.settings.baseCurrency.symbol)\(todaySpend)",
-                                    subtitle: "按账户独立汇率折算"
-                                )
-                            }
-                        }
-
-                        ForEach(store.accounts) { account in
-                            accountRow(account)
-                        }
-                    }
-                    .padding(12)
-                }
+                dashboard
             }
 
-            Divider().opacity(0.3)
-            HStack {
-                Text(lastSyncText)
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button { showAddModal = true } label: {
-                    Label("添加账号", systemImage: "plus")
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-                Button { showSettings = true } label: {
-                    Image(systemName: "gearshape")
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
+            footer
         }
-        .frame(width: 430, height: 560)
+        .frame(width: 400, height: 520)
+        .background(.regularMaterial)
+        .preferredColorScheme(preferredColorScheme)
         .sheet(isPresented: $showAddModal) {
             AccountAddModalView(
                 onDismiss: { showAddModal = false },
-                onSave: { draft in
-                    try await store.addAccount(draft)
-                },
-                onProbe: { draft in
-                    try await store.probe(draft)
-                }
+                onSave: { draft in try await store.addAccount(draft) },
+                onProbe: { draft in try await store.probe(draft) }
             )
+            .preferredColorScheme(preferredColorScheme)
         }
         .sheet(isPresented: $showSettings) {
             SettingsWindowView(
@@ -169,6 +89,7 @@ public struct MainPopoverView: View {
                 modelUsages: modelUsages(for: account),
                 onClose: { selectedDetailAccount = nil }
             )
+            .preferredColorScheme(preferredColorScheme)
         }
         .sheet(item: $selectedEditAccount) { account in
             AccountEditModalView(
@@ -184,6 +105,7 @@ public struct MainPopoverView: View {
                     )
                 }
             )
+            .preferredColorScheme(preferredColorScheme)
         }
         .alert("确认删除账号？", isPresented: Binding(
             get: { accountPendingDeletion != nil },
@@ -201,9 +123,130 @@ public struct MainPopoverView: View {
         }
     }
 
+    private var header: some View {
+        HStack(spacing: 8) {
+            Text("Relay 额度监控")
+                .font(.system(size: 16, weight: .bold))
+                .contextMenu {
+                    Button { showSettings = true } label: {
+                        Label("设置…", systemImage: "gearshape")
+                    }
+                    Divider()
+                    Button(role: .destructive) {
+                        NSApplication.shared.terminate(nil)
+                    } label: {
+                        Label("退出 Relay", systemImage: "power")
+                    }
+                }
+
+            Spacer(minLength: 8)
+
+            Text("基准: \(store.settings.baseCurrency.rawValue) ¥")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.blue)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(.blue.opacity(0.09), in: Capsule())
+                .overlay(Capsule().stroke(.blue.opacity(0.6), lineWidth: 1))
+
+            Button {
+                Task { await store.refreshAll(forceRateRefresh: true) }
+            } label: {
+                Group {
+                    if store.isRefreshing {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                }
+                .frame(width: 18, height: 18)
+            }
+            .buttonStyle(.plain)
+            .help("立即同步并刷新账户级汇率")
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 17)
+        .padding(.bottom, 12)
+    }
+
+    private var dashboard: some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 10) {
+                if let error = store.globalErrorMessage ?? store.syncErrorMessage {
+                    Label(error, systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.red)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 7)
+                        .background(.red.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+                } else if hasAnyError {
+                    Label("部分账号同步失败，已保留上次成功数据", systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.orange)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 7)
+                        .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+                }
+
+                HStack(spacing: 8) {
+                    summaryCard(
+                        title: "总可用折算余额",
+                        value: totalBalance.map { RelayNumberFormatter.money($0, currency: store.settings.baseCurrency) } ?? "--",
+                        subtitle: store.balanceTotalCNY.isComplete ? "\(enabledAccountCount) 个账号运行正常" : "部分账号缺少可靠数据或汇率",
+                        accent: .primary
+                    )
+                    summaryCard(
+                        title: "今日总消耗",
+                        value: totalTodaySpend.map { RelayNumberFormatter.money($0, currency: store.settings.baseCurrency) } ?? "--",
+                        subtitle: totalTodaySpend == nil ? "数据不完整，已不参与统计" : "全量统计（已完整）",
+                        accent: totalTodaySpend == nil ? .primary : .orange
+                    )
+                }
+
+                HStack {
+                    Text("已连接账号 (\(store.accounts.count))")
+                        .font(.system(size: 13, weight: .semibold))
+                    Spacer()
+                }
+                .padding(.top, 4)
+
+                LazyVStack(spacing: 7) {
+                    ForEach(store.accounts) { account in
+                        accountRow(account)
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 9)
+        }
+    }
+
+    private var footer: some View {
+        HStack(spacing: 8) {
+            Text(lastSyncText)
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 4)
+            Button { showAddModal = true } label: {
+                Label("添加", systemImage: "plus")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            Button { showSettings = true } label: {
+                Label("设置", systemImage: "gearshape")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+    }
+
     private func spendPoints(for account: AccountModel) -> [DailySpendPoint] {
         guard let id = UUID(uuidString: account.id) else { return [] }
-        return store.dailyUsage(accountID: id, limit: 30).compactMap { record in
+        return store.dailyUsage(accountID: id, limit: 7).compactMap { record in
             guard let spend = record.spend else { return nil }
             return DailySpendPoint(
                 dateString: record.day.formatted(.dateTime.month(.twoDigits).day(.twoDigits)),
@@ -223,70 +266,93 @@ public struct MainPopoverView: View {
         let total = priced.reduce(Decimal.zero) { $0 + $1.1 }
         guard total > 0 else { return [] }
         return priced.map { summary, cost in
-            let tokenText = summary.tokenCount.map { $0.formatted() } ?? "--"
-            return ModelUsageItem(
+            ModelUsageItem(
                 id: summary.id,
                 modelName: summary.modelName,
-                tokens: tokenText,
+                tokens: summary.tokenCount.map { $0.formatted() } ?? "--",
                 cost: cost,
                 currency: account.currency,
-                percentage: NSDecimalNumber(decimal: cost / total).doubleValue
+                percentage: NSDecimalNumber(decimal: cost / total).doubleValue,
+                cacheHitRate: summary.cacheHitRate
             )
         }
     }
 
     private var lastSyncText: String {
-        guard let lastSyncedAt = store.lastSyncedAt else { return "尚未同步" }
+        guard let lastSyncedAt = store.lastSyncedAt else { return "上次同步：尚未同步" }
         return "上次同步：\(lastSyncedAt.formatted(date: .omitted, time: .shortened))"
     }
 
-    private func summaryCard(title: String, value: String, subtitle: String) -> some View {
+    private func summaryCard(title: String, value: String, subtitle: String, accent: Color) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.system(size: 11)).foregroundStyle(.secondary)
-            Text(value)
-                .font(.system(size: 20, weight: .bold))
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-            Text(subtitle)
+            Text(title)
                 .font(.system(size: 10))
                 .foregroundStyle(.secondary)
+            Text(value)
+                .font(.system(size: 20, weight: .bold))
+                .foregroundStyle(accent)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+            Text(subtitle)
+                .font(.system(size: 9))
+                .foregroundStyle(subtitle.contains("运行正常") ? .green : .secondary)
+                .lineLimit(1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
+        .padding(11)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(.separator.opacity(0.4), lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(.separator.opacity(0.45), lineWidth: 1))
     }
 
     private func accountRow(_ account: AccountModel) -> some View {
-        HStack(spacing: 10) {
-            Circle()
-                .fill(statusColor(for: account.status))
-                .frame(width: 8, height: 8)
+        HStack(spacing: 5) {
+            Button {
+                selectedDetailAccount = account
+            } label: {
+                HStack(spacing: 9) {
+                    Circle()
+                        .fill(statusColor(for: account.status))
+                        .frame(width: 8, height: 8)
 
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(account.name).font(.system(size: 12, weight: .semibold))
-                    Text(account.kind.rawValue)
-                        .font(.system(size: 9))
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 1)
-                        .background(.secondary.opacity(0.15), in: RoundedRectangle(cornerRadius: 3))
-                }
-                Text(statusText(account))
-                    .font(.system(size: 10))
-                    .foregroundStyle(statusColor(for: account.status))
-            }
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(account.name)
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        HStack(spacing: 5) {
+                            Text(account.kind.rawValue)
+                                .font(.system(size: 9))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(.secondary.opacity(0.14), in: RoundedRectangle(cornerRadius: 4))
+                            if let message = statusMessage(for: account.status) {
+                                Text(message)
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(statusColor(for: account.status))
+                                    .lineLimit(1)
+                            }
+                        }
+                    }
 
-            Spacer()
-            VStack(alignment: .trailing, spacing: 2) {
-                Text(account.balance.map { "\(account.currency.symbol)\($0)" } ?? "--")
-                    .font(.system(size: 13, weight: .bold))
-                if let todaySpend = account.todaySpend {
-                    Text("今日 \(account.currency.symbol)\(todaySpend)")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 8)
+
+                    VStack(alignment: .trailing, spacing: 4) {
+                        Text(account.balance.map { RelayNumberFormatter.money($0, currency: account.currency) } ?? "--")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        if let todaySpend = account.todaySpend {
+                            Text("今日 \(RelayNumberFormatter.money(todaySpend, currency: account.currency))")
+                                .font(.system(size: 9))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel("查看 \(account.name) 的详情与走势")
 
             Menu {
                 Button("查看详情与走势折线图") { selectedDetailAccount = account }
@@ -306,24 +372,28 @@ public struct MainPopoverView: View {
                 }
             } label: {
                 Image(systemName: "ellipsis")
-                    .font(.system(size: 12))
+                    .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.secondary)
-                    .frame(width: 18, height: 18)
+                    .frame(width: 24, height: 32)
+                    .contentShape(Rectangle())
             }
             .menuStyle(.borderlessButton)
+            .help("账号操作")
         }
-        .padding(10)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(statusColor(for: account.status).opacity(0.35), lineWidth: 1))
+        .padding(.leading, 10)
+        .padding(.trailing, 5)
+        .padding(.vertical, 9)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 11))
+        .overlay(RoundedRectangle(cornerRadius: 11).stroke(.separator.opacity(0.48), lineWidth: 1))
     }
 
     private var emptyStateView: some View {
         VStack(spacing: 12) {
             Spacer()
             ZStack {
-                Circle().fill(Color.accentColor.opacity(0.12)).frame(width: 60, height: 60)
+                Circle().fill(Color.accentColor.opacity(0.12)).frame(width: 58, height: 58)
                 Image(systemName: "bolt.badge.clock.fill")
-                    .font(.system(size: 26))
+                    .font(.system(size: 25))
                     .foregroundStyle(Color.accentColor)
             }
             Text("尚未接入任何 AI 额度账号")
@@ -344,11 +414,11 @@ public struct MainPopoverView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func statusText(_ account: AccountModel) -> String {
-        switch account.status {
-        case .ok: return account.baseURL
-        case .warning(let message), .error(let message): return "⚠️ \(message)"
-        case .retrying(let seconds): return "⚠️ 网络超时，\(seconds)s 后自动重试"
+    private func statusMessage(for status: AccountStatus) -> String? {
+        switch status {
+        case .ok: return nil
+        case .warning(let message), .error(let message): return message
+        case .retrying(let seconds): return "\(seconds)s 后重试"
         }
     }
 

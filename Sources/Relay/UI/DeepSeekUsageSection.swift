@@ -39,7 +39,7 @@ public struct DeepSeekUsageSection: View {
                     metricText(model.tokenCount.map(String.init), label: "tokens")
                     metricText(model.requestCount.map(String.init), label: "requests")
                     if let spend = model.spend {
-                        Text(spend.currency.symbol + spend.amount.description)
+                        Text(RelayNumberFormatter.money(spend.amount, currency: spend.currency))
                             .font(.system(size: 11, weight: .semibold))
                     }
                 }
@@ -54,7 +54,7 @@ public struct DeepSeekUsageSection: View {
                     metricText(day.tokenCount.map(String.init), label: "tokens")
                     metricText(day.requestCount.map(String.init), label: "requests")
                     if let spend = day.spend {
-                        Text(spend.currency.symbol + spend.amount.description)
+                        Text(RelayNumberFormatter.money(spend.amount, currency: spend.currency))
                             .font(.system(size: 11, weight: .semibold))
                     }
                 }

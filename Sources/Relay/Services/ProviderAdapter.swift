@@ -52,6 +52,31 @@ public protocol ProviderAdapter: Sendable {
         now: Date,
         calendar: Calendar
     ) async throws -> ProviderSnapshot
+
+    /// Returns historical daily spend only when the provider has a documented
+    /// endpoint for it. An empty result means unsupported or unavailable, never
+    /// a fabricated zero-spend history.
+    func fetchDailyUsage(
+        for account: AccountConfiguration,
+        credential: ProviderCredential,
+        rate: AccountRate,
+        endingAt: Date,
+        days: Int,
+        calendar: Calendar
+    ) async throws -> [DailyUsageRecord]
+}
+
+public extension ProviderAdapter {
+    func fetchDailyUsage(
+        for account: AccountConfiguration,
+        credential: ProviderCredential,
+        rate: AccountRate,
+        endingAt: Date,
+        days: Int,
+        calendar: Calendar
+    ) async throws -> [DailyUsageRecord] {
+        []
+    }
 }
 
 public struct ProviderAdapterRegistry: Sendable {

@@ -107,6 +107,10 @@ public final class RefreshCoordinator {
         try repository.upsertSnapshot(snapshot)
         let day = calendar.startOfDay(for: snapshot.fetchedAt)
         try repository.upsertDailyUsage(DailyUsageRecord(accountID: account.id, day: day, spend: snapshot.todaySpend, updatedAt: snapshot.fetchedAt))
+
+        // The seven-day backfill is intentionally performed only during initial
+        // account setup. Regular refreshes query and persist the current day so
+        // they do not repeatedly request the same historical provider ranges.
         return snapshot
     }
 

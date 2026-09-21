@@ -98,6 +98,7 @@ public final class RelayStore: ObservableObject {
         globalErrorMessage = nil
         let account = try await accountService.addAccount(draft)
         accountErrors.removeValue(forKey: account.id.uuidString)
+        lastSyncedAt = Date()
         reloadFromRepository()
     }
 

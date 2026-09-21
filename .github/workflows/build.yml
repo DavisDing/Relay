@@ -26,7 +26,7 @@ jobs:
       version: ${{ steps.version.outputs.marketing_version }}
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -45,7 +45,7 @@ jobs:
         run: scripts/package-app.sh "$GITHUB_WORKSPACE/.build/package"
 
       - name: Upload package artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: Relay-${{ steps.version.outputs.marketing_version }}-macos-arm64
           path: |
@@ -63,7 +63,7 @@ jobs:
       contents: write
     steps:
       - name: Download package artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: Relay-${{ needs.build.outputs.version }}-macos-arm64
           path: .build/package

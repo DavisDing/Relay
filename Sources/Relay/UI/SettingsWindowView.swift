@@ -59,6 +59,14 @@ public struct SettingsWindowView: View {
         _launchAtLoginEnabled = State(initialValue: LaunchAtLoginService.isEnabled)
     }
     
+    private var preferredColorScheme: ColorScheme? {
+        switch appearanceMode {
+        case .followSystem: return nil
+        case .light: return .light
+        case .dark: return .dark
+        }
+    }
+
     public var body: some View {
         VStack(spacing: 16) {
             // 标题
@@ -340,7 +348,9 @@ public struct SettingsWindowView: View {
             .padding(.horizontal, 20)
             .padding(.bottom, 16)
         }
-        .frame(minWidth: 460, minHeight: 460)
+        .frame(width: 400, height: 520)
+        .background(.regularMaterial)
+        .preferredColorScheme(preferredColorScheme)
         .onDisappear {
             let parsedThreshold = Decimal(string: lowBalanceThreshold, locale: Locale(identifier: "en_US_POSIX")) ?? 20
             onSave(RelaySettings(

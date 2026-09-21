@@ -21,7 +21,7 @@ public struct AdaptiveLineChart: View {
                     Text("\(selected.dateString):")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundColor(.secondary)
-                    Text("\(unit)\(selected.amount)")
+                    Text("\(unit)\(RelayNumberFormatter.decimal(selected.amount))")
                         .font(.system(size: 11, weight: .bold))
                         .foregroundColor(.accentColor)
                 }
@@ -64,7 +64,7 @@ public struct AdaptiveLineChart: View {
                     .foregroundStyle(Color.accentColor)
                     .symbolSize(32)
                     .annotation(position: .top, spacing: 4) {
-                        Text("\(unit)\(pt.amount)")
+                        Text("\(unit)\(RelayNumberFormatter.decimal(pt.amount))")
                             .font(.system(size: 9, weight: .semibold))
                             .foregroundColor(.secondary)
                     }

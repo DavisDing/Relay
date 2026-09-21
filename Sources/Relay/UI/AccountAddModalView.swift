@@ -132,7 +132,8 @@ public struct AccountAddModalView: View {
             .padding(.horizontal, 20)
             .padding(.bottom, 16)
         }
-        .frame(minWidth: 440, idealWidth: 460, minHeight: 450)
+        .frame(width: 400, height: 500)
+        .background(.regularMaterial)
     }
 
     private var pipioFormSection: some View {
@@ -247,8 +248,8 @@ public struct AccountAddModalView: View {
     }
 
     private func probeDescription(_ snapshot: ProviderSnapshot) -> String {
-        let balance = snapshot.balance.map { "余额 \($0.currency.symbol)\($0.amount)" } ?? "余额 --"
-        let today = snapshot.todaySpend.map { "今日消耗 \($0.currency.symbol)\($0.amount)" } ?? "今日消耗未支持"
+        let balance = snapshot.balance.map { "余额 \(RelayNumberFormatter.money($0.amount, currency: $0.currency))" } ?? "余额 --"
+        let today = snapshot.todaySpend.map { "今日消耗 \(RelayNumberFormatter.money($0.amount, currency: $0.currency))" } ?? "今日消耗未支持"
         return "端点验证成功：\(balance)，\(today)"
     }
 

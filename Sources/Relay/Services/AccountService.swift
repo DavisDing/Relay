@@ -63,6 +63,27 @@ public final class AccountService {
         do {
             try repository.upsertAccount(account)
             try repository.upsertSnapshot(snapshot)
+            // The first verified snapshot must seed the trend history as well;
+            // otherwise a newly added account shows no current-day data until
+            // the next scheduled refresh.
+            try repository.upsertDailyUsage(DailyUsageRecord(
+                accountID: account.id,
+                day: calendar.startOfDay(for: snapshot.fetchedAt),
+                spend: snapshot.todaySpend,
+                updatedAt: snapshot.fetchedAt
+            ))
+            // Pipio has a documented range-stat endpoint. Backfill available
+            // daily aggregates at creation time; providers without a public
+            // history endpoint return an empty list through the protocol.
+            let history = (try? await adapter.fetchDailyUsage(
+                for: account,
+                credential: draft.credential,
+                rate: rate,
+                endingAt: snapshot.fetchedAt,
+                days: 7,
+                calendar: calendar
+            )) ?? []
+            for record in history { try repository.upsertDailyUsage(record) }
             await rateService.seed(rate)
             return account
         } catch {

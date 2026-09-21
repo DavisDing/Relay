@@ -90,19 +90,22 @@ public struct ModelUsageItem: Identifiable, Sendable {
     public let cost: Decimal
     public let currency: Currency
     public let percentage: Double
+    public let cacheHitRate: Decimal?
     
     public init(id: String = UUID().uuidString,
                 modelName: String,
                 tokens: String,
                 cost: Decimal,
                 currency: Currency,
-                percentage: Double) {
+                percentage: Double,
+                cacheHitRate: Decimal? = nil) {
         self.id = id
         self.modelName = modelName
         self.tokens = tokens
         self.cost = cost
         self.currency = currency
         self.percentage = percentage
+        self.cacheHitRate = cacheHitRate
     }
 }
 

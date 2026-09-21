@@ -121,6 +121,47 @@ public struct PipioAdapter: ProviderAdapter {
         )
     }
 
+    public func fetchDailyUsage(
+        for account: AccountConfiguration,
+        credential: ProviderCredential,
+        rate: AccountRate,
+        endingAt now: Date,
+        days: Int,
+        calendar: Calendar
+    ) async throws -> [DailyUsageRecord] {
+        try validateCredential(credential)
+        guard rate.accountID == account.id,
+              let quotaPerUnit = rate.quotaPerUnit,
+              quotaPerUnit > 0 else { throw ProviderError.missingRate }
+
+        let urls = try ProviderURLNormalizer.pipio(from: account.siteOrigin)
+        let count = max(1, min(days, 30))
+        let today = calendar.startOfDay(for: now)
+        var records: [DailyUsageRecord] = []
+
+        // `/api/log/self/stat` accepts an arbitrary timestamp range. Query each
+        // calendar day so the chart can be populated immediately, then keep the
+        // returned daily aggregates locally for future offline viewing.
+        for offset in 0..<count {
+            guard let day = calendar.date(byAdding: .day, value: -offset, to: today),
+                  let nextDay = calendar.date(byAdding: .day, value: 1, to: day) else { continue }
+            let end = min(nextDay, now)
+            guard end > day else { continue }
+            guard let stat = try? await fetchStat(
+                urls: urls,
+                credential: credential,
+                range: DateInterval(start: day, end: end)
+            ), let quota = stat.quota else { continue }
+            records.append(DailyUsageRecord(
+                accountID: account.id,
+                day: day,
+                spend: MoneyValue(amount: quota / quotaPerUnit, currency: rate.nativeCurrency),
+                updatedAt: now
+            ))
+        }
+        return records
+    }
+
     private func validateCredential(_ credential: ProviderCredential) throws {
         guard !credential.secret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ProviderError.invalidCredential
@@ -193,6 +234,13 @@ public struct PipioAdapter: ProviderAdapter {
         struct Aggregate {
             var tokenCount: Int64 = 0
             var hasTokenCount = false
+            var promptTokenCount: Int64 = 0
+            var hasPromptTokenCount = false
+            var cacheReadTokenCount: Int64 = 0
+            var hasCacheReadTokenCount = false
+            var directCacheHitRateTotal: Decimal = .zero
+            var directCacheHitRateWeight: Decimal = .zero
+            var hasDirectCacheHitRate = false
             var requestCount: Int64 = 0
             var quota: Decimal = .zero
             var hasQuota = false
@@ -228,8 +276,40 @@ public struct PipioAdapter: ProviderAdapter {
                 aggregate.requestCount += 1
                 let prompt = int64Value(item["prompt_tokens"] ?? item["promptTokens"])
                 let completion = int64Value(item["completion_tokens"] ?? item["completionTokens"])
-                if let prompt { aggregate.tokenCount += prompt; aggregate.hasTokenCount = true }
+                let cacheRead = int64Value(
+                    item["cache_read_input_tokens"] ??
+                    item["cacheReadInputTokens"] ??
+                    item["cache_read_tokens"] ??
+                    item["cacheReadTokens"] ??
+                    item["cached_tokens"] ??
+                    item["cachedTokens"]
+                )
+                let directCacheHitRate = cacheHitRateValue(
+                    item["cache_hit_rate"] ??
+                    item["cacheHitRate"] ??
+                    item["cache_read_rate"] ??
+                    item["cacheReadRate"]
+                )
+                if let prompt {
+                    aggregate.tokenCount += prompt
+                    aggregate.promptTokenCount += prompt
+                    aggregate.hasTokenCount = true
+                    aggregate.hasPromptTokenCount = true
+                }
                 if let completion { aggregate.tokenCount += completion; aggregate.hasTokenCount = true }
+                if let cacheRead {
+                    aggregate.cacheReadTokenCount += cacheRead
+                    aggregate.hasCacheReadTokenCount = true
+                }
+                if let directCacheHitRate {
+                    // Prefer the provider-supplied rate when available. Weight it by
+                    // prompt tokens so a small request does not distort a model's
+                    // aggregate; fall back to one request when token counts are absent.
+                    let weight = Decimal(max(prompt ?? 1, 1))
+                    aggregate.directCacheHitRateTotal += directCacheHitRate * weight
+                    aggregate.directCacheHitRateWeight += weight
+                    aggregate.hasDirectCacheHitRate = true
+                }
                 if let quota = decimalValue(item["quota"]) {
                     aggregate.quota += quota
                     aggregate.hasQuota = true
@@ -248,6 +328,15 @@ public struct PipioAdapter: ProviderAdapter {
                 modelName: model,
                 tokenCount: aggregate.hasTokenCount ? aggregate.tokenCount : nil,
                 requestCount: aggregate.requestCount,
+                cacheHitRate: {
+                    if aggregate.hasDirectCacheHitRate, aggregate.directCacheHitRateWeight > 0 {
+                        return aggregate.directCacheHitRateTotal / aggregate.directCacheHitRateWeight
+                    }
+                    guard aggregate.hasCacheReadTokenCount,
+                          aggregate.hasPromptTokenCount,
+                          aggregate.promptTokenCount > 0 else { return nil }
+                    return min(Decimal(1), max(Decimal.zero, Decimal(aggregate.cacheReadTokenCount) / Decimal(aggregate.promptTokenCount)))
+                }(),
                 spend: aggregate.hasQuota ? MoneyValue(amount: aggregate.quota / quotaPerUnit, currency: currency) : nil
             )
         }.sorted { lhs, rhs in
@@ -281,6 +370,16 @@ public struct PipioAdapter: ProviderAdapter {
         if let number = value as? NSNumber { return Decimal(string: number.stringValue, locale: Locale(identifier: "en_US_POSIX")) }
         if let string = value as? String { return Decimal(string: string, locale: Locale(identifier: "en_US_POSIX")) }
         return nil
+    }
+
+    /// Normalizes either a 0...1 ratio or a provider response expressed as a
+    /// 0...100 percentage. Invalid values remain unavailable rather than being
+    /// coerced into a fake cache-read rate.
+    private func cacheHitRateValue(_ value: Any?) -> Decimal? {
+        guard var rate = decimalValue(value) else { return nil }
+        if rate > 1, rate <= 100 { rate /= 100 }
+        guard (0...1).contains(rate) else { return nil }
+        return rate
     }
 
     private func decode<T: Decodable>(_ data: Data) throws -> T {

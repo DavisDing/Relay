@@ -126,18 +126,21 @@ public struct ModelUsageSummary: Codable, Sendable, Equatable, Identifiable {
     public let modelName: String
     public let tokenCount: Int64?
     public let requestCount: Int64?
+    public let cacheHitRate: Decimal?
     public let spend: MoneyValue?
 
     public init(
         modelName: String,
         tokenCount: Int64?,
         requestCount: Int64?,
+        cacheHitRate: Decimal? = nil,
         spend: MoneyValue?
     ) {
         self.id = modelName
         self.modelName = modelName
         self.tokenCount = tokenCount
         self.requestCount = requestCount
+        self.cacheHitRate = cacheHitRate
         self.spend = spend
     }
 }
