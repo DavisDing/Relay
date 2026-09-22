@@ -52,6 +52,9 @@ struct WindowNavigationContractChecks {
             open()
             try await settle()
             guard let window = try currentWindow() else { throw NavigationCheckFailure(message: "No \(name) window") }
+            try check(window.styleMask.contains(.borderless), "\(name) uses the shared borderless panel shell")
+            try check(!window.styleMask.contains(.titled), "\(name) does not show a native title bar")
+            try check(window.isOpaque == false, "\(name) keeps the panel surface transparent outside its rounded content")
             try check(!popover.isShown, "Opening \(name) hides home")
             window.performClose(nil)
             try await settle()

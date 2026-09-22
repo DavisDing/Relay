@@ -2,12 +2,35 @@ import AppKit
 import Combine
 import SwiftUI
 
-/// AppKit shell for the menu-bar popover and its auxiliary windows.
+/// AppKit shell for the menu-bar popover and its auxiliary pages.
 ///
 /// The dashboard stays a lightweight NSPopover, while forms and detail pages
-/// are presented in ordinary key windows. SwiftUI sheets hosted directly by an
-/// NSPopover are unreliable in accessory applications: the transient popover
-/// can close or lose key-window status as soon as a sheet is interacted with.
+/// use borderless key windows with the same panel surface as the dashboard.
+/// SwiftUI sheets hosted directly by an NSPopover are unreliable in accessory
+/// applications: the transient popover can close or lose key-window status as
+/// soon as a sheet is interacted with.
+private final class RelayPanelWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+}
+
+private struct RelayAuxiliaryPanel<Content: View>: View {
+    private let size: CGSize
+    private let content: Content
+
+    init(size: CGSize, @ViewBuilder content: () -> Content) {
+        self.size = size
+        self.content = content()
+    }
+
+    var body: some View {
+        content
+            .frame(width: size.width, height: size.height)
+            .background(.regularMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+}
+
 @MainActor
 public final class RelayMenuBarController: NSObject, NSWindowDelegate {
     private let store: RelayStore
@@ -210,16 +233,23 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
         auxiliaryWindowController?.close()
         auxiliaryWindowController = nil
 
-        let window = NSWindow(
+        let window = RelayPanelWindow(
             contentRect: NSRect(origin: .zero, size: size),
-            styleMask: [.titled, .closable, .miniaturizable],
+            styleMask: [.borderless, .closable],
             backing: .buffered,
             defer: false
         )
         window.title = title
         window.isReleasedWhenClosed = false
         window.isRestorable = false
-        window.contentViewController = NSHostingController(rootView: AnyView(content()))
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = true
+        window.contentViewController = NSHostingController(
+            rootView: RelayAuxiliaryPanel(size: size) {
+                AnyView(content())
+            }
+        )
         window.delegate = self
 
         let controller = NSWindowController(window: window)
