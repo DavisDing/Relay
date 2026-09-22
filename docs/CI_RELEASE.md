@@ -48,7 +48,7 @@ Relay-1.2.3-macos-arm64.dmg
 Relay-1.2.3-metadata.txt
 ```
 
-其中 DMG 适合普通用户打开后拖入 Applications；ZIP 保留给脚本、开发者和更新器使用。
+其中 DMG 内同时包含 `Relay.app` 和指向 `/Applications` 的快捷入口，适合普通用户打开后拖动安装；ZIP 保留给脚本、开发者和更新器使用。
 
 
 ## 离线回归验证

@@ -104,12 +104,24 @@ fi
 dmg_name="Relay-${marketing_version}-macos-arm64.dmg"
 dmg_path="$output_dir/$dmg_name"
 rm -f "$dmg_path"
+
+# hdiutil only includes items that exist in the source folder. Build a small
+# staging volume containing both Relay.app and the conventional Applications
+# symlink so Finder presents the expected drag-to-install flow.
+dmg_staging="$(mktemp -d "${TMPDIR:-/tmp}/relay-dmg.XXXXXX")"
+cleanup_dmg_staging() { rm -rf "$dmg_staging"; }
+trap cleanup_dmg_staging EXIT
+ditto "$app_dir" "$dmg_staging/$app_name"
+ln -s /Applications "$dmg_staging/Applications"
+
 hdiutil create \
     -volname "Relay ${marketing_version}" \
-    -srcfolder "$app_dir" \
+    -srcfolder "$dmg_staging" \
     -ov \
     -format UDZO \
     "$dmg_path" >/dev/null
+cleanup_dmg_staging
+trap - EXIT
 
 metadata_name="Relay-${marketing_version}-metadata.txt"
 cat > "$output_dir/$metadata_name" <<METADATA
