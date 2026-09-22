@@ -71,7 +71,7 @@ public struct AccountDetailView: View {
             .padding(.vertical, 11)
         }
         .frame(width: 400, height: 520)
-        .background(.regularMaterial)
+        .relayPanelSurface(cornerRadius: RelayVisualStyle.panelCornerRadius)
     }
 
     private var header: some View {
@@ -291,7 +291,6 @@ private struct MetricCard: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(9)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(.separator.opacity(0.35), lineWidth: 1))
+        .relayGlassTile(cornerRadius: 10)
     }
 }

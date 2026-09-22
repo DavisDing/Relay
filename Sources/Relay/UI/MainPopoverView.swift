@@ -68,7 +68,7 @@ public struct MainPopoverView: View {
             footer
         }
         .frame(width: 400, height: 520)
-        .background(.regularMaterial)
+        .relayPanelSurface(cornerRadius: RelayVisualStyle.panelCornerRadius)
         .preferredColorScheme(preferredColorScheme)
         .alert("确认删除账号？", isPresented: Binding(
             get: { accountPendingDeletion != nil },
@@ -248,8 +248,7 @@ public struct MainPopoverView: View {
         .multilineTextAlignment(.center)
         .frame(maxWidth: .infinity, alignment: .center)
         .padding(11)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(.separator.opacity(0.45), lineWidth: 1))
+        .relayGlassTile(cornerRadius: 12)
     }
 
     private func accountRow(_ account: AccountModel) -> some View {
@@ -331,8 +330,7 @@ public struct MainPopoverView: View {
         .padding(.leading, 10)
         .padding(.trailing, 5)
         .padding(.vertical, 9)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 11))
-        .overlay(RoundedRectangle(cornerRadius: 11).stroke(.separator.opacity(0.48), lineWidth: 1))
+        .relayGlassTile(cornerRadius: 11)
     }
 
     private var emptyStateView: some View {

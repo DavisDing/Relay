@@ -50,6 +50,7 @@ jobs:
           name: Relay-${{ steps.version.outputs.marketing_version }}-macos-arm64
           path: |
             .build/package/Relay-${{ steps.version.outputs.marketing_version }}-macos-arm64.zip
+            .build/package/Relay-${{ steps.version.outputs.marketing_version }}-macos-arm64.dmg
             .build/package/Relay-${{ steps.version.outputs.marketing_version }}-metadata.txt
           if-no-files-found: error
           retention-days: 30
@@ -85,6 +86,7 @@ jobs:
           gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             .build/package/Relay-*-macos-arm64.zip \
+            .build/package/Relay-*-macos-arm64.dmg \
             .build/package/Relay-${{ needs.build.outputs.version }}-metadata.txt \
             --title "Relay $RELEASE_TAG" \
             --generate-notes

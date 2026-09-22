@@ -94,6 +94,23 @@ archive_path="$output_dir/$archive_name"
 rm -f "$archive_path"
 ditto -c -k --sequesterRsrc --keepParent "$app_dir" "$archive_path"
 
+# A DMG provides the familiar macOS drag-to-Applications installation flow.
+# Keep the ZIP as well because it is smaller and is convenient for updater
+# downloads and scripting.
+if ! command -v hdiutil >/dev/null 2>&1; then
+    echo "Missing required macOS tool: hdiutil" >&2
+    exit 1
+fi
+dmg_name="Relay-${marketing_version}-macos-arm64.dmg"
+dmg_path="$output_dir/$dmg_name"
+rm -f "$dmg_path"
+hdiutil create \
+    -volname "Relay ${marketing_version}" \
+    -srcfolder "$app_dir" \
+    -ov \
+    -format UDZO \
+    "$dmg_path" >/dev/null
+
 metadata_name="Relay-${marketing_version}-metadata.txt"
 cat > "$output_dir/$metadata_name" <<METADATA
 name=Relay
@@ -102,7 +119,9 @@ build=$build_number
 commit=$commit_sha
 platform=macos-arm64
 archive=$archive_name
+disk_image=$dmg_name
 metadata=$metadata_name
 METADATA
 
-printf 'Packaged %s (version %s, build %s, commit %s)\n' "$archive_path" "$marketing_version" "$build_number" "$commit_sha"
+printf 'Packaged %s and %s (version %s, build %s, commit %s)\n' \
+    "$archive_path" "$dmg_path" "$marketing_version" "$build_number" "$commit_sha"

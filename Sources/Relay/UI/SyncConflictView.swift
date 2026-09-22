@@ -52,6 +52,7 @@ public struct SyncConflictView: View {
         }
         .padding(20)
         .frame(minWidth: 360, idealWidth: 420)
+        .relayPanelSurface(cornerRadius: RelayVisualStyle.panelCornerRadius)
     }
 
     private var header: some View {
@@ -97,7 +98,7 @@ public struct SyncConflictView: View {
                             .foregroundStyle(.secondary)
                     }
                     .padding(9)
-                    .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+                    .relayInsetSurface(cornerRadius: 8)
                 }
             }
 
@@ -125,7 +126,7 @@ public struct SyncConflictView: View {
             }
         }
         .padding(12)
-        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
+        .relayInsetSurface(cornerRadius: 10)
     }
 
     private func resolutionSummary(_ resolution: SyncResolutionResult) -> String {

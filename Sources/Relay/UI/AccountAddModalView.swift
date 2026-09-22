@@ -135,7 +135,7 @@ public struct AccountAddModalView: View {
             .padding(.bottom, 16)
         }
         .frame(width: 400, height: 500)
-        .background(.regularMaterial)
+        .relayPanelSurface(cornerRadius: RelayVisualStyle.panelCornerRadius)
     }
 
     private var pipioFormSection: some View {

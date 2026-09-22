@@ -44,8 +44,11 @@ Release 附件命名示例：
 
 ```text
 Relay-1.2.3-macos-arm64.zip
+Relay-1.2.3-macos-arm64.dmg
 Relay-1.2.3-metadata.txt
 ```
+
+其中 DMG 适合普通用户打开后拖入 Applications；ZIP 保留给脚本、开发者和更新器使用。
 
 
 ## 离线回归验证
@@ -75,3 +78,16 @@ scripts/test-regressions.sh
 - 本地与同步 JSON 新增可选 `settingsUpdatedAt`，缺字段的旧文件仍可读取。仅共享偏好实际变化时更新时间，同步开关仍属于本机，不被远端开关覆盖。
 - 延续原有秒级 ISO8601 格式；同秒编辑使用确定性内容比较，删除与编辑同秒时删除优先。旧版本客户端不具备新的合并行为，多设备应一并更新。
 - 发布 job 使用 `gh release create --repo "$GITHUB_REPOSITORY"`，不依赖下载产物目录中存在 Git checkout。
+
+## 应用内检查更新
+
+Relay 通过右键菜单“检查更新…”或“偏好设置 → 应用更新”读取
+`DavisDing/Relay` 的 GitHub Releases API。仅将版本高于当前 `CFBundleShortVersionString`
+且包含 `macos-arm64.dmg` 或 `macos-arm64.zip` 的 Release 视为可更新版本。更新器优先下载 DMG，
+没有 DMG 时回退到 ZIP。用户确认后，安装包下载到当前用户的 `~/Downloads`，不会覆盖正在运行的应用；
+下载完成后由用户退出 Relay，并从 DMG 拖入 `Relay.app`，或解压 ZIP 后替换到 `/Applications`
+（或用户实际安装位置）。
+
+当前 Release 使用 ad-hoc 签名，没有 Developer ID 签名与公证，因此暂不做静默替换或自动重启。
+未来若接入 Developer ID + notarization，可评估引入 Sparkle，实现签名验证、后台下载和“重启安装”；
+在此之前保留“用户确认下载、用户手动安装”的流程，避免更新过程中破坏当前可运行版本。

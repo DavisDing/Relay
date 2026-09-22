@@ -26,8 +26,8 @@ private struct RelayAuxiliaryPanel<Content: View>: View {
     var body: some View {
         content
             .frame(width: size.width, height: size.height)
-            .background(.regularMaterial)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .relayPanelSurface(cornerRadius: RelayVisualStyle.auxiliaryPanelCornerRadius)
+            .clipShape(RoundedRectangle(cornerRadius: RelayVisualStyle.auxiliaryPanelCornerRadius, style: .continuous))
     }
 }
 
@@ -187,6 +187,14 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
         refreshItem.target = self
         refreshItem.isEnabled = true
 
+        let updateItem = menu.addItem(
+            withTitle: "检查更新…",
+            action: #selector(checkForUpdatesFromMenu(_:)),
+            keyEquivalent: ""
+        )
+        updateItem.target = self
+        updateItem.isEnabled = true
+
         menu.addItem(.separator())
         let quitItem = menu.addItem(
             withTitle: "退出 Relay",
@@ -206,6 +214,60 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
 
     @objc private func refreshFromMenu(_ sender: Any?) {
         Task { await store.refreshAll(forceRateRefresh: true) }
+    }
+
+    @objc private func checkForUpdatesFromMenu(_ sender: Any?) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let service = UpdateService()
+            do {
+                switch try await service.checkForUpdates() {
+                case .upToDate(let currentVersion):
+                    presentUpdateAlert(
+                        title: "Relay 已是最新版本",
+                        message: "当前版本：\(currentVersion)",
+                        buttons: ["知道了"]
+                    )
+                case .available(let update):
+                    let alert = NSAlert()
+                    alert.messageText = "发现 Relay 新版本 \(update.version)"
+                    alert.informativeText = "是否下载 macOS Apple Silicon 安装包？下载后会保存到“下载”文件夹。"
+                    alert.addButton(withTitle: "下载")
+                    alert.addButton(withTitle: "稍后")
+                    guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+                    do {
+                        let downloadedURL = try await service.download(update)
+                        NSWorkspace.shared.activateFileViewerSelecting([downloadedURL])
+                        presentUpdateAlert(
+                            title: "更新包已下载",
+                            message: "已保存到：\n\(downloadedURL.path)\n请退出 Relay 后，用新版本替换 Applications 文件夹中的旧版本。",
+                            buttons: ["知道了"]
+                        )
+                    } catch {
+                        presentUpdateAlert(
+                            title: "下载失败",
+                            message: error.localizedDescription,
+                            buttons: ["知道了"]
+                        )
+                    }
+                }
+            } catch {
+                presentUpdateAlert(
+                    title: "检查更新失败",
+                    message: error.localizedDescription,
+                    buttons: ["知道了"]
+                )
+            }
+        }
+    }
+
+    private func presentUpdateAlert(title: String, message: String, buttons: [String]) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        buttons.forEach { alert.addButton(withTitle: $0) }
+        alert.runModal()
     }
 
     @objc private func quitFromMenu(_ sender: Any?) {

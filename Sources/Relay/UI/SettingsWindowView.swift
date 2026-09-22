@@ -19,6 +19,12 @@ public struct SettingsWindowView: View {
     @State private var showGlobalShortcutSettings = false
     @State private var showSyncConflict = false
     @State private var syncConflictActionError: String?
+    @State private var isCheckingForUpdates = false
+    @State private var isDownloadingUpdate = false
+    @State private var updateStatusMessage: String?
+    @State private var availableUpdate: RelayAppUpdate?
+    @State private var downloadedUpdateURL: URL?
+    @State private var showDownloadCompleteAlert = false
 
     private let schemaVersion: Int
     private let syncStatus: SyncStatus
@@ -26,6 +32,8 @@ public struct SettingsWindowView: View {
     private let onResolveSyncConflict: ((SyncConflictDecision) -> String?)?
     private let initialGlobalShortcutConfiguration: GlobalShortcutConfiguration
     private let onApplyGlobalShortcut: ((GlobalShortcutConfiguration) -> GlobalShortcutRegistrationOutcome)?
+    private let onCheckForUpdates: () async throws -> RelayUpdateCheckResult
+    private let onDownloadUpdate: (RelayAppUpdate) async throws -> URL
 
     public var onClose: () -> Void
     public var onSave: (RelaySettings) -> Void
@@ -37,6 +45,12 @@ public struct SettingsWindowView: View {
         syncStatus: SyncStatus = .idle,
         syncConflictReport: SyncConflictReport? = nil,
         onResolveSyncConflict: ((SyncConflictDecision) -> String?)? = nil,
+        onCheckForUpdates: @escaping () async throws -> RelayUpdateCheckResult = {
+            try await UpdateService().checkForUpdates()
+        },
+        onDownloadUpdate: @escaping (RelayAppUpdate) async throws -> URL = { update in
+            try await UpdateService().download(update)
+        },
         onClose: @escaping () -> Void = {},
         onSave: @escaping (RelaySettings) -> Void = { _ in }
     ) {
@@ -46,6 +60,8 @@ public struct SettingsWindowView: View {
         self.syncStatus = syncStatus
         self.syncConflictReport = syncConflictReport
         self.onResolveSyncConflict = onResolveSyncConflict
+        self.onCheckForUpdates = onCheckForUpdates
+        self.onDownloadUpdate = onDownloadUpdate
         self.onClose = onClose
         self.onSave = onSave
         _showTodayInMenuBar = State(initialValue: initialSettings.showTodayInMenuBar)
@@ -292,7 +308,72 @@ public struct SettingsWindowView: View {
                         }
                     }
 
-                    // 5. iCloud 云盘普通文件同步
+                    Divider().opacity(0.4)
+
+                    // 5. 应用更新
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("应用更新")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(.secondary)
+
+                        HStack(spacing: 10) {
+                            Button {
+                                checkForUpdates()
+                            } label: {
+                                if isCheckingForUpdates {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                } else {
+                                    Text("检查更新")
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(isCheckingForUpdates || isDownloadingUpdate)
+
+                            if let updateStatusMessage {
+                                Text(updateStatusMessage)
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(2)
+                            }
+                        }
+
+                        Text("Relay 会从 GitHub Releases 检查 macOS Apple Silicon 版本。下载后放入“下载”文件夹，由你确认退出并替换旧版本。")
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .alert("发现 Relay 新版本", isPresented: Binding(
+                        get: { availableUpdate != nil },
+                        set: { if !$0 { availableUpdate = nil } }
+                    )) {
+                        Button("下载") {
+                            if let update = availableUpdate {
+                                availableUpdate = nil
+                                download(update)
+                            }
+                        }
+                        Button("稍后", role: .cancel) { availableUpdate = nil }
+                    } message: {
+                        if let update = availableUpdate {
+                            Text("发现版本 \(update.version)。现在下载安装包吗？")
+                        }
+                    }
+                    .alert("更新包已下载", isPresented: $showDownloadCompleteAlert) {
+                        Button("在 Finder 中显示") {
+                            if let downloadedUpdateURL {
+                                NSWorkspace.shared.activateFileViewerSelecting([downloadedUpdateURL])
+                            }
+                        }
+                        Button("知道了", role: .cancel) {}
+                    } message: {
+                        if let downloadedUpdateURL {
+                            Text("安装包已保存到：\n\(downloadedUpdateURL.path)\n请退出 Relay 后，用新版本替换 Applications 文件夹中的旧版本。")
+                        }
+                    }
+
+                    // 6. iCloud 云盘普通文件同步
                     VStack(alignment: .leading, spacing: 8) {
                         Text("多设备配置同步 (iCloud Drive 文件同步)")
                             .font(.system(size: 12, weight: .semibold))
@@ -336,8 +417,7 @@ public struct SettingsWindowView: View {
                         }
                         .padding(8)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color(nsColor: .controlBackgroundColor).opacity(0.4))
-                        .cornerRadius(6)
+                        .relayInsetSurface(cornerRadius: 8)
                     }
                 }
                 .padding(.horizontal, 20)
@@ -356,7 +436,7 @@ public struct SettingsWindowView: View {
             .padding(.bottom, 16)
         }
         .frame(width: 400, height: 520)
-        .background(.regularMaterial)
+        .relayPanelSurface(cornerRadius: RelayVisualStyle.panelCornerRadius)
         .preferredColorScheme(preferredColorScheme)
         .onDisappear {
             let parsedThreshold = Decimal(string: lowBalanceThreshold, locale: Locale(identifier: "en_US_POSIX")) ?? 20
@@ -369,6 +449,41 @@ public struct SettingsWindowView: View {
                 historyRetention: historyRetention,
                 iCloudFileSyncEnabled: enableICloudFileSync
             ))
+        }
+    }
+
+    private func checkForUpdates() {
+        guard !isCheckingForUpdates else { return }
+        isCheckingForUpdates = true
+        updateStatusMessage = nil
+        Task {
+            do {
+                switch try await onCheckForUpdates() {
+                case .upToDate(let currentVersion):
+                    updateStatusMessage = "已是最新版本（\(currentVersion)）"
+                case .available(let update):
+                    availableUpdate = update
+                }
+            } catch {
+                updateStatusMessage = "检查失败：\(error.localizedDescription)"
+            }
+            isCheckingForUpdates = false
+        }
+    }
+
+    private func download(_ update: RelayAppUpdate) {
+        guard !isDownloadingUpdate else { return }
+        isDownloadingUpdate = true
+        updateStatusMessage = "正在下载 \(update.version)…"
+        Task {
+            do {
+                downloadedUpdateURL = try await onDownloadUpdate(update)
+                updateStatusMessage = "已下载到“下载”文件夹"
+                showDownloadCompleteAlert = true
+            } catch {
+                updateStatusMessage = "下载失败：\(error.localizedDescription)"
+            }
+            isDownloadingUpdate = false
         }
     }
 

@@ -99,6 +99,7 @@ public struct GlobalShortcutSettingsView: View {
         .formStyle(.grouped)
         .padding()
         .frame(minWidth: 420)
+        .relayPanelSurface(cornerRadius: RelayVisualStyle.panelCornerRadius)
     }
 
     @ViewBuilder

@@ -193,3 +193,9 @@ SwiftData 是 Apple 系统框架，不单独收费，也没有固定独立包体
 设置、添加账户、编辑账户和账户详情统一遵循“显式关闭返回首页；隐藏保留页面状态”的规则，不再仅为详情单独开启。公共窗口控制器处理自定义关闭、完成、取消、保存成功与原生窗口关闭；保存失败留在原页。后续同级辅助页面默认继承此行为，设置内部 sheet 保持返回父页面。
 
 替换窗口不触发旧窗口返回，延迟返回可被后续隐藏/切页取消。新增 `scripts/test-window-navigation.sh`，需 macOS 登录图形会话，使用模拟内存数据检查实际 AppKit 窗口导航。可按本机已核实的 SDK 设置执行：`SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk scripts/test-window-navigation.sh`；不要把该 SDK 选择理解为 GitHub 打包环境的修改。
+
+### 原生材质视觉统一（2026-09-22）
+
+- Relay 首页及辅助页面采用 `Sources/Relay/UI/RelayVisualStyle.swift` 的共享 SwiftUI 原生材质样式：页面容器使用 `regularMaterial`，卡片使用 `thinMaterial`，嵌套状态面板使用 `ultraThinMaterial`。
+- 本次只改变材质、边缘、阴影和文字对比度，不改变首页/详情/设置/添加/编辑页面的布局、模块功能、字段和导航行为；浅色模式不写死黄色或其他壁纸颜色，背景色由系统材质自然透入。
+- 该视觉实现不使用自绘模糊或渐变模拟玻璃；实际渲染应以 macOS 27 的系统 Material 和语义颜色为准。
