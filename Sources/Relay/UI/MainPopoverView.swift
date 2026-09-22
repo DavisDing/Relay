@@ -48,11 +48,7 @@ public struct MainPopoverView: View {
     }
 
     private var preferredColorScheme: ColorScheme? {
-        switch appearanceMode {
-        case .followSystem: return nil
-        case .light: return .light
-        case .dark: return .dark
-        }
+        RelayVisualStyle.preferredColorScheme(for: appearanceMode)
     }
 
     public var body: some View {

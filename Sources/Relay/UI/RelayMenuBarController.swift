@@ -15,6 +15,7 @@ private final class RelayPanelWindow: NSWindow {
 }
 
 private struct RelayAuxiliaryPanel<Content: View>: View {
+    @AppStorage("appearanceMode") private var appearanceMode: AppearanceMode = .followSystem
     private let size: CGSize
     private let content: Content
 
@@ -23,11 +24,16 @@ private struct RelayAuxiliaryPanel<Content: View>: View {
         self.content = content()
     }
 
+    private var preferredColorScheme: ColorScheme? {
+        RelayVisualStyle.preferredColorScheme(for: appearanceMode)
+    }
+
     var body: some View {
         content
             .frame(width: size.width, height: size.height)
             .relayPanelSurface(cornerRadius: RelayVisualStyle.auxiliaryPanelCornerRadius)
             .clipShape(RoundedRectangle(cornerRadius: RelayVisualStyle.auxiliaryPanelCornerRadius, style: .continuous))
+            .preferredColorScheme(preferredColorScheme)
     }
 }
 
@@ -39,6 +45,7 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
     private var storeObservation: AnyCancellable?
     private var globalMouseMonitor: Any?
     private var resignActiveObserver: NSObjectProtocol?
+    private var appearanceObserver: NSObjectProtocol?
     private var auxiliaryWindowController: NSWindowController?
     private let onApplyGlobalShortcut: ((GlobalShortcutConfiguration) -> GlobalShortcutRegistrationOutcome)?
 
@@ -99,6 +106,8 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
             Task { @MainActor [weak self] in self?.updateStatusItem() }
         }
         installDismissMonitors()
+        installAppearanceObservation()
+        applyConfiguredAppearance()
         updateStatusItem()
     }
 
@@ -106,6 +115,7 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
         storeObservation?.cancel()
         if let globalMouseMonitor { NSEvent.removeMonitor(globalMouseMonitor) }
         if let resignActiveObserver { NotificationCenter.default.removeObserver(resignActiveObserver) }
+        if let appearanceObserver { NotificationCenter.default.removeObserver(appearanceObserver) }
         NSStatusBar.system.removeStatusItem(statusItem)
     }
 
@@ -163,6 +173,29 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in self?.close() }
+        }
+    }
+
+    private func installAppearanceObservation() {
+        appearanceObserver = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification,
+            object: UserDefaults.standard,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.applyConfiguredAppearance() }
+        }
+    }
+
+    private func applyConfiguredAppearance() {
+        let rawValue = UserDefaults.standard.string(forKey: "appearanceMode")
+        let mode = rawValue.flatMap(AppearanceMode.init(rawValue:)) ?? .followSystem
+        switch mode {
+        case .followSystem:
+            NSApp.appearance = nil
+        case .light:
+            NSApp.appearance = NSAppearance(named: .aqua)
+        case .dark:
+            NSApp.appearance = NSAppearance(named: .darkAqua)
         }
     }
 

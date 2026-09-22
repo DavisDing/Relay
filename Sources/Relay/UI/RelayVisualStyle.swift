@@ -10,6 +10,17 @@ public enum RelayVisualStyle {
     public static let panelCornerRadius: CGFloat = 20
     public static let cardCornerRadius: CGFloat = 12
     public static let auxiliaryPanelCornerRadius: CGFloat = 18
+
+    /// One app-wide appearance policy for the dashboard and every auxiliary page.
+    /// A manual light/dark choice must win over the system appearance, while
+    /// followSystem keeps the native macOS behavior intact.
+    public static func preferredColorScheme(for mode: AppearanceMode) -> ColorScheme? {
+        switch mode {
+        case .followSystem: return nil
+        case .light: return .light
+        case .dark: return .dark
+        }
+    }
 }
 
 private struct RelayPanelSurfaceModifier: ViewModifier {

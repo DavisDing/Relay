@@ -110,61 +110,44 @@ public struct SettingsWindowView: View {
     }
     
     private var preferredColorScheme: ColorScheme? {
-        switch appearanceMode {
-        case .followSystem: return nil
-        case .light: return .light
-        case .dark: return .dark
-        }
+        RelayVisualStyle.preferredColorScheme(for: appearanceMode)
     }
 
     public var body: some View {
         VStack(spacing: 12) {
-            HStack {
-                Text("偏好设置 (Preferences)")
+            ZStack {
+                Text("设置")
                     .font(.system(size: 16, weight: .bold))
-                Spacer()
-                Button(action: onClose) {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundColor(.secondary)
+
+                HStack {
+                    Spacer()
+                    Button(action: onClose) {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("返回首页")
+                    .accessibilityLabel("返回首页")
                 }
-                .buttonStyle(.plain)
-                .help("返回首页")
-                .accessibilityLabel("返回首页")
             }
             .padding(.horizontal, 20)
-            .padding(.top, 16)
+            .padding(.top, 14)
 
-            TabView(selection: $selectedTab) {
-                generalSettingsPage
-                    .tabItem { Label(SettingsTab.general.title, systemImage: SettingsTab.general.systemImage) }
-                    .tag(SettingsTab.general)
+            settingsTabBar
 
-                dataSettingsPage
-                    .tabItem { Label(SettingsTab.data.title, systemImage: SettingsTab.data.systemImage) }
-                    .tag(SettingsTab.data)
+            Divider().opacity(0.3)
 
-                shortcutSettingsPage
-                    .tabItem { Label(SettingsTab.shortcuts.title, systemImage: SettingsTab.shortcuts.systemImage) }
-                    .tag(SettingsTab.shortcuts)
-
-                syncSettingsPage
-                    .tabItem { Label(SettingsTab.sync.title, systemImage: SettingsTab.sync.systemImage) }
-                    .tag(SettingsTab.sync)
-
-                updateSettingsPage
-                    .tabItem { Label(SettingsTab.updates.title, systemImage: SettingsTab.updates.systemImage) }
-                    .tag(SettingsTab.updates)
-
-                aboutSettingsPage
-                    .tabItem { Label(SettingsTab.about.title, systemImage: SettingsTab.about.systemImage) }
-                    .tag(SettingsTab.about)
-            }
-            .tabViewStyle(.automatic)
-            .frame(maxHeight: .infinity)
+            selectedSettingsPage
+                .frame(maxHeight: .infinity)
+                .relayGlassTile(cornerRadius: 14)
+                .padding(.horizontal, 16)
 
             Divider().opacity(0.3)
 
             HStack {
+                Text("设置会在关闭窗口时自动保存")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
                 Spacer()
                 Button("完成", action: onClose)
                     .buttonStyle(.borderedProminent)
@@ -187,6 +170,52 @@ public struct SettingsWindowView: View {
                 historyRetention: historyRetention,
                 iCloudFileSyncEnabled: enableICloudFileSync
             ))
+        }
+    }
+
+    private var settingsTabBar: some View {
+        HStack(spacing: 4) {
+            ForEach(SettingsTab.allCases) { tab in
+                Button {
+                    selectedTab = tab
+                } label: {
+                    VStack(spacing: 4) {
+                        Image(systemName: tab.systemImage)
+                            .font(.system(size: 16, weight: .medium))
+                        Text(tab.title)
+                            .font(.system(size: 10, weight: .medium))
+                            .lineLimit(1)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 48)
+                    .foregroundStyle(selectedTab == tab ? Color.accentColor : Color.secondary)
+                    .background(
+                        selectedTab == tab ? Color.accentColor.opacity(0.13) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    )
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(selectedTab == tab ? .isSelected : [])
+                .accessibilityLabel(tab.title)
+            }
+        }
+        .padding(.horizontal, 14)
+    }
+
+    @ViewBuilder
+    private var selectedSettingsPage: some View {
+        switch selectedTab {
+        case .general:
+            generalSettingsPage
+        case .data:
+            dataSettingsPage
+        case .shortcuts:
+            shortcutSettingsPage
+        case .sync:
+            syncSettingsPage
+        case .updates:
+            updateSettingsPage
+        case .about:
+            aboutSettingsPage
         }
     }
 
