@@ -33,7 +33,7 @@ extension AccountDraft {
         if isBlank(displayName) { fields.append("账号显示名称") }
         if isBlank(baseURL) { fields.append("站点地址") }
         if providerKind == .pipio, isBlank(credential.pipioUserID) { fields.append("Pipio 用户 ID") }
-        if isBlank(credential.secret) { fields.append(providerKind == .pipio ? "Pipio 系统令牌" : "DeepSeek API Key") }
+        if isBlank(credential.secret) { fields.append(providerKind == .pipio ? "Pipio 系统令牌" : (providerKind == .workbuddy2api ? "网关 API Key" : "DeepSeek API Key")) }
         if !fields.isEmpty { throw AccountServiceError.missingRequiredFields(fields) }
     }
 }
@@ -82,12 +82,14 @@ public final class AccountService {
             // The first verified snapshot must seed the trend history as well;
             // otherwise a newly added account shows no current-day data until
             // the next scheduled refresh.
-            try repository.upsertDailyUsage(DailyUsageRecord(
-                accountID: account.id,
-                day: calendar.startOfDay(for: snapshot.fetchedAt),
-                spend: snapshot.todaySpend,
-                updatedAt: snapshot.fetchedAt
-            ))
+            if account.providerKind != .workbuddy2api {
+                try repository.upsertDailyUsage(DailyUsageRecord(
+                    accountID: account.id,
+                    day: calendar.startOfDay(for: snapshot.fetchedAt),
+                    spend: snapshot.todaySpend,
+                    updatedAt: snapshot.fetchedAt
+                ))
+            }
             // Pipio has a documented range-stat endpoint. Backfill available
             // daily aggregates at creation time; providers without a public
             // history endpoint return an empty list through the protocol.
@@ -139,6 +141,8 @@ public final class AccountService {
             origin = try ProviderURLNormalizer.pipio(from: inputURL).origin
         case .deepseek:
             origin = try ProviderURLNormalizer.secureOrigin(from: inputURL)
+        case .workbuddy2api:
+            origin = try ProviderURLNormalizer.workbuddyOrigin(from: inputURL)
         case .custom:
             throw ProviderError.unsupportedProvider
         }
@@ -149,7 +153,7 @@ public final class AccountService {
             providerKind: draft.providerKind,
             siteOrigin: origin,
             isEnabled: true,
-            lowBalanceThreshold: draft.lowBalanceThreshold,
+            lowBalanceThreshold: draft.providerKind == .workbuddy2api ? nil : draft.lowBalanceThreshold,
             sortOrder: sortOrder
         )
     }
@@ -159,6 +163,7 @@ public final class AccountService {
         displayName: String,
         lowBalanceThreshold: Decimal?,
         replacementCredential: ProviderCredential? = nil,
+        replacementBaseURL: String? = nil,
         manualUSDToCNY: ManualExchangeRateUpdate = .unchanged
     ) async throws {
         guard var account = try repository.account(id: accountID) else { return }
@@ -186,14 +191,26 @@ public final class AccountService {
             previousCredential = nil
         }
 
-        if let replacementCredential {
+        if let replacementBaseURL {
+            guard account.providerKind == .workbuddy2api,
+                  let url = URL(string: replacementBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+                throw ProviderError.invalidBaseURL
+            }
+            account.siteOrigin = try ProviderURLNormalizer.workbuddyOrigin(from: url)
+        }
+        if replacementCredential != nil || replacementBaseURL != nil {
+            let credential: ProviderCredential
+            if let replacementCredential { credential = replacementCredential }
+            else { credential = try await credentialStore.read(reference: account.credentialReference) }
             let adapter = try adapters.adapter(for: account.providerKind)
-            _ = try await adapter.fetchAccountRate(for: account, credential: replacementCredential)
-            try await adapter.validateAccount(account, credential: replacementCredential)
-            try await credentialStore.save(replacementCredential, reference: account.credentialReference)
+            _ = try await adapter.fetchAccountRate(for: account, credential: credential)
+            try await adapter.validateAccount(account, credential: credential)
+            if let replacementCredential {
+                try await credentialStore.save(replacementCredential, reference: account.credentialReference)
+            }
         }
         account.displayName = name
-        account.lowBalanceThreshold = lowBalanceThreshold
+        account.lowBalanceThreshold = account.providerKind == .workbuddy2api ? nil : lowBalanceThreshold
         account.updatedAt = nextUpdateDate(after: account.updatedAt)
         do {
             try repository.upsertAccount(account)
@@ -211,6 +228,15 @@ public final class AccountService {
             }
             throw error
         }
+    }
+
+    public func performSubAccountAction(parentID: UUID, externalID: String, action: ProviderSubAccountAction) async throws {
+        guard let account = try repository.account(id: parentID), account.providerKind == .workbuddy2api else {
+            throw ProviderError.subAccountNotFound
+        }
+        let credential = try await credentialStore.read(reference: account.credentialReference)
+        let adapter = try adapters.adapter(for: .workbuddy2api)
+        try await adapter.performSubAccountAction(action, for: account, credential: credential, externalID: externalID)
     }
 
     // The existing sync format keeps whole seconds. Advance local edits at

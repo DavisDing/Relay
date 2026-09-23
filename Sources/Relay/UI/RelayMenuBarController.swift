@@ -416,7 +416,11 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
                 account: account,
                 spendPoints: spendPoints,
                 modelUsages: modelUsages,
-                onClose: { [weak self] in self?.closeAuxiliaryWindow() }
+                onClose: { [weak self] in self?.closeAuxiliaryWindow() },
+                onSubAccountAction: { [weak self] action, parent, uid in
+                    guard let self else { return }
+                    try await self.store.performSubAccountAction(action, parentID: parent, externalID: uid)
+                }
             )
         }
     }
@@ -426,13 +430,14 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
             AccountEditModalView(
                 account: account,
                 onDismiss: { [weak self] in self?.closeAuxiliaryWindow() },
-                onSave: { [weak self] name, threshold, credential, rateUpdate in
+                onSave: { [weak self] name, threshold, credential, rateUpdate, baseURL in
                     guard let self, let id = UUID(uuidString: account.id) else { return }
                     try await self.store.updateAccount(
                         accountID: id,
                         displayName: name,
                         lowBalanceThreshold: threshold,
                         replacementCredential: credential,
+                        replacementBaseURL: baseURL,
                         manualUSDToCNY: rateUpdate
                     )
                 }

@@ -26,6 +26,25 @@ public enum ProviderURLNormalizer {
         return .init(origin: origin, managementBaseURL: management, modelBaseURL: model)
     }
 
+    /// WorkBuddy permits plaintext only on a loopback address. Ignore any
+    /// supplied path/query so bearer credentials never go to an arbitrary path.
+    public static func workbuddyOrigin(from input: URL) throws -> URL {
+        guard var components = URLComponents(url: input, resolvingAgainstBaseURL: false),
+              let scheme = components.scheme?.lowercased(),
+              let host = components.host?.lowercased(), !host.isEmpty,
+              components.user == nil, components.password == nil else {
+            throw ProviderError.invalidBaseURL
+        }
+        guard scheme == "https" || (scheme == "http" && ["localhost", "127.0.0.1", "::1"].contains(host)) else {
+            throw ProviderError.insecureBaseURL
+        }
+        components.path = ""
+        components.query = nil
+        components.fragment = nil
+        guard let result = components.url else { throw ProviderError.invalidBaseURL }
+        return result
+    }
+
     public static func secureOrigin(from input: URL) throws -> URL {
         guard var components = URLComponents(url: input, resolvingAgainstBaseURL: false),
               components.scheme?.lowercased() == "https",
@@ -53,9 +72,13 @@ public protocol ProviderAdapter: Sendable {
         calendar: Calendar
     ) async throws -> ProviderSnapshot
 
-    /// Returns historical daily spend only when the provider has a documented
-    /// endpoint for it. An empty result means unsupported or unavailable, never
-    /// a fabricated zero-spend history.
+    func performSubAccountAction(
+        _ action: ProviderSubAccountAction,
+        for account: AccountConfiguration,
+        credential: ProviderCredential,
+        externalID: String
+    ) async throws
+
     func fetchDailyUsage(
         for account: AccountConfiguration,
         credential: ProviderCredential,
@@ -67,6 +90,15 @@ public protocol ProviderAdapter: Sendable {
 }
 
 public extension ProviderAdapter {
+    func performSubAccountAction(
+        _ action: ProviderSubAccountAction,
+        for account: AccountConfiguration,
+        credential: ProviderCredential,
+        externalID: String
+    ) async throws {
+        throw ProviderError.unsupportedProvider
+    }
+
     func fetchDailyUsage(
         for account: AccountConfiguration,
         credential: ProviderCredential,

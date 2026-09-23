@@ -7,7 +7,8 @@ public extension ProviderAdapterRegistry {
     ) -> ProviderAdapterRegistry {
         ProviderAdapterRegistry(adapters: [
             PipioAdapter(client: client, rateRefreshInterval: pipioRateRefreshInterval),
-            DeepSeekAdapter(client: client)
+            DeepSeekAdapter(client: client),
+            WorkBuddy2APIAdapter(client: client)
         ])
     }
 }

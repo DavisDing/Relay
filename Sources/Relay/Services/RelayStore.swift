@@ -191,6 +191,7 @@ public final class RelayStore: ObservableObject {
         displayName: String,
         lowBalanceThreshold: Decimal?,
         replacementCredential: ProviderCredential? = nil,
+        replacementBaseURL: String? = nil,
         manualUSDToCNY: ManualExchangeRateUpdate = .unchanged
     ) async throws {
         do {
@@ -199,6 +200,7 @@ public final class RelayStore: ObservableObject {
                 displayName: displayName,
                 lowBalanceThreshold: lowBalanceThreshold,
                 replacementCredential: replacementCredential,
+                replacementBaseURL: replacementBaseURL,
                 manualUSDToCNY: manualUSDToCNY
             )
             accountErrors.removeValue(forKey: accountID.uuidString)
@@ -232,6 +234,83 @@ public final class RelayStore: ObservableObject {
             guard let id = UUID(uuidString: account.id), let rate = account.manualUSDToCNY else { return nil }
             return (id, rate)
         })
+    }
+
+    /// Home projection: gateway configurations remain editable in settings, while
+    /// internal gateway accounts are the visible second-level accounts.
+    public var dashboardAccounts: [AccountModel] {
+        accounts.flatMap { parent -> [AccountModel] in
+            guard parent.kind == .workbuddy2api else { return [parent] }
+            guard let id = UUID(uuidString: parent.id),
+                  let snapshot = snapshots.first(where: { $0.accountID == id }) else { return [] }
+            return (snapshot.subAccounts ?? []).map { child in
+                let state: AccountStatus
+                if case .error(let message) = parent.status { state = .error("网关同步失败：" + message) }
+                else if child.manualDisabled { state = .warning("手动停用") }
+                else if child.disabled { state = .warning("系统停用") }
+                else if child.cooling { state = .warning("冷却中") }
+                else { state = parent.status }
+                return AccountModel(
+                    id: child.id, name: child.displayName, kind: .workbuddy2api,
+                    baseURL: parent.baseURL, balance: nil, currency: .cny,
+                    status: state, lastUpdated: child.fetchedAt, isEnabled: parent.isEnabled,
+                    availablePoints: child.availablePoints, parentAccountID: id,
+                    externalID: child.externalID, disabled: child.disabled,
+                    manualDisabled: child.manualDisabled, cooling: child.cooling
+                )
+            }
+        }
+    }
+
+    public var gatewayNotices: [String] {
+        accounts.filter { $0.kind == .workbuddy2api }.compactMap { gateway in
+            if let error = accountErrors[gateway.id] { return "\(gateway.name)：\(error)" }
+            guard let id = UUID(uuidString: gateway.id),
+                  let snapshot = snapshots.first(where: { $0.accountID == id }) else {
+                return "\(gateway.name)：尚未同步内部账号"
+            }
+            return snapshot.subAccounts?.isEmpty == true ? "\(gateway.name)：暂无内部账号" : nil
+        }
+    }
+
+    public func creditTotal(for kind: ProviderKind = .workbuddy2api) -> CreditDashboardTotal {
+        let gateways = accounts.filter { $0.kind == kind && $0.isEnabled }
+        guard !gateways.isEmpty else { return CreditDashboardTotal(value: nil, isComplete: true) }
+        var excluded = Set<UUID>()
+        var total = Decimal.zero
+        for gateway in gateways {
+            guard let id = UUID(uuidString: gateway.id) else { continue }
+            guard accountErrors[gateway.id] == nil,
+                  let snapshot = snapshots.first(where: { $0.accountID == id }),
+                  let children = snapshot.subAccounts,
+                  !children.isEmpty,
+                  children.allSatisfy({ $0.availablePoints != nil }) else {
+                excluded.insert(id)
+                continue
+            }
+            total += children.compactMap(\.availablePoints).reduce(Decimal.zero, +)
+        }
+        return CreditDashboardTotal(value: excluded.isEmpty ? total : nil,
+                                    isComplete: excluded.isEmpty, excludedAccountIDs: excluded)
+    }
+
+    public func performSubAccountAction(_ action: ProviderSubAccountAction, parentID: UUID, externalID: String) async throws {
+        try await accountService.performSubAccountAction(parentID: parentID, externalID: externalID, action: action)
+        await refresh(accountID: parentID)
+    }
+
+    public func balanceTotal(for kind: ProviderKind) -> DashboardTotal {
+        let ids = Set(accounts.filter { $0.kind == kind && $0.isEnabled }.compactMap { UUID(uuidString: $0.id) })
+        return DashboardAggregator.balanceTotal(snapshots: snapshots.filter { ids.contains($0.accountID) },
+            targetCurrency: settings.baseCurrency, now: presentationDate, expectedAccountIDs: ids,
+            manualUSDToCNY: manualExchangeRates)
+    }
+
+    public func todaySpendTotal(for kind: ProviderKind) -> DashboardTotal {
+        let ids = Set(accounts.filter { $0.kind == kind && $0.isEnabled }.compactMap { UUID(uuidString: $0.id) })
+        return DashboardAggregator.todaySpendTotal(snapshots: snapshots.filter { ids.contains($0.accountID) },
+            targetCurrency: settings.baseCurrency, now: presentationDate, expectedAccountIDs: ids,
+            calendar: calendar, manualUSDToCNY: manualExchangeRates)
     }
 
     public var balanceTotalCNY: DashboardTotal {
@@ -337,7 +416,7 @@ public final class RelayStore: ObservableObject {
             let previousInterval = settings.refreshIntervalSeconds
             settings = try repository.settings()
             let configurations = try repository.fetchAccounts()
-            expectedAccountIDs = Set(configurations.filter(\.isEnabled).map(\.id))
+            expectedAccountIDs = Set(configurations.filter { $0.isEnabled && $0.providerKind != .workbuddy2api }.map(\.id))
             var loadedSnapshots: [ProviderSnapshot] = []
             presentationDate = now
             accounts = configurations.map { configuration in

@@ -14,6 +14,8 @@ public enum ProviderError: Error, Sendable, Equatable, LocalizedError {
     case incompatibleResponse
     case missingRate
     case unsupportedProvider
+    case wrongService
+    case subAccountNotFound
 
     public var errorDescription: String? {
         switch self {
@@ -30,6 +32,8 @@ public enum ProviderError: Error, Sendable, Equatable, LocalizedError {
         case .incompatibleResponse: return "供应商响应格式不兼容。"
         case .missingRate: return "账户缺少可靠的汇率或配额换算参数。"
         case .unsupportedProvider: return "当前供应商暂未实现。"
+        case .wrongService: return "目标站点不是 workbuddy2api 网关。"
+        case .subAccountNotFound: return "网关中找不到此内部账号，请刷新后重试。"
         }
     }
 }

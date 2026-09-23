@@ -6,6 +6,7 @@ public struct MainPopoverView: View {
     @ObservedObject private var store: RelayStore
     @AppStorage("appearanceMode") private var appearanceMode: AppearanceMode = .followSystem
     @State private var accountPendingDeletion: AccountModel?
+    @State private var expandedProviders = Set<ProviderKind>()
     private let initialGlobalShortcutConfiguration: GlobalShortcutConfiguration
     private let onApplyGlobalShortcut: ((GlobalShortcutConfiguration) -> GlobalShortcutRegistrationOutcome)?
     private let onPresentAddAccount: () -> Void
@@ -38,7 +39,7 @@ public struct MainPopoverView: View {
         return store.todaySpendTotalCNY.value?.amount
     }
 
-    private var enabledAccountCount: Int { store.accounts.filter(\.isEnabled).count }
+    private var enabledAccountCount: Int { store.accounts.filter { $0.isEnabled && $0.kind != .workbuddy2api }.count }
 
     private var hasAnyError: Bool {
         store.accounts.contains { account in
@@ -149,31 +150,42 @@ public struct MainPopoverView: View {
                         .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
                 }
 
-                HStack(spacing: 8) {
-                    summaryCard(
-                        title: "总可用折算余额",
-                        value: totalBalance.map { RelayNumberFormatter.money($0, currency: store.settings.baseCurrency) } ?? "--",
-                        subtitle: store.balanceTotalCNY.isComplete ? "\(enabledAccountCount) 个账号运行正常" : "部分账号缺少可靠数据或汇率",
-                        accent: .primary
-                    )
-                    summaryCard(
-                        title: "今日总消耗",
-                        value: totalTodaySpend.map { RelayNumberFormatter.money($0, currency: store.settings.baseCurrency) } ?? "--",
-                        subtitle: totalTodaySpend == nil ? "数据不完整，已不参与统计" : "全量统计（已完整）",
-                        accent: totalTodaySpend == nil ? .primary : .orange
-                    )
+                if store.accounts.contains(where: { $0.kind != .workbuddy2api }) {
+                    HStack(spacing: 8) {
+                        summaryCard(title: "总可用折算余额",
+                            value: totalBalance.map { RelayNumberFormatter.money($0, currency: store.settings.baseCurrency) } ?? "--",
+                            subtitle: store.balanceTotalCNY.isComplete ? "\(enabledAccountCount) 个账号运行正常" : "部分账号缺少可靠数据或汇率", accent: .primary)
+                        summaryCard(title: "今日总消耗",
+                            value: totalTodaySpend.map { RelayNumberFormatter.money($0, currency: store.settings.baseCurrency) } ?? "--",
+                            subtitle: totalTodaySpend == nil ? "数据不完整，已不参与统计" : "全量统计（已完整）",
+                            accent: totalTodaySpend == nil ? .primary : .orange)
+                    }
                 }
-
+                if store.accounts.contains(where: { $0.kind == .workbuddy2api }) {
+                    HStack(spacing: 8) {
+                        summaryCard(title: "总可用积分",
+                            value: store.creditTotal().value.map { NSDecimalNumber(decimal: $0).stringValue } ?? "--",
+                            subtitle: store.creditTotal().isComplete ? "网关内部账号汇总" : "部分网关数据不可用", accent: .primary)
+                        summaryCard(title: "今日消耗 / 获取积分", value: "暂不支持",
+                            subtitle: "网关未提供可靠的自然日统计", accent: .secondary)
+                    }
+                }
+                ForEach(store.gatewayNotices, id: \.self) { notice in
+                    Label(notice, systemImage: "info.circle")
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                }
                 HStack {
-                    Text("已连接账号 (\(store.accounts.count))")
+                    Text("已连接账号 (\(store.dashboardAccounts.count))")
                         .font(.system(size: 13, weight: .semibold))
                     Spacer()
-                }
-                .padding(.top, 4)
+                }.padding(.top, 4)
 
                 LazyVStack(spacing: 7) {
-                    ForEach(store.accounts) { account in
-                        accountRow(account)
+                    ForEach(ProviderKind.supportedCases, id: \.self) { kind in
+                        let grouped = store.dashboardAccounts.filter { $0.kind == kind }
+                        if !grouped.isEmpty {
+                            providerGroup(kind, accounts: grouped)
+                        }
                     }
                 }
             }
@@ -247,6 +259,38 @@ public struct MainPopoverView: View {
         .relayGlassTile(cornerRadius: 12)
     }
 
+    private func providerGroup(_ kind: ProviderKind, accounts: [AccountModel]) -> some View {
+        VStack(spacing: 7) {
+            Button {
+                if !expandedProviders.insert(kind).inserted { expandedProviders.remove(kind) }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: expandedProviders.contains(kind) ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text(kind.rawValue).font(.system(size: 13, weight: .semibold))
+                    Text("\(accounts.count) 个账号").font(.system(size: 10)).foregroundStyle(.secondary)
+                    Spacer()
+                    VStack(alignment: .trailing, spacing: 3) {
+                        if kind == .workbuddy2api {
+                            Text("积分 " + (store.creditTotal().value.map { NSDecimalNumber(decimal: $0).stringValue } ?? "--"))
+                            Text("今日消耗 暂不支持")
+                        } else {
+                            let balance = store.balanceTotal(for: kind)
+                            let today = store.todaySpendTotal(for: kind)
+                            Text("余额 " + (balance.value.map { RelayNumberFormatter.money($0.amount, currency: store.settings.baseCurrency) } ?? "--"))
+                            Text("今日 " + (today.isComplete ? (today.value.map { RelayNumberFormatter.money($0.amount, currency: store.settings.baseCurrency) } ?? "--") : "--"))
+                        }
+                    }.font(.system(size: 10)).foregroundStyle(.secondary)
+                }.contentShape(Rectangle())
+            }.buttonStyle(.plain)
+                .padding(11).relayGlassTile(cornerRadius: 11)
+                .accessibilityLabel("\(kind.rawValue) 分组，\(accounts.count) 个账号")
+            if expandedProviders.contains(kind) {
+                ForEach(accounts) { account in accountRow(account).padding(.leading, 12) }
+            }
+        }
+    }
+
     private func accountRow(_ account: AccountModel) -> some View {
         HStack(spacing: 5) {
             Button {
@@ -281,7 +325,7 @@ public struct MainPopoverView: View {
                     Spacer(minLength: 8)
 
                     VStack(alignment: .trailing, spacing: 4) {
-                        Text(account.balance.map { RelayNumberFormatter.money($0, currency: account.currency) } ?? "--")
+                        Text(account.kind == .workbuddy2api ? (account.availablePoints.map { "\(NSDecimalNumber(decimal: $0).stringValue) 积分" } ?? "积分 --") : (account.balance.map { RelayNumberFormatter.money($0, currency: account.currency) } ?? "--"))
                             .font(.system(size: 13, weight: .bold))
                             .foregroundStyle(.primary)
                             .lineLimit(1)
@@ -299,9 +343,9 @@ public struct MainPopoverView: View {
 
             Menu {
                 Button("查看详情与走势折线图") { onPresentDetail(account, spendPoints(for: account), modelUsages(for: account)) }
-                Button("编辑账号") { onPresentEdit(account) }
+                if account.parentAccountID == nil { Button("编辑账号") { onPresentEdit(account) } }
                 Button("立即手动同步") {
-                    guard let id = UUID(uuidString: account.id) else { return }
+                    guard let id = account.parentAccountID ?? UUID(uuidString: account.id) else { return }
                     Task { await store.refresh(accountID: id, forceRateRefresh: true) }
                 }
                 if let id = UUID(uuidString: account.id) {
@@ -309,9 +353,9 @@ public struct MainPopoverView: View {
                         store.setEnabled(accountID: id, enabled: !account.isEnabled)
                     }
                 }
-                Divider()
-                Button("删除账号", role: .destructive) {
-                    accountPendingDeletion = account
+                if account.parentAccountID == nil {
+                    Divider()
+                    Button("删除账号", role: .destructive) { accountPendingDeletion = account }
                 }
             } label: {
                 Image(systemName: "ellipsis")
@@ -340,7 +384,7 @@ public struct MainPopoverView: View {
             }
             Text("尚未接入任何 AI 额度账号")
                 .font(.system(size: 15, weight: .bold))
-            Text("支持 Pipio、DeepSeek 官方 API\n凭据仅保存在本机 Relay 数据目录")
+            Text("支持 Pipio、DeepSeek 和 workbuddy2api\n凭据仅保存在本机 Relay 数据目录")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

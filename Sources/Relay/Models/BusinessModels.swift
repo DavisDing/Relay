@@ -140,6 +140,7 @@ public struct ProviderCapabilities: OptionSet, Codable, Sendable {
     public static let monthlyUsage = Self(rawValue: 1 << 2)
     public static let requestCount = Self(rawValue: 1 << 3)
     public static let modelUsage = Self(rawValue: 1 << 4)
+    public static let creditBalance = Self(rawValue: 1 << 5)
 }
 
 public enum DataFreshness: String, Codable, Sendable {
@@ -184,6 +185,59 @@ extension ModelUsageSummary {
     }
 }
 
+public struct CreditMetrics: Codable, Sendable, Equatable {
+    public let available: Decimal?
+    public let consumedToday: Decimal?
+    public let earnedToday: Decimal?
+
+    public init(available: Decimal?, consumedToday: Decimal? = nil, earnedToday: Decimal? = nil) {
+        self.available = available
+        self.consumedToday = consumedToday
+        self.earnedToday = earnedToday
+    }
+}
+
+public struct ProviderSubAccountSnapshot: Codable, Sendable, Equatable, Identifiable {
+    public let id: String
+    public let parentAccountID: UUID
+    public let externalID: String
+    public let displayName: String
+    public let availablePoints: Decimal?
+    public let disabled: Bool
+    public let manualDisabled: Bool
+    public let cooling: Bool
+    public let statusMessage: String?
+    public let fetchedAt: Date
+
+    public init(
+        parentAccountID: UUID,
+        externalID: String,
+        displayName: String,
+        availablePoints: Decimal?,
+        disabled: Bool = false,
+        manualDisabled: Bool = false,
+        cooling: Bool = false,
+        statusMessage: String? = nil,
+        fetchedAt: Date = Date()
+    ) {
+        self.parentAccountID = parentAccountID
+        self.externalID = externalID
+        self.id = "\(parentAccountID.uuidString):\(externalID)"
+        self.displayName = displayName
+        self.availablePoints = availablePoints
+        self.disabled = disabled
+        self.manualDisabled = manualDisabled
+        self.cooling = cooling
+        self.statusMessage = statusMessage
+        self.fetchedAt = fetchedAt
+    }
+}
+
+public enum ProviderSubAccountAction: Sendable, Equatable {
+    case disable(reason: String?)
+    case enable
+}
+
 public struct ProviderSnapshot: Codable, Sendable, Equatable {
     public let accountID: UUID
     public let balance: MoneyValue?
@@ -195,6 +249,29 @@ public struct ProviderSnapshot: Codable, Sendable, Equatable {
     public let freshness: DataFreshness
     public let fetchedAt: Date
     public let rate: AccountRate
+    public let creditMetrics: CreditMetrics?
+    public let subAccounts: [ProviderSubAccountSnapshot]?
+
+    private enum CodingKeys: String, CodingKey {
+        case accountID, balance, todaySpend, monthSpend, requestCount, modelUsages
+        case capabilities, freshness, fetchedAt, rate, creditMetrics, subAccounts
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        accountID = try c.decode(UUID.self, forKey: .accountID)
+        balance = try c.decodeIfPresent(MoneyValue.self, forKey: .balance)
+        todaySpend = try c.decodeIfPresent(MoneyValue.self, forKey: .todaySpend)
+        monthSpend = try c.decodeIfPresent(MoneyValue.self, forKey: .monthSpend)
+        requestCount = try c.decodeIfPresent(Int64.self, forKey: .requestCount)
+        modelUsages = try c.decodeIfPresent([ModelUsageSummary].self, forKey: .modelUsages)
+        capabilities = try c.decode(ProviderCapabilities.self, forKey: .capabilities)
+        freshness = try c.decode(DataFreshness.self, forKey: .freshness)
+        fetchedAt = try c.decode(Date.self, forKey: .fetchedAt)
+        rate = try c.decode(AccountRate.self, forKey: .rate)
+        creditMetrics = try c.decodeIfPresent(CreditMetrics.self, forKey: .creditMetrics)
+        subAccounts = try c.decodeIfPresent([ProviderSubAccountSnapshot].self, forKey: .subAccounts)
+    }
 
     public init(
         accountID: UUID,
@@ -206,7 +283,9 @@ public struct ProviderSnapshot: Codable, Sendable, Equatable {
         capabilities: ProviderCapabilities,
         freshness: DataFreshness,
         fetchedAt: Date = Date(),
-        rate: AccountRate
+        rate: AccountRate,
+        creditMetrics: CreditMetrics? = nil,
+        subAccounts: [ProviderSubAccountSnapshot]? = nil
     ) {
         self.accountID = accountID
         self.balance = balance
@@ -218,6 +297,8 @@ public struct ProviderSnapshot: Codable, Sendable, Equatable {
         self.freshness = freshness
         self.fetchedAt = fetchedAt
         self.rate = rate
+        self.creditMetrics = creditMetrics
+        self.subAccounts = subAccounts
     }
 }
 
@@ -231,6 +312,18 @@ public struct DashboardTotal: Sendable, Equatable {
     public let value: MoneyValue?
     public let isComplete: Bool
     public let excludedAccountIDs: Set<UUID>
+}
+
+public struct CreditDashboardTotal: Sendable, Equatable {
+    public let value: Decimal?
+    public let isComplete: Bool
+    public let excludedAccountIDs: Set<UUID>
+
+    public init(value: Decimal?, isComplete: Bool, excludedAccountIDs: Set<UUID> = []) {
+        self.value = value
+        self.isComplete = isComplete
+        self.excludedAccountIDs = excludedAccountIDs
+    }
 }
 
 public enum RateRefreshInterval: String, Codable, CaseIterable, Sendable {

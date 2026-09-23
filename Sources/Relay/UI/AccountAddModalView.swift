@@ -9,6 +9,8 @@ public struct AccountAddModalView: View {
     @State private var pipioToken = ""
     @State private var deepseekBaseURL = "https://api.deepseek.com"
     @State private var deepseekApiKey = ""
+    @State private var workbuddyBaseURL = "http://localhost:7863"
+    @State private var workbuddyApiKey = ""
     @State private var isTesting = false
     @State private var isSaving = false
     @State private var statusMessage: String?
@@ -78,6 +80,8 @@ public struct AccountAddModalView: View {
                         pipioFormSection
                     case .deepseek:
                         deepseekFormSection
+                    case .workbuddy2api:
+                        workbuddyFormSection
                     case .custom:
                         Text("自定义兼容端点属于后续扩展，当前版本未启用。")
                             .foregroundColor(.secondary)
@@ -159,6 +163,18 @@ public struct AccountAddModalView: View {
         }
     }
 
+    private var workbuddyFormSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            labeledField("网关地址（本机 HTTP 或远端 HTTPS）", text: $workbuddyBaseURL, placeholder: "http://localhost:7863")
+            VStack(alignment: .leading, spacing: 4) {
+                Text("网关 API Key（仅本机保存）").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
+                SecureField("Bearer API Key", text: $workbuddyApiKey).textFieldStyle(.roundedBorder)
+            }
+            Text("从 /status 读取内部账号积分；管理操作需要网关启用 admin.enabled。")
+                .font(.system(size: 10)).foregroundStyle(.secondary)
+        }
+    }
+
     private var deepseekFormSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
@@ -208,6 +224,9 @@ public struct AccountAddModalView: View {
         case .deepseek:
             baseURL = deepseekBaseURL
             credential = ProviderCredential(secret: deepseekApiKey)
+        case .workbuddy2api:
+            baseURL = workbuddyBaseURL
+            credential = ProviderCredential(secret: workbuddyApiKey)
         case .custom:
             throw ProviderError.unsupportedProvider
         }
@@ -215,7 +234,8 @@ public struct AccountAddModalView: View {
             displayName: accountName,
             providerKind: selectedProvider,
             baseURL: baseURL,
-            credential: credential
+            credential: credential,
+            lowBalanceThreshold: selectedProvider == .workbuddy2api ? nil : Decimal(20)
         )
     }
 
@@ -250,6 +270,10 @@ public struct AccountAddModalView: View {
     }
 
     private func probeDescription(_ snapshot: ProviderSnapshot) -> String {
+        if let children = snapshot.subAccounts {
+            let points = snapshot.creditMetrics?.available.map { NSDecimalNumber(decimal: $0).stringValue } ?? "--"
+            return "网关连接成功：\(children.count) 个内部账号，可用积分 \(points)"
+        }
         let balance = snapshot.balance.map { "余额 \(RelayNumberFormatter.money($0.amount, currency: $0.currency))" } ?? "余额 --"
         let today = snapshot.todaySpend.map { "今日消耗 \(RelayNumberFormatter.money($0.amount, currency: $0.currency))" } ?? "今日消耗未支持"
         return "端点验证成功：\(balance)，\(today)"

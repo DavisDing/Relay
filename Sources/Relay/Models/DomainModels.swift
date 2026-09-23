@@ -15,12 +15,13 @@ public enum Currency: String, Codable, CaseIterable, Sendable, Hashable {
 public enum ProviderKind: String, Codable, CaseIterable, Sendable, Hashable {
     case pipio = "Pipio"
     case deepseek = "DeepSeek"
+    case workbuddy2api = "workbuddy2api"
     case custom = "自定义 (OpenAI兼容)"
 }
 
 public extension ProviderKind {
     /// Providers with a production adapter in the current release.
-    static var supportedCases: [ProviderKind] { [.pipio, .deepseek] }
+    static var supportedCases: [ProviderKind] { [.pipio, .deepseek, .workbuddy2api] }
 }
 
 public enum AccountStatus: Sendable, Equatable {
@@ -47,6 +48,14 @@ public struct AccountModel: Identifiable, Sendable {
     public var quotaPerUnit: Decimal?
     public var siteUSDToCNY: Decimal?
     public var siteRateIsExpired: Bool
+    public var availablePoints: Decimal?
+    public var consumedPointsToday: Decimal?
+    public var earnedPointsToday: Decimal?
+    public var parentAccountID: UUID?
+    public var externalID: String?
+    public var disabled: Bool
+    public var manualDisabled: Bool
+    public var cooling: Bool
     
     public init(id: String = UUID().uuidString,
                 name: String,
@@ -63,7 +72,15 @@ public struct AccountModel: Identifiable, Sendable {
                 manualUSDToCNY: Decimal? = nil,
                 quotaPerUnit: Decimal? = nil,
                 siteUSDToCNY: Decimal? = nil,
-                siteRateIsExpired: Bool = false) {
+                siteRateIsExpired: Bool = false,
+                availablePoints: Decimal? = nil,
+                consumedPointsToday: Decimal? = nil,
+                earnedPointsToday: Decimal? = nil,
+                parentAccountID: UUID? = nil,
+                externalID: String? = nil,
+                disabled: Bool = false,
+                manualDisabled: Bool = false,
+                cooling: Bool = false) {
         self.id = id
         self.name = name
         self.kind = kind
@@ -80,6 +97,14 @@ public struct AccountModel: Identifiable, Sendable {
         self.quotaPerUnit = quotaPerUnit
         self.siteUSDToCNY = siteUSDToCNY
         self.siteRateIsExpired = siteRateIsExpired
+        self.availablePoints = availablePoints
+        self.consumedPointsToday = consumedPointsToday
+        self.earnedPointsToday = earnedPointsToday
+        self.parentAccountID = parentAccountID
+        self.externalID = externalID
+        self.disabled = disabled
+        self.manualDisabled = manualDisabled
+        self.cooling = cooling
     }
 }
 

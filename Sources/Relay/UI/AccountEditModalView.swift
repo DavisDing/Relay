@@ -5,12 +5,13 @@ import SwiftUI
 public struct AccountEditModalView: View {
     public let account: AccountModel
     public var onDismiss: () -> Void
-    public var onSave: (String, Decimal?, ProviderCredential?, ManualExchangeRateUpdate) async throws -> Void
+    public var onSave: (String, Decimal?, ProviderCredential?, ManualExchangeRateUpdate, String?) async throws -> Void
 
     @State private var displayName: String
     @State private var threshold: String
     @State private var manualRate: String
     @State private var replacementSecret = ""
+    @State private var gatewayURL: String
     @State private var replacementUserID = ""
     @State private var isSaving = false
     @State private var errorMessage: String?
@@ -18,13 +19,14 @@ public struct AccountEditModalView: View {
     public init(
         account: AccountModel,
         onDismiss: @escaping () -> Void = {},
-        onSave: @escaping (String, Decimal?, ProviderCredential?, ManualExchangeRateUpdate) async throws -> Void = { _, _, _, _ in }
+        onSave: @escaping (String, Decimal?, ProviderCredential?, ManualExchangeRateUpdate, String?) async throws -> Void = { _, _, _, _, _ in }
     ) {
         self.account = account
         self.onDismiss = onDismiss
         self.onSave = onSave
         _manualRate = State(initialValue: account.manualUSDToCNY.map { NSDecimalNumber(decimal: $0).stringValue } ?? "")
         _displayName = State(initialValue: account.name)
+        _gatewayURL = State(initialValue: account.baseURL)
         _threshold = State(initialValue: account.lowBalanceThreshold.map { NSDecimalNumber(decimal: $0).stringValue } ?? "20")
     }
 
@@ -41,19 +43,26 @@ public struct AccountEditModalView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text(account.baseURL).font(.system(size: 11)).foregroundStyle(.secondary)
+                    if account.kind == .workbuddy2api {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("网关地址").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
+                            TextField("http://localhost:7863", text: $gatewayURL).textFieldStyle(.roundedBorder)
+                        }
+                    } else {
+                        Text(account.baseURL).font(.system(size: 11)).foregroundStyle(.secondary)
+                    }
 
                     VStack(alignment: .leading, spacing: 6) {
                         Text("显示名称").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
                         TextField("账号名称", text: $displayName).textFieldStyle(.roundedBorder)
                     }
 
-                    VStack(alignment: .leading, spacing: 6) {
+                    if account.kind != .workbuddy2api { VStack(alignment: .leading, spacing: 6) {
                         Text("低余额阈值（账户原生币种）").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
                         TextField("20", text: $threshold).textFieldStyle(.roundedBorder)
-                    }
+                    } }
 
-                    if account.kind == .pipio || account.currency == .usd {
+                    if account.kind != .workbuddy2api && (account.kind == .pipio || account.currency == .usd) {
                         Divider()
                         exchangeRateFields
                     }
@@ -129,7 +138,7 @@ public struct AccountEditModalView: View {
         let name = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { errorMessage = "显示名称不能为空。"; return }
         let parsedThreshold = Decimal(string: threshold.trimmingCharacters(in: .whitespacesAndNewlines), locale: Locale(identifier: "en_US_POSIX"))
-        guard parsedThreshold != nil else { errorMessage = "低余额阈值必须是数字。"; return }
+        guard account.kind == .workbuddy2api || parsedThreshold != nil else { errorMessage = "低余额阈值必须是数字。"; return }
 
         let rateUpdate: ManualExchangeRateUpdate
         do {
@@ -153,7 +162,8 @@ public struct AccountEditModalView: View {
         errorMessage = nil
         Task { @MainActor in
             do {
-                try await onSave(name, parsedThreshold, credential, rateUpdate)
+                try await onSave(name, account.kind == .workbuddy2api ? nil : parsedThreshold, credential, rateUpdate,
+                    account.kind == .workbuddy2api && gatewayURL != account.baseURL ? gatewayURL : nil)
                 isSaving = false
                 onDismiss()
             } catch {

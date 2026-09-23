@@ -10,19 +10,25 @@ public struct AccountDetailView: View {
     public let modelUsages: [ModelUsageItem]
     public let deepSeekUsageReport: DeepSeekUsageReport?
     public var onClose: () -> Void
+    public var onSubAccountAction: (ProviderSubAccountAction, UUID, String) async throws -> Void
+    @State private var confirmingAction: ProviderSubAccountAction?
+    @State private var actionError: String?
+    @State private var isActing = false
 
     public init(
         account: AccountModel,
         spendPoints: [DailySpendPoint] = [],
         modelUsages: [ModelUsageItem] = [],
         deepSeekUsageReport: DeepSeekUsageReport? = nil,
-        onClose: @escaping () -> Void = {}
+        onClose: @escaping () -> Void = {},
+        onSubAccountAction: @escaping (ProviderSubAccountAction, UUID, String) async throws -> Void = { _, _, _ in }
     ) {
         self.account = account
         self.spendPoints = spendPoints
         self.modelUsages = modelUsages
         self.deepSeekUsageReport = deepSeekUsageReport
         self.onClose = onClose
+        self.onSubAccountAction = onSubAccountAction
     }
 
     public var body: some View {
@@ -31,14 +37,18 @@ public struct AccountDetailView: View {
 
             ScrollView(.vertical, showsIndicators: true) {
                 LazyVStack(alignment: .leading, spacing: 16) {
-                    metrics
-                    trendSection
+                    if account.kind == .workbuddy2api {
+                        creditDetails
+                    } else {
+                        metrics
+                        trendSection
+                    }
 
                     if account.kind == .deepseek {
                         DeepSeekUsageSection(
                             report: deepSeekUsageReport ?? UUID(uuidString: account.id).map { DeepSeekUsageReport.unsupported(accountID: $0) }
                         )
-                    } else {
+                    } else if account.kind != .workbuddy2api {
                         modelUsageSection
                     }
                 }
@@ -72,6 +82,22 @@ public struct AccountDetailView: View {
         }
         .frame(width: 400, height: 520)
         .relayPanelSurface(cornerRadius: RelayVisualStyle.panelCornerRadius)
+        .alert(confirmingAction == .enable ? "确认启用内部账号？" : "确认手动停用内部账号？",
+               isPresented: Binding(get: { confirmingAction != nil }, set: { if !$0 { confirmingAction = nil } })) {
+            Button("取消", role: .cancel) { confirmingAction = nil }
+            Button("确认") {
+                guard let action = confirmingAction, let parent = account.parentAccountID,
+                      let uid = account.externalID else { return }
+                confirmingAction = nil
+                isActing = true
+                Task { @MainActor in
+                    do { try await onSubAccountAction(action, parent, uid); onClose() }
+                    catch { actionError = error.localizedDescription; isActing = false }
+                }
+            }
+        } message: {
+            Text("此操作会调用网关管理接口；网关必须启用 admin.enabled。启用仅解除手动停用，不会解除系统自动停用。")
+        }
     }
 
     private var header: some View {
@@ -105,6 +131,33 @@ public struct AccountDetailView: View {
         .padding(.horizontal, 18)
         .padding(.top, 14)
         .padding(.bottom, 12)
+    }
+
+    private var creditDetails: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 9) {
+                MetricCard(title: "可用积分",
+                    value: account.availablePoints.map { NSDecimalNumber(decimal: $0).stringValue } ?? "--",
+                    subTitle: "网关当前快照", accentColor: .primary)
+                MetricCard(title: "今日消耗 / 获取", value: "暂不支持",
+                    subTitle: "暂无可靠自然日数据", accentColor: .secondary)
+            }
+            Text("内部 UID：\(account.externalID ?? "--")")
+                .font(.system(size: 11, design: .monospaced)).textSelection(.enabled)
+            Text("系统停用：\(account.disabled ? "是" : "否") · 手动停用：\(account.manualDisabled ? "是" : "否") · 冷却：\(account.cooling ? "是" : "否")")
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+            Text("网关尚未提供可靠的按自然日积分流水，因此不显示积分走势图。")
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+            if let actionError { Text(actionError).font(.system(size: 11)).foregroundStyle(.red) }
+            HStack {
+                Button("手动停用") { confirmingAction = .disable(reason: "由 Relay 手动停用") }
+                    .disabled(isActing || account.manualDisabled)
+                Button("解除手动停用") { confirmingAction = .enable }
+                    .disabled(isActing || !account.manualDisabled)
+            }.buttonStyle(.bordered)
+            Text("管理功能需在 workbuddy2api 中启用 admin.enabled；操作后会刷新快照。")
+                .font(.system(size: 10)).foregroundStyle(.secondary)
+        }
     }
 
     private var metrics: some View {

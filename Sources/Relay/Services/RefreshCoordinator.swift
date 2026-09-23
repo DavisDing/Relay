@@ -102,11 +102,15 @@ public final class RefreshCoordinator {
             capabilities: fetched.capabilities,
             freshness: .stale,
             fetchedAt: fetched.fetchedAt,
-            rate: fetched.rate
+            rate: fetched.rate,
+            creditMetrics: fetched.creditMetrics,
+            subAccounts: fetched.subAccounts
         ) : fetched
         try repository.upsertSnapshot(snapshot)
-        let day = calendar.startOfDay(for: snapshot.fetchedAt)
-        try repository.upsertDailyUsage(DailyUsageRecord(accountID: account.id, day: day, spend: snapshot.todaySpend, updatedAt: snapshot.fetchedAt))
+        if account.providerKind != .workbuddy2api {
+            let day = calendar.startOfDay(for: snapshot.fetchedAt)
+            try repository.upsertDailyUsage(DailyUsageRecord(accountID: account.id, day: day, spend: snapshot.todaySpend, updatedAt: snapshot.fetchedAt))
+        }
 
         // The seven-day backfill is intentionally performed only during initial
         // account setup. Regular refreshes query and persist the current day so
