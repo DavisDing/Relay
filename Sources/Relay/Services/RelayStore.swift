@@ -192,7 +192,8 @@ public final class RelayStore: ObservableObject {
         lowBalanceThreshold: Decimal?,
         replacementCredential: ProviderCredential? = nil,
         replacementBaseURL: String? = nil,
-        manualUSDToCNY: ManualExchangeRateUpdate = .unchanged
+        manualUSDToCNY: ManualExchangeRateUpdate = .unchanged,
+        deepSeekUserTokenUpdate: OptionalStringUpdate = .unchanged
     ) async throws {
         do {
             try await accountService.updateAccount(
@@ -201,7 +202,8 @@ public final class RelayStore: ObservableObject {
                 lowBalanceThreshold: lowBalanceThreshold,
                 replacementCredential: replacementCredential,
                 replacementBaseURL: replacementBaseURL,
-                manualUSDToCNY: manualUSDToCNY
+                manualUSDToCNY: manualUSDToCNY,
+                deepSeekUserTokenUpdate: deepSeekUserTokenUpdate
             )
             accountErrors.removeValue(forKey: accountID.uuidString)
             reloadFromRepository()
@@ -223,6 +225,46 @@ public final class RelayStore: ObservableObject {
 
     public func dailyUsage(accountID: UUID, limit: Int = 30) -> [DailyUsageRecord] {
         (try? repository.dailyUsage(accountID: accountID, limit: limit)) ?? []
+    }
+
+    /// Builds the detail-page projection from the same persisted snapshot and
+    /// daily history used by the main popover. Credentials never enter this
+    /// projection; the report is only a view model for already-fetched data.
+    public func deepSeekUsageReport(for accountID: UUID) -> DeepSeekUsageReport? {
+        guard accounts.first(where: { UUID(uuidString: $0.id) == accountID })?.kind == .deepseek,
+              let snapshot = snapshots.first(where: { $0.accountID == accountID }) else {
+            return nil
+        }
+        // A fresh balance-only snapshot means no platform token was configured.
+        // Do not turn its empty usage fields into a "complete" usage report.
+        if snapshot.freshness == .fresh,
+           !snapshot.capabilities.contains(.monthlyUsage),
+           !snapshot.capabilities.contains(.requestCount),
+           !snapshot.capabilities.contains(.modelUsage) {
+            return .unsupported(accountID: accountID, reason: .userTokenNotConfigured, fetchedAt: snapshot.fetchedAt)
+        }
+        let dailyCalendar = DeepSeekUsageService.historyCalendar
+        let daily = dailyUsage(accountID: accountID, limit: 30).map { record in
+            DeepSeekDailyUsage(
+                day: dailyCalendar.startOfDay(for: record.day),
+                spend: record.spend
+            )
+        }
+        let models = snapshot.modelUsages?.map { summary in
+            DeepSeekModelUsage(
+                modelName: summary.modelName,
+                spend: summary.spend,
+                tokenCount: summary.tokenCount,
+                requestCount: summary.requestCount
+            )
+        }
+        return DeepSeekUsageReport(
+            accountID: accountID,
+            coverage: snapshot.freshness == .partial ? .partial : .complete,
+            daily: daily,
+            models: models,
+            fetchedAt: snapshot.fetchedAt
+        )
     }
 
     public func accountModel(id: UUID) -> AccountModel? {

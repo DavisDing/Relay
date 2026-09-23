@@ -108,7 +108,10 @@ public final class RefreshCoordinator {
         ) : fetched
         try repository.upsertSnapshot(snapshot)
         if account.providerKind != .workbuddy2api {
-            let day = calendar.startOfDay(for: snapshot.fetchedAt)
+            let historyCalendar = account.providerKind == .deepseek
+                ? DeepSeekUsageService.historyCalendar
+                : calendar
+            let day = historyCalendar.startOfDay(for: snapshot.fetchedAt)
             try repository.upsertDailyUsage(DailyUsageRecord(accountID: account.id, day: day, spend: snapshot.todaySpend, updatedAt: snapshot.fetchedAt))
         }
 

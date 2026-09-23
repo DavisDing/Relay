@@ -74,6 +74,9 @@ public final class AccountService {
             now: Date(),
             calendar: calendar
         )
+        let historyCalendar = account.providerKind == .deepseek
+            ? DeepSeekUsageService.historyCalendar
+            : calendar
 
         try await credentialStore.save(draft.credential, reference: account.credentialReference)
         do {
@@ -85,24 +88,29 @@ public final class AccountService {
             if account.providerKind != .workbuddy2api {
                 try repository.upsertDailyUsage(DailyUsageRecord(
                     accountID: account.id,
-                    day: calendar.startOfDay(for: snapshot.fetchedAt),
+                    day: historyCalendar.startOfDay(for: snapshot.fetchedAt),
                     spend: snapshot.todaySpend,
                     updatedAt: snapshot.fetchedAt
                 ))
             }
-            // Pipio has a documented range-stat endpoint. Backfill available
-            // daily aggregates at creation time; providers without a public
-            // history endpoint return an empty list through the protocol.
+            // Backfill the last seven days for providers with a configured
+            // history source. DeepSeek uses the optional platform userToken;
+            // without it the adapter makes no platform request.
             let history = (try? await adapter.fetchDailyUsage(
                 for: account,
                 credential: draft.credential,
                 rate: rate,
                 endingAt: snapshot.fetchedAt,
                 days: 7,
-                calendar: calendar
+                calendar: historyCalendar
             )) ?? []
-            for record in history { try repository.upsertDailyUsage(record) }
-            await rateService.seed(rate)
+            // Today's snapshot is authoritative for the current local day.
+            // Never let a historical range response replace it.
+            let today = historyCalendar.startOfDay(for: snapshot.fetchedAt)
+            for record in history where historyCalendar.startOfDay(for: record.day) != today {
+                try repository.upsertDailyUsage(record)
+            }
+            await rateService.seed(snapshot.rate)
             return account
         } catch {
             try? await credentialStore.delete(reference: account.credentialReference)
@@ -164,7 +172,8 @@ public final class AccountService {
         lowBalanceThreshold: Decimal?,
         replacementCredential: ProviderCredential? = nil,
         replacementBaseURL: String? = nil,
-        manualUSDToCNY: ManualExchangeRateUpdate = .unchanged
+        manualUSDToCNY: ManualExchangeRateUpdate = .unchanged,
+        deepSeekUserTokenUpdate: OptionalStringUpdate = .unchanged
     ) async throws {
         guard var account = try repository.account(id: accountID) else { return }
         let name = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -177,11 +186,13 @@ public final class AccountService {
             account.manualUSDToCNY = value
         }
 
-        // Keep the previous credential until the metadata write succeeds. If the
-        // repository fails after saving a replacement, restore the old value so an
-        // edit cannot leave the account pointing at an uncommitted secret.
+        let tokenUpdateApplies = account.providerKind == .deepseek && {
+            if case .set = deepSeekUserTokenUpdate { return true }
+            return false
+        }()
+        let credentialNeedsRead = replacementCredential != nil || tokenUpdateApplies || replacementBaseURL != nil
         let previousCredential: ProviderCredential?
-        if replacementCredential != nil {
+        if credentialNeedsRead {
             do {
                 previousCredential = try await credentialStore.read(reference: account.credentialReference)
             } catch CredentialStoreError.notFound {
@@ -198,24 +209,51 @@ public final class AccountService {
             }
             account.siteOrigin = try ProviderURLNormalizer.workbuddyOrigin(from: url)
         }
-        if replacementCredential != nil || replacementBaseURL != nil {
-            let credential: ProviderCredential
-            if let replacementCredential { credential = replacementCredential }
-            else { credential = try await credentialStore.read(reference: account.credentialReference) }
-            let adapter = try adapters.adapter(for: account.providerKind)
-            _ = try await adapter.fetchAccountRate(for: account, credential: credential)
-            try await adapter.validateAccount(account, credential: credential)
-            if let replacementCredential {
-                try await credentialStore.save(replacementCredential, reference: account.credentialReference)
+
+        var effectiveCredential = previousCredential
+        if let replacementCredential {
+            let preservedDeepSeekToken: String?
+            if account.providerKind == .deepseek, previousCredential != nil {
+                preservedDeepSeekToken = previousCredential?.deepSeekUserToken
+            } else {
+                preservedDeepSeekToken = replacementCredential.deepSeekUserToken
             }
+            effectiveCredential = ProviderCredential(
+                secret: replacementCredential.secret,
+                pipioUserID: replacementCredential.pipioUserID,
+                deepSeekUserToken: preservedDeepSeekToken
+            )
         }
+        if account.providerKind == .deepseek,
+           case let .set(value) = deepSeekUserTokenUpdate,
+           let existing = effectiveCredential {
+            let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+            effectiveCredential = ProviderCredential(
+                secret: existing.secret,
+                pipioUserID: existing.pipioUserID,
+                deepSeekUserToken: normalized.flatMap { $0.isEmpty ? nil : $0 }
+            )
+        }
+
+        let credentialChanged = effectiveCredential != nil && effectiveCredential != previousCredential
+        if credentialNeedsRead || replacementBaseURL != nil {
+            guard let credential = effectiveCredential else { throw CredentialStoreError.notFound }
+            let adapter = try adapters.adapter(for: account.providerKind)
+            let rate = try await adapter.fetchAccountRate(for: account, credential: credential)
+            try await adapter.validateAccount(account, credential: credential)
+            if credentialChanged {
+                try await credentialStore.save(credential, reference: account.credentialReference)
+            }
+            if rate.accountID == account.id { await rateService.seed(rate) }
+        }
+
         account.displayName = name
         account.lowBalanceThreshold = account.providerKind == .workbuddy2api ? nil : lowBalanceThreshold
         account.updatedAt = nextUpdateDate(after: account.updatedAt)
         do {
             try repository.upsertAccount(account)
         } catch {
-            if replacementCredential != nil {
+            if credentialChanged {
                 do {
                     if let previousCredential {
                         try await credentialStore.save(previousCredential, reference: account.credentialReference)

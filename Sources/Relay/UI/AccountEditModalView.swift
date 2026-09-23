@@ -5,7 +5,7 @@ import SwiftUI
 public struct AccountEditModalView: View {
     public let account: AccountModel
     public var onDismiss: () -> Void
-    public var onSave: (String, Decimal?, ProviderCredential?, ManualExchangeRateUpdate, String?) async throws -> Void
+    public var onSave: (String, Decimal?, ProviderCredential?, ManualExchangeRateUpdate, String?, OptionalStringUpdate) async throws -> Void
 
     @State private var displayName: String
     @State private var threshold: String
@@ -13,13 +13,15 @@ public struct AccountEditModalView: View {
     @State private var replacementSecret = ""
     @State private var gatewayURL: String
     @State private var replacementUserID = ""
+    @State private var replacementDeepSeekUserToken = ""
+    @State private var clearDeepSeekUserToken = false
     @State private var isSaving = false
     @State private var errorMessage: String?
 
     public init(
         account: AccountModel,
         onDismiss: @escaping () -> Void = {},
-        onSave: @escaping (String, Decimal?, ProviderCredential?, ManualExchangeRateUpdate, String?) async throws -> Void = { _, _, _, _, _ in }
+        onSave: @escaping (String, Decimal?, ProviderCredential?, ManualExchangeRateUpdate, String?, OptionalStringUpdate) async throws -> Void = { _, _, _, _, _, _ in }
     ) {
         self.account = account
         self.onDismiss = onDismiss
@@ -75,6 +77,15 @@ public struct AccountEditModalView: View {
                     if account.kind == .pipio {
                         TextField("新的 Pipio-User 数值 ID", text: $replacementUserID)
                             .textFieldStyle(.roundedBorder)
+                    }
+                    if account.kind == .deepseek {
+                        SecureField("新的平台 userToken（留空保持不变）", text: $replacementDeepSeekUserToken)
+                            .textFieldStyle(.roundedBorder)
+                        Toggle("清空已保存的 userToken", isOn: $clearDeepSeekUserToken)
+                            .font(.system(size: 11))
+                        Text("不填写且不勾选不会修改；填写后用于历史用量；勾选会清空并恢复为仅查询余额。")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
                     }
                 }
                 .padding(2)
@@ -157,13 +168,23 @@ public struct AccountEditModalView: View {
         } else {
             credential = ProviderCredential(secret: secret, pipioUserID: account.kind == .pipio ? userID : nil)
         }
+        let tokenUpdate: OptionalStringUpdate
+        if account.kind != .deepseek {
+            tokenUpdate = .unchanged
+        } else if clearDeepSeekUserToken {
+            tokenUpdate = .set(nil)
+        } else {
+            let token = replacementDeepSeekUserToken.trimmingCharacters(in: .whitespacesAndNewlines)
+            tokenUpdate = token.isEmpty ? .unchanged : .set(token)
+        }
 
         isSaving = true
         errorMessage = nil
         Task { @MainActor in
             do {
                 try await onSave(name, account.kind == .workbuddy2api ? nil : parsedThreshold, credential, rateUpdate,
-                    account.kind == .workbuddy2api && gatewayURL != account.baseURL ? gatewayURL : nil)
+                    account.kind == .workbuddy2api && gatewayURL != account.baseURL ? gatewayURL : nil,
+                    tokenUpdate)
                 isSaving = false
                 onDismiss()
             } catch {

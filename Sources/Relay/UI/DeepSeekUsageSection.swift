@@ -16,16 +16,38 @@ public struct DeepSeekUsageSection: View {
                 .foregroundColor(.secondary)
 
             switch report?.coverage {
-            case .complete, .partial:
+            case .complete:
                 usageRows
-            case .unsupported, .none:
-                Text("DeepSeek 官方 API 暂未提供历史或分模型账户用量。")
+            case .partial:
+                Text("平台用量接口可能失效或 userToken 已过期；余额仍可查询。下方历史数据可能不是最新。")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                usageRows
+            case .unsupported:
+                Text(unavailableMessage)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            case .none:
+                Text("暂无 DeepSeek 用量数据。")
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var unavailableMessage: String {
+        switch report?.unavailableReason {
+        case .userTokenNotConfigured:
+            return "未配置平台 userToken；当前仅查询余额。"
+        case .officialAPIHasNoHistoricalOrModelUsageEndpoint:
+            return "DeepSeek 平台用量接口不可用。"
+        case .none:
+            return "暂无 DeepSeek 用量数据。"
+        }
     }
 
     @ViewBuilder
@@ -48,7 +70,7 @@ public struct DeepSeekUsageSection: View {
         } else if let report, let daily = report.daily, !daily.isEmpty {
             ForEach(daily) { day in
                 HStack {
-                    Text(day.day.formatted(date: .abbreviated, time: .omitted))
+                    Text(formattedDay(day.day))
                         .font(.system(size: 11))
                     Spacer()
                     metricText(day.tokenCount.map(String.init), label: "tokens")
@@ -65,6 +87,16 @@ public struct DeepSeekUsageSection: View {
                 .font(.system(size: 11))
                 .foregroundColor(.secondary)
         }
+    }
+
+
+    private func formattedDay(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = .current
+        formatter.timeZone = DeepSeekUsageService.historyCalendar.timeZone
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return formatter.string(from: date)
     }
 
     @ViewBuilder

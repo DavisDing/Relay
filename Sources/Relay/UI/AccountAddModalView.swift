@@ -9,6 +9,7 @@ public struct AccountAddModalView: View {
     @State private var pipioToken = ""
     @State private var deepseekBaseURL = "https://api.deepseek.com"
     @State private var deepseekApiKey = ""
+    @State private var deepseekUserToken = ""
     @State private var workbuddyBaseURL = "http://localhost:7863"
     @State private var workbuddyApiKey = ""
     @State private var isTesting = false
@@ -198,6 +199,16 @@ public struct AccountAddModalView: View {
                     .font(.system(size: 10))
                     .foregroundColor(.secondary.opacity(0.8))
             }
+            VStack(alignment: .leading, spacing: 4) {
+                Text("DeepSeek 平台 userToken（可选）")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.secondary)
+                SecureField("填写后获取历史用量和消费", text: $deepseekUserToken)
+                    .textFieldStyle(.roundedBorder)
+                Text("不填写只获取余额；填写后首次回填最近 7 天。仅使用你手动输入的 token，不读取浏览器 Cookie；平台历史接口是内部接口，可能失效。")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary.opacity(0.8))
+            }
         }
     }
 
@@ -223,7 +234,12 @@ public struct AccountAddModalView: View {
             )
         case .deepseek:
             baseURL = deepseekBaseURL
-            credential = ProviderCredential(secret: deepseekApiKey)
+            credential = ProviderCredential(
+                secret: deepseekApiKey,
+                deepSeekUserToken: deepseekUserToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? nil
+                    : deepseekUserToken.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
         case .workbuddy2api:
             baseURL = workbuddyBaseURL
             credential = ProviderCredential(secret: workbuddyApiKey)

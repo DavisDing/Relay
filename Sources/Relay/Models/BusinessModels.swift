@@ -47,6 +47,12 @@ public enum ManualExchangeRateUpdate: Sendable {
     case set(Decimal?)
 }
 
+/// Explicit optional-string edit semantics. `set(nil)` means clear the saved value.
+public enum OptionalStringUpdate: Sendable {
+    case unchanged
+    case set(String?)
+}
+
 public enum USDToCNYRate {
     public static func isValid(_ value: Decimal) -> Bool {
         !value.isNaN && value > 0
@@ -65,16 +71,24 @@ public enum USDToCNYRate {
 }
 
 public struct ProviderCredential: Codable, Sendable, Equatable, CustomStringConvertible {
-    public static let currentSchemaVersion = 1
+    public static let currentSchemaVersion = 2
 
     public let schemaVersion: Int
     public let secret: String
     public let pipioUserID: String?
+    /// Optional DeepSeek platform session token used only for platform usage APIs.
+    /// It is never exported in RelaySyncData because credentials live separately.
+    public let deepSeekUserToken: String?
 
-    public init(secret: String, pipioUserID: String? = nil) {
+    public init(
+        secret: String,
+        pipioUserID: String? = nil,
+        deepSeekUserToken: String? = nil
+    ) {
         self.schemaVersion = Self.currentSchemaVersion
         self.secret = secret
         self.pipioUserID = pipioUserID
+        self.deepSeekUserToken = deepSeekUserToken
     }
 
     public var description: String { "ProviderCredential(<redacted>)" }

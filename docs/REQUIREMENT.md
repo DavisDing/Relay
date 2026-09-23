@@ -43,7 +43,7 @@ Relay（驿站）是一款仅面向 Apple Silicon 的 macOS 菜单栏应用，�
 
 ### P1：产品完整度
 
-1. DeepSeek 官方余额接口接入；不使用浏览器会话 userToken 或私有网页接口。
+1. DeepSeek 官方余额接口接入；历史用量通过用户手动提供的可选平台 userToken 获取，不读取浏览器会话或 Cookie。
 2. 7 日/30 日趋势、分模型用量。
 3. 开机启动、快捷键、低余额阈值和通知。
 
@@ -137,7 +137,7 @@ Pipio-User: <numeric-user-id>
 ### 5.6 文件夹同步
 
 - 不使用 CloudKit Container。同步只使用 iCloud 云盘普通文件，默认逻辑目录为 `iCloud Drive/文稿/Relay`。
-- 同步文件只包含账户元数据、聚合历史、用户偏好和删除 tombstone，不包含令牌、Pipio 用户 ID、API Key、userToken、Cookie 或原始日志。
+- 同步文件只包含账户元数据、聚合历史、用户偏好和删除 tombstone，不包含令牌、Pipio 用户 ID、API Key、DeepSeek userToken、Cookie 或原始日志。
 - 凭据始终只保存在当前 Mac 的 Relay 私有应用数据目录，不通过 iCloud Keychain、iCloud 云盘同步文件或其他 iCloud 同步机制跨设备同步；其他 Mac 必须重新录入凭据。
 - 首次启用时通过系统目录选择器确认 iCloud 云盘的“文稿/Relay”目录；实现不得拼接本地化显示路径，而应保存用户确认目录的持久化 bookmark。目录不可访问、冲突或离线时，本机功能必须继续可用。
 - 关闭同步只停止读写同步文件，不删除本地数据；删除同步文件需二次确认。
@@ -218,7 +218,7 @@ Pipio-User: <numeric-user-id>
 - 自动充值、扣费或调用模型。
 - Relay 自建账号、服务器或跨 Apple ID 数据共享。
 - CloudKit Container、CloudKit Database 和凭据 iCloud 同步。
-- 浏览器爬虫、复制浏览器会话、私有网页接口和绕过站点认证。
+- 浏览器爬虫、复制浏览器会话、自动读取 Cookie、自动获取网页登录状态和绕过站点认证；DeepSeek 平台历史接口仅在用户手动提供 userToken 时按已确认路径访问。
 - iPhone、iPad、Android、Web 客户端。
 - 深度财务分析和税务/账单核对。
 
@@ -247,7 +247,7 @@ SwiftData 是随 Apple 系统提供的原生框架，不是需要单独购买的
 - 不考虑使用 CloudKit Container；同步固定采用 iCloud 云盘普通文件，默认逻辑目录为 `iCloud Drive/文稿/Relay`。
 - 凭据不通过 iCloud Keychain、iCloud 云盘文件或其他 iCloud 机制同步，只保存在每台 Mac 的 Relay 私有应用数据目录中。
 - GitHub Releases 发布，不在 App Store 上架。
-- DeepSeek 首期只使用官方接口，不复制浏览器会话或调用私有网页接口。
+- DeepSeek 余额使用官方公开接口；历史用量使用用户手动提供的可选平台 userToken 调用平台网页内部接口。Relay 不读取浏览器 Cookie、不自动获取网页登录状态，并在界面明确提示该接口可能变更。
 - Pipio 额度换算参数只由站点提供，刷新频率可配置，默认每 7 天；美元/人民币汇率允许在编辑账户页手动设置。
 - 历史默认保留 1 年，用户可切换为永久。
 - 低余额阈值按账户配置，默认值为 20。
@@ -279,13 +279,12 @@ SwiftData 是随 Apple 系统提供的原生框架，不是需要单独购买的
 仍未完成的产品项：
 
 - 全局快捷键。
-- DeepSeek 历史用量和模型用量（官方余额接口不提供时保持未知）。
 - iCloud 冲突合并的用户可见提示、下载状态和真实多设备运行验证。
 
 ## 15. 2026-09-20 本轮实现结果
 
 - 全局快捷键：支持“显示/隐藏面板”和“刷新全部账户”两个动作；不新增“打开设置”快捷键。配置为本机元数据，不进入同步文件。
-- DeepSeek 用量：若官方 API 不提供账户历史或分模型用量，产品必须显示未支持状态，并保持对应字段为 `nil`；禁止通过网页会话、Cookie、userToken 或猜测的私有端点补齐数据。
+- DeepSeek 用量：未填写 userToken 时显示“仅查询余额”，对应历史字段保持 `nil`；填写后按平台 amount/cost 接口解析历史日用量和模型用量。平台接口认证失败或结构变化时保留余额并标记 partial，不把未知数据写成 0。userToken 仅本机保存，不进入同步数据；月份、日桶、今日消费和首次 7 天回填固定按 GMT+8（北京时间）计算。
 - iCloud 冲突：冲突发生时保留本机与所有远端候选，用户选择前不得自动应用 resolution、覆盖主文件或删除冲突文件；选择后才允许应用显式决策。
 - 多设备验收：确定性 fixture 可验证 schema、tombstone、凭据排除、冲突副本保留和离线本地可用性；真实第二台 Mac 验证必须单独标记，fixture 不得替代实机证据。
 

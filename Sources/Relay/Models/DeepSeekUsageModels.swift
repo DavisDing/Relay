@@ -75,8 +75,10 @@ public struct DeepSeekModelUsage: Sendable, Equatable, Identifiable {
 }
 
 public enum DeepSeekUsageUnavailableReason: String, Codable, Sendable, Equatable {
+    /// The optional platform session token was not supplied by the user.
+    case userTokenNotConfigured
     /// The documented account endpoint exposes balance only. Relay does not
-    /// call undocumented dashboard or browser endpoints to obtain usage.
+    /// call undocumented dashboard or browser endpoints without user consent.
     case officialAPIHasNoHistoricalOrModelUsageEndpoint
 }
 
@@ -106,12 +108,13 @@ public struct DeepSeekUsageReport: Sendable, Equatable {
 
     public static func unsupported(
         accountID: UUID,
+        reason: DeepSeekUsageUnavailableReason = .officialAPIHasNoHistoricalOrModelUsageEndpoint,
         fetchedAt: Date = Date()
     ) -> Self {
         Self(
             accountID: accountID,
             coverage: .unsupported,
-            unavailableReason: .officialAPIHasNoHistoricalOrModelUsageEndpoint,
+            unavailableReason: reason,
             fetchedAt: fetchedAt
         )
     }

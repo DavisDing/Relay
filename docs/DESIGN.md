@@ -147,9 +147,9 @@ amount = quota / quota_per_unit
 
 #### DeepSeekAdapter
 
-- P0 不实现，P1 仅接入 DeepSeek 官方余额接口。
+- P0 不实现，P1 接入 DeepSeek 官方余额接口；历史用量作为 userToken 可选能力接入。
 - 用户必须主动提供 DeepSeek 官方 API Key；Relay 使用该 Key 调用官方账户余额端点。
-- 不读取浏览器 Cookie，不要求网页 userToken，不复制登录会话，也不调用仅供 DeepSeek 网站内部使用的私有接口。
+- 不读取浏览器 Cookie，不复制登录会话。用户可手动提供可选平台 userToken，仅用于 DeepSeek 网站的历史用量接口；该接口属于网页内部接口，可能变更，失败时降级为余额可用。
 - 官方接口无法提供的用量维度显示为“不支持”，不通过网页抓包补齐。
 
 ### 3.5 RefreshCoordinator
@@ -179,7 +179,7 @@ amount = quota / quota_per_unit
 
 职责：保存账户元数据、最近快照、日聚合、模型聚合、偏好和同步状态。
 
-不保存：系统令牌、Pipio 用户 ID、API Key、Cookie、网页 userToken、完整原始日志响应。
+不保存：系统令牌、Pipio 用户 ID、API Key、Cookie、完整原始日志响应；DeepSeek userToken 仅保存在本机凭据文件，不进入同步数据。
 
 ### 3.8 FileSyncService
 
@@ -335,7 +335,7 @@ GET https://api.deepseek.com/user/balance
 Authorization: Bearer <deepseek-api-key>
 ```
 
-只解析官方返回的可用状态、币种和余额字段。DeepSeek 官方 API Key 存本机 Relay 凭据文件；不接受浏览器 Cookie、网页 userToken 或网站内部接口凭据。
+只解析官方返回的可用状态、币种和余额字段。DeepSeek API Key 存本机 Relay 凭据文件，并固定请求 `GET https://api.deepseek.com/user/balance`。可选平台 userToken 另存于同一本机凭据文件，仅请求 `https://platform.deepseek.com/api/v0/usage/amount` 和 `/api/v0/usage/cost`，不读取 Cookie。
 
 ## 7. 数据设计
 
@@ -536,7 +536,7 @@ Pipio 表单明确区分：
 |---|---|---|
 | Pipio 管理接口非稳定公开合约 | 字段/路径变化导致统计失败 | 适配器隔离、容错 DTO、能力降级、契约测试 |
 | 管理令牌与模型 API Key 语义不同 | 将管理令牌误用于 `/v1/models` 会得到 401 | 适配器分离 management/model credential；管理接口只走 `/api` |
-| DeepSeek 官方接口指标有限 | 无法提供网页上的全部用量维度 | 只展示官方接口数据，不复制浏览器会话 |
+| DeepSeek 平台历史接口是网页内部接口 | 接口/响应可能变化，userToken 可能过期 | 用户主动提供 token；解析失败保留余额并标记 partial，不把未知值写成 0 |
 | iCloud 云盘是文件同步而非数据库 | 多设备并发可能产生冲突副本 | NSFileCoordinator、版本字段、确定性合并和冲突提示 |
 | 首期为未公证、非沙盒的 GitHub 构建 | Gatekeeper 警告且应用权限边界弱于沙盒应用 | 发布校验和、公开源码/构建流程、最小文件访问、安装风险提示；优先使用系统“仍要打开”，不把移除 quarantine 冒充认证；未来取得 Developer ID 后签名公证并评估沙盒 |
 | 多币种汇总 | 过期或缺失汇率导致总额误导 | 使用 Pipio 发布值、默认 7 天刷新、过期标记；无法可靠换算时不汇总 |
@@ -545,7 +545,7 @@ Pipio 表单明确区分：
 
 `NONE`：当前 Architecture 阶段无待确认项。
 
-已确认：Bundle ID 为 `cloud.dinghao.relay`；GitHub Releases 发布；不使用 CloudKit Container；同步使用 `iCloud Drive/文稿/Relay` 普通文件；凭据不通过任何 iCloud 机制同步；凭据存放在本机私有应用数据目录而不是 Keychain；DeepSeek 仅使用官方接口；汇率默认每 7 天刷新；历史默认 1 年并可选永久；低余额默认 20；今日数据不完整时隐藏该字段。
+已确认：Bundle ID 为 `cloud.dinghao.relay`；GitHub Releases 发布；不使用 CloudKit Container；同步使用 `iCloud Drive/文稿/Relay` 普通文件；凭据不通过任何 iCloud 机制同步；凭据存放在本机私有应用数据目录而不是 Keychain；DeepSeek 余额使用官方接口，历史用量使用可选的用户手动输入 userToken；汇率默认每 7 天刷新；历史默认 1 年并可选永久；低余额默认 20；今日数据不完整时隐藏该字段。
 
 ## 14. 设计决策
 
@@ -614,9 +614,9 @@ Pipio 表单明确区分：
 
 使用 AppKit `NSStatusItem + NSPopover` 作为菜单栏面板的显式控制目标；Carbon `RegisterEventHotKey` 负责注册快捷键。快捷键服务通过 runtime 抽象隔离系统注册，支持事务性回滚和离线契约测试。快捷键配置只保存 key code 与 modifier，不同步凭据或业务数据。
 
-### D-009 DeepSeek 用量能力降级
+### D-009 DeepSeek 余额与可选历史用量
 
-DeepSeek 适配器只使用官方余额接口；历史/分模型账户用量在无官方端点时返回 `unsupported + nil`，不调用私有网页接口。UI 只展示实际支持的字段，不把未知能力转换为 0。
+余额使用 API Key 请求官方 `GET https://api.deepseek.com/user/balance`；历史用量在用户手动提供平台 userToken 后请求 `platform.deepseek.com/api/v0/usage/amount` 和 `/api/v0/usage/cost`。未填写 token 时只获取余额；填写后首次回填最近 7 天，当天快照优先。Relay 不读取浏览器 Cookie，平台接口失败时保留余额并标记 partial；未知值不转换为 0。DeepSeek 历史月份、日桶、今日消费和首次 7 天回填固定按 GMT+8（北京时间）计算，不跟随 Mac 本地时区。
 
 ### D-010 iCloud 冲突状态机
 

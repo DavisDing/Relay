@@ -51,7 +51,7 @@ Local business services
 ## 5. Important Modules
 
 - `PipioAdapter`：访问 Pipio 管理 API；管理令牌与 Pipio 数值用户 ID 分开建模；从 `/api/status` 获取该账户自己的 `quota_per_unit`/币种参数。
-- `DeepSeekAdapter`：只访问 DeepSeek 官方余额接口；余额按真实 CNY 处理，不额外套汇率。
+- `DeepSeekAdapter`：余额固定访问 DeepSeek 官方 `GET /user/balance`；可选的平台 `userToken` 仅用于历史用量接口，余额按供应商返回币种处理。
 - `AccountRate` / `RateService`：汇率和换算参数按 `accountID` 隔离，禁止按 provider/host 共享。
 - `AccountService`：验证账户、保存账户元数据和首个快照，失败时回滚本地凭据。
 - `RefreshCoordinator`：账户级刷新和错误隔离；单账户失败不能覆盖其他账户或旧快照。
@@ -83,7 +83,7 @@ SwiftData 是 Apple 系统框架，不单独收费，也没有固定独立包体
 
 - 优先小范围修改，避免无关重构。
 - 不写入真实 Token、API Key、Pipio User ID、Cookie 或日志。
-- 不读取浏览器 Cookie，不复制网页 userToken，不调用 DeepSeek 私有网页接口。
+- 不读取浏览器 Cookie，不自动获取网页登录状态；DeepSeek 平台 `userToken` 只能由用户手动输入，并仅保存在本机凭据文件。该 token 只用于平台历史用量接口，接口属于网页内部接口，可能变化。
 - UI 不直接拼 API URL、不解释供应商 JSON、不持有长期凭据。
 - 账户失败必须隔离；刷新失败保留旧快照并显示 stale/error。
 - 未支持或不完整指标保持 `nil`，不显示伪造的 0。
@@ -151,7 +151,7 @@ SwiftData 是 Apple 系统框架，不单独收费，也没有固定独立包体
 
 - 全局快捷键已接入 AppKit 菜单栏控制器：支持显示/隐藏 Relay 面板和刷新全部账户；未新增“打开设置”快捷键。快捷键配置仅保存到本机 UserDefaults，注册失败不会覆盖上一次有效配置；未打包的 SwiftPM 环境明确显示未注册。
 - 菜单栏可见面板由 `RelayMenuBarController` 持有 `NSStatusItem + NSPopover`，用于提供可被全局快捷键控制的显式显示/隐藏目标；SwiftUI `Settings { EmptyView() }` 仅保持 App 生命周期，并保留退出命令。
-- DeepSeek 官方接口能力探测已明确区分余额与历史/分模型用量：当前官方 API 不提供账户历史或分模型聚合端点，因此用量报告返回 `unsupported`，`daily` 与 `models` 保持 `nil`；不读取 Cookie、userToken 或私有网页接口。
+- DeepSeek 已区分余额与历史用量：API Key 只调用官方 `GET https://api.deepseek.com/user/balance`；可选 userToken 调用 `platform.deepseek.com/api/v0/usage/amount` 与 `/api/v0/usage/cost`。未填写 userToken 时只查余额，填写后首次回填最近 7 天；不读取 Cookie，token 不进入同步数据。平台接口失败时保留余额并标记 partial。DeepSeek 历史月份、日桶、今日消费和首次 7 天回填统一按固定 GMT+8（北京时间）计算，不跟随 Mac 本地时区。
 - iCloud 同步状态已接入设置页；检测到 unresolved conflict versions 时只生成冲突报告并保留本机/远端候选，不在用户决策前修改本机 repository 或覆盖主同步文件。用户选择“保留本机 / 保留远端 / 接受合并结果”后，才通过显式 resolve API 应用结果；解析过程不自动删除冲突候选。
 - 同步目录缺失时状态显示为 `unavailable`，本机数据仍可读取和刷新；同步异常状态不会阻断本机业务路径。同步 payload 继续通过安全投影排除凭据。
 - `scripts/verify-icloud-sync.sh --mode deterministic` 的 SYNC-001 至 SYNC-004 已通过；SYNC-005 因没有第二台真实 Mac 标记 `blocked`，不能以 fixture 结果替代实机验证。

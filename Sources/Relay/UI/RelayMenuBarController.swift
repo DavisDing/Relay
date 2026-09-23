@@ -416,6 +416,7 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
                 account: account,
                 spendPoints: spendPoints,
                 modelUsages: modelUsages,
+                deepSeekUsageReport: UUID(uuidString: account.id).flatMap { self.store.deepSeekUsageReport(for: $0) },
                 onClose: { [weak self] in self?.closeAuxiliaryWindow() },
                 onSubAccountAction: { [weak self] action, parent, uid in
                     guard let self else { return }
@@ -430,7 +431,7 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
             AccountEditModalView(
                 account: account,
                 onDismiss: { [weak self] in self?.closeAuxiliaryWindow() },
-                onSave: { [weak self] name, threshold, credential, rateUpdate, baseURL in
+                onSave: { [weak self] name, threshold, credential, rateUpdate, baseURL, tokenUpdate in
                     guard let self, let id = UUID(uuidString: account.id) else { return }
                     try await self.store.updateAccount(
                         accountID: id,
@@ -438,7 +439,8 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
                         lowBalanceThreshold: threshold,
                         replacementCredential: credential,
                         replacementBaseURL: baseURL,
-                        manualUSDToCNY: rateUpdate
+                        manualUSDToCNY: rateUpdate,
+                        deepSeekUserTokenUpdate: tokenUpdate
                     )
                 }
             )
