@@ -114,7 +114,7 @@ public struct SettingsWindowView: View {
     }
 
     public var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 0) {
             ZStack {
                 Text("设置")
                     .font(.system(size: 16, weight: .bold))
@@ -151,10 +151,10 @@ public struct SettingsWindowView: View {
                 Spacer()
                 Button("完成", action: onClose)
                     .buttonStyle(.borderedProminent)
-                    .controlSize(.regular)
+                    .controlSize(.small)
             }
-            .padding(.horizontal, 20)
-            .padding(.bottom, 16)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 11)
         }
         .frame(width: 400, height: 520)
         .relayPanelSurface(cornerRadius: RelayVisualStyle.panelCornerRadius)
@@ -192,6 +192,9 @@ public struct SettingsWindowView: View {
                         selectedTab == tab ? Color.accentColor.opacity(0.13) : Color.clear,
                         in: RoundedRectangle(cornerRadius: 12, style: .continuous)
                     )
+                    // 让整个分页单元格（包括图标和文字周围的空白）参与命中测试。
+                    // 未选中项使用透明背景，若没有显式 contentShape，SwiftUI 可能只命中实际绘制内容。
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityAddTraits(selectedTab == tab ? .isSelected : [])
@@ -222,7 +225,7 @@ public struct SettingsWindowView: View {
     @ViewBuilder
     private func settingsScroll<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 18, content: content)
+            VStack(alignment: .leading, spacing: 16, content: content)
                 .padding(.horizontal, 20)
                 .padding(.vertical, 4)
         }
