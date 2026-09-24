@@ -235,7 +235,7 @@ public final class RelayStore: ObservableObject {
         }
     }
 
-    public func dailyUsage(accountID: UUID, limit: Int = 30) -> [DailyUsageRecord] {
+    public func dailyUsage(accountID: UUID, limit: Int? = 30) -> [DailyUsageRecord] {
         (try? repository.dailyUsage(accountID: accountID, limit: limit)) ?? []
     }
 

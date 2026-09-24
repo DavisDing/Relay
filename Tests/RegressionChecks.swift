@@ -184,6 +184,8 @@ struct RegressionChecks {
         print("PASSED: two-device exchange, deletion and damaged file protection")
         try presentation()
         print("PASSED: enabled-account coverage, midnight/timezone invalidation and settings failure")
+        try dailyUsageLimits()
+        print("PASSED: store daily history default, explicit and unlimited limits")
         try await workBuddyStatsAndHistory()
         print("PASSED: workbuddy2api stats decoding, de-duplicated epochs and retention policies")
         print("PASSED: all regression groups (temporary fixtures, no provider requests)")
@@ -569,6 +571,30 @@ struct RegressionChecks {
             try check(days.contains(where: { Calendar.current.isDate($0.day, inSameDayAs: recentDay) }), "recent history should remain for \(retention)")
             try check(days.contains(where: { Calendar.current.isDate($0.day, inSameDayAs: oldDay) }) == shouldKeepOld, "retention policy should handle \(retention)")
         }
+    }
+
+    @MainActor static func dailyUsageLimits() throws {
+        let repository = InMemoryLocalRepository()
+        var settings = try repository.settings()
+        settings.historyRetention = .forever
+        try repository.updateSettings(settings)
+        let owner = account("history limits")
+        try repository.upsertAccount(owner)
+        let today = Calendar.current.startOfDay(for: Date())
+        for offset in 0..<40 {
+            let day = Calendar.current.date(byAdding: .day, value: -offset, to: today)!
+            try repository.upsertDailyUsage(DailyUsageRecord(
+                accountID: owner.id, day: day, spend: MoneyValue(amount: Decimal(offset), currency: .cny)
+            ))
+        }
+        let store = RelayStore(repository: repository, credentialStore: InMemoryCredentialStore(),
+                               adapters: ProviderAdapterRegistry(adapters: []), automaticallyRefresh: false)
+        let all = store.dailyUsage(accountID: owner.id, limit: nil)
+        try check(all.count == 40, "nil limit must return all retained history through RelayStore")
+        try check(store.dailyUsage(accountID: owner.id) == Array(all.suffix(30)), "default limit must remain the latest 30 records")
+        try check(store.dailyUsage(accountID: owner.id, limit: 7) == Array(all.suffix(7)), "explicit limit must preserve chronological ordering")
+        try check(all.last?.day == today && all.last?.spend?.amount == 0, "unlimited history must include today's reliable zero")
+        try check(store.dailyUsage(accountID: UUID(), limit: nil).isEmpty, "missing history must remain empty")
     }
 
     @MainActor static func presentation() throws {

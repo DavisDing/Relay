@@ -404,10 +404,10 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
                 onResolveSyncConflict: { [weak self] decision in
                     self?.store.resolveSyncConflict(decision)
                 },
-                store: self.store,
                 onEditAccount: { [weak self] account in
                     self?.showAccountEditWindow(account: account)
                 },
+                store: self.store,
                 onClose: { [weak self] in self?.closeAuxiliaryWindow() },
                 onSave: { [weak self] settings in self?.store.updateSettings(settings) }
             )
