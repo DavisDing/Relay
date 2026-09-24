@@ -7,12 +7,35 @@ public struct AccountConfiguration: Identifiable, Codable, Sendable, Equatable {
     public var siteOrigin: URL
     public var credentialReference: String
     public var isEnabled: Bool
+    /// Keeps an account connected and refreshing while excluding it from the home dashboard.
+    public var isHidden: Bool
     public var lowBalanceThreshold: Decimal?
     /// User override for USD → CNY only; never used to normalize provider quota.
     public var manualUSDToCNY: Decimal?
     public var sortOrder: Int
     public var createdAt: Date
     public var updatedAt: Date
+
+    private enum CodingKeys: String, CodingKey {
+        case id, displayName, providerKind, siteOrigin, credentialReference, isEnabled, isHidden
+        case lowBalanceThreshold, manualUSDToCNY, sortOrder, createdAt, updatedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        displayName = try container.decode(String.self, forKey: .displayName)
+        providerKind = try container.decode(ProviderKind.self, forKey: .providerKind)
+        siteOrigin = try container.decode(URL.self, forKey: .siteOrigin)
+        credentialReference = try container.decode(String.self, forKey: .credentialReference)
+        isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
+        isHidden = try container.decodeIfPresent(Bool.self, forKey: .isHidden) ?? false
+        lowBalanceThreshold = try container.decodeIfPresent(Decimal.self, forKey: .lowBalanceThreshold)
+        manualUSDToCNY = try container.decodeIfPresent(Decimal.self, forKey: .manualUSDToCNY)
+        sortOrder = try container.decodeIfPresent(Int.self, forKey: .sortOrder) ?? 0
+        createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? createdAt
+    }
 
     public init(
         id: UUID = UUID(),
@@ -21,6 +44,7 @@ public struct AccountConfiguration: Identifiable, Codable, Sendable, Equatable {
         siteOrigin: URL,
         credentialReference: String? = nil,
         isEnabled: Bool = true,
+        isHidden: Bool = false,
         lowBalanceThreshold: Decimal? = Decimal(20),
         manualUSDToCNY: Decimal? = nil,
         sortOrder: Int = 0,
@@ -33,6 +57,7 @@ public struct AccountConfiguration: Identifiable, Codable, Sendable, Equatable {
         self.siteOrigin = siteOrigin
         self.credentialReference = credentialReference ?? id.uuidString
         self.isEnabled = isEnabled
+        self.isHidden = isHidden
         self.lowBalanceThreshold = lowBalanceThreshold
         self.manualUSDToCNY = manualUSDToCNY
         self.sortOrder = sortOrder

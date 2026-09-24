@@ -43,6 +43,7 @@ public struct AccountModel: Identifiable, Sendable {
     public var status: AccountStatus
     public var lastUpdated: Date?
     public var isEnabled: Bool
+    public var isHidden: Bool
     public var lowBalanceThreshold: Decimal?
     public var manualUSDToCNY: Decimal?
     public var quotaPerUnit: Decimal?
@@ -68,6 +69,7 @@ public struct AccountModel: Identifiable, Sendable {
                 status: AccountStatus = .ok,
                 lastUpdated: Date? = Date(),
                 isEnabled: Bool = true,
+                isHidden: Bool = false,
                 lowBalanceThreshold: Decimal? = nil,
                 manualUSDToCNY: Decimal? = nil,
                 quotaPerUnit: Decimal? = nil,
@@ -92,6 +94,7 @@ public struct AccountModel: Identifiable, Sendable {
         self.status = status
         self.lastUpdated = lastUpdated
         self.isEnabled = isEnabled
+        self.isHidden = isHidden
         self.lowBalanceThreshold = lowBalanceThreshold
         self.manualUSDToCNY = manualUSDToCNY
         self.quotaPerUnit = quotaPerUnit

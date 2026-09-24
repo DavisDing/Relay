@@ -389,6 +389,7 @@ public enum RelaySyncDataSafety {
                 siteOrigin: account.siteOrigin,
                 credentialReference: nil,
                 isEnabled: account.isEnabled,
+                isHidden: account.isHidden,
                 lowBalanceThreshold: account.lowBalanceThreshold,
                 manualUSDToCNY: account.manualUSDToCNY,
                 sortOrder: account.sortOrder,

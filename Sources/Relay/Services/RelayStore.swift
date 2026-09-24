@@ -171,6 +171,7 @@ public final class RelayStore: ObservableObject {
         do {
             try await accountService.deleteAccount(id: id)
             accountErrors.removeValue(forKey: id.uuidString)
+            globalErrorMessage = nil
             reloadFromRepository()
         } catch {
             globalErrorMessage = Self.userFacingMessage(for: error)
@@ -180,6 +181,17 @@ public final class RelayStore: ObservableObject {
     public func setEnabled(accountID: UUID, enabled: Bool) {
         do {
             try accountService.setEnabled(accountID: accountID, enabled: enabled)
+            globalErrorMessage = nil
+            reloadFromRepository()
+        } catch {
+            globalErrorMessage = Self.userFacingMessage(for: error)
+        }
+    }
+
+    public func setHidden(accountID: UUID, hidden: Bool) {
+        do {
+            try accountService.setHidden(accountID: accountID, hidden: hidden)
+            globalErrorMessage = nil
             reloadFromRepository()
         } catch {
             globalErrorMessage = Self.userFacingMessage(for: error)
@@ -282,6 +294,7 @@ public final class RelayStore: ObservableObject {
     /// internal gateway accounts are the visible second-level accounts.
     public var dashboardAccounts: [AccountModel] {
         accounts.flatMap { parent -> [AccountModel] in
+            guard !parent.isHidden else { return [] }
             guard parent.kind == .workbuddy2api else { return [parent] }
             guard let id = UUID(uuidString: parent.id),
                   let snapshot = snapshots.first(where: { $0.accountID == id }) else { return [] }
@@ -305,7 +318,7 @@ public final class RelayStore: ObservableObject {
     }
 
     public var gatewayNotices: [String] {
-        accounts.filter { $0.kind == .workbuddy2api }.compactMap { gateway in
+        accounts.filter { $0.kind == .workbuddy2api && !$0.isHidden }.compactMap { gateway in
             if let error = accountErrors[gateway.id] { return "\(gateway.name)：\(error)" }
             guard let id = UUID(uuidString: gateway.id),
                   let snapshot = snapshots.first(where: { $0.accountID == id }) else {
@@ -316,7 +329,7 @@ public final class RelayStore: ObservableObject {
     }
 
     public func creditTotal(for kind: ProviderKind = .workbuddy2api) -> CreditDashboardTotal {
-        let gateways = accounts.filter { $0.kind == kind && $0.isEnabled }
+        let gateways = accounts.filter { $0.kind == kind && $0.isEnabled && !$0.isHidden }
         guard !gateways.isEmpty else { return CreditDashboardTotal(value: nil, isComplete: true) }
         var excluded = Set<UUID>()
         var total = Decimal.zero
@@ -342,14 +355,14 @@ public final class RelayStore: ObservableObject {
     }
 
     public func balanceTotal(for kind: ProviderKind) -> DashboardTotal {
-        let ids = Set(accounts.filter { $0.kind == kind && $0.isEnabled }.compactMap { UUID(uuidString: $0.id) })
+        let ids = Set(accounts.filter { $0.kind == kind && $0.isEnabled && !$0.isHidden }.compactMap { UUID(uuidString: $0.id) })
         return DashboardAggregator.balanceTotal(snapshots: snapshots.filter { ids.contains($0.accountID) },
             targetCurrency: settings.baseCurrency, now: presentationDate, expectedAccountIDs: ids,
             manualUSDToCNY: manualExchangeRates)
     }
 
     public func todaySpendTotal(for kind: ProviderKind) -> DashboardTotal {
-        let ids = Set(accounts.filter { $0.kind == kind && $0.isEnabled }.compactMap { UUID(uuidString: $0.id) })
+        let ids = Set(accounts.filter { $0.kind == kind && $0.isEnabled && !$0.isHidden }.compactMap { UUID(uuidString: $0.id) })
         return DashboardAggregator.todaySpendTotal(snapshots: snapshots.filter { ids.contains($0.accountID) },
             targetCurrency: settings.baseCurrency, now: presentationDate, expectedAccountIDs: ids,
             calendar: calendar, manualUSDToCNY: manualExchangeRates)
@@ -365,6 +378,7 @@ public final class RelayStore: ObservableObject {
 
     public var hasLowBalance: Bool {
         accounts.contains { account in
+            guard !account.isHidden else { return false }
             if case .warning(let message) = account.status { return message == "余额低于阈值" }
             return false
         }
@@ -372,6 +386,7 @@ public final class RelayStore: ObservableObject {
 
     public var hasAnyWarning: Bool {
         accounts.contains { account in
+            guard !account.isHidden else { return false }
             switch account.status {
             case .ok: return false
             case .warning, .error, .retrying: return true
@@ -458,7 +473,7 @@ public final class RelayStore: ObservableObject {
             let previousInterval = settings.refreshIntervalSeconds
             settings = try repository.settings()
             let configurations = try repository.fetchAccounts()
-            expectedAccountIDs = Set(configurations.filter { $0.isEnabled && $0.providerKind != .workbuddy2api }.map(\.id))
+            expectedAccountIDs = Set(configurations.filter { $0.isEnabled && !$0.isHidden && $0.providerKind != .workbuddy2api }.map(\.id))
             var loadedSnapshots: [ProviderSnapshot] = []
             presentationDate = now
             accounts = configurations.map { configuration in
@@ -491,6 +506,7 @@ public final class RelayStore: ObservableObject {
         guard UserDefaults.standard.bool(forKey: "lowBalanceNotificationsEnabled") else { return }
         let today = calendar.startOfDay(for: Date())
         let lowBalanceAccounts = accounts.filter { account in
+            guard !account.isHidden else { return false }
             if case .warning(let message) = account.status { return message == "余额低于阈值" }
             return false
         }
@@ -576,6 +592,7 @@ public final class RelayStore: ObservableObject {
             status: status,
             lastUpdated: snapshot?.fetchedAt,
             isEnabled: configuration.isEnabled,
+            isHidden: configuration.isHidden,
             lowBalanceThreshold: configuration.lowBalanceThreshold,
             manualUSDToCNY: configuration.manualUSDToCNY,
             quotaPerUnit: snapshot?.rate.quotaPerUnit,

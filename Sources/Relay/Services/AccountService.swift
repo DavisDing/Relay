@@ -291,10 +291,24 @@ public final class AccountService {
         try repository.upsertAccount(account)
     }
 
+    public func setHidden(accountID: UUID, hidden: Bool) throws {
+        guard var account = try repository.account(id: accountID) else { return }
+        account.isHidden = hidden
+        account.updatedAt = nextUpdateDate(after: account.updatedAt)
+        try repository.upsertAccount(account)
+    }
+
     public func deleteAccount(id: UUID) async throws {
         guard let account = try repository.account(id: id) else { return }
-        try await credentialStore.delete(reference: account.credentialReference)
+        // Deleting the persisted account first makes the operation complete even
+        // when an old/missing credential entry is already absent.
         try repository.deleteAccount(id: id)
+        do {
+            try await credentialStore.delete(reference: account.credentialReference)
+        } catch CredentialStoreError.notFound {
+            // The account can still be removed when its credential was already
+            // deleted (for example after an interrupted previous cleanup).
+        }
         await rateService.remove(accountID: id)
     }
 }

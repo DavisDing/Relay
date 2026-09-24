@@ -321,11 +321,16 @@ struct RegressionChecks {
         let imported = InMemoryLocalRepository()
         try imported.mergeSyncData(try decoded(encoded(safePayload)))
         try check(try imported.account(id: a.id)?.manualUSDToCNY == 7, "safe sync projection retains manual FX")
+        var hidden = saved
+        hidden.isHidden = true
+        try check(RelaySyncDataSafety.sanitized(RelaySyncData(accounts: [hidden], snapshots: [], dailyUsage: [], settings: RelaySettings())).accounts.first?.isHidden == true, "safe sync projection retains hidden preference")
         // Decode a record written before this optional field existed.
         var oldObject = try JSONSerialization.jsonObject(with: JSONEncoder().encode(saved)) as! [String: Any]
         oldObject.removeValue(forKey: "manualUSDToCNY")
         let old = try JSONDecoder().decode(AccountConfiguration.self, from: JSONSerialization.data(withJSONObject: oldObject))
-        try check(old.manualUSDToCNY == nil && old.id == saved.id, "legacy account JSON remains readable")
+        oldObject.removeValue(forKey: "isHidden")
+        let legacy = try JSONDecoder().decode(AccountConfiguration.self, from: JSONSerialization.data(withJSONObject: oldObject))
+        try check(old.manualUSDToCNY == nil && old.id == saved.id && !legacy.isHidden, "legacy account JSON remains readable with hidden default")
         try disk.upsertAccount(try repo.account(id: a.id)!)
         try imported.mergeSyncData(try decoded(encoded(RelaySyncDataSafety.sanitized(disk.syncData()))))
         try check(try imported.account(id: a.id)?.manualUSDToCNY == nil, "newer clear synchronizes automatic mode")
@@ -352,6 +357,21 @@ struct RegressionChecks {
             try await service.updateAccount(accountID: a.id, displayName: "failed", lowBalanceThreshold: 20, replacementCredential: replacement)
         }
         try await rejectsAsync("new credential must be removed on metadata failure") { _ = try await creds.read(reference: a.credentialReference) }
+
+        repo.rejectWrites = false
+        var gateway = account("gateway")
+        gateway.providerKind = .workbuddy2api
+        try repo.upsertAccount(gateway)
+        try repo.upsertSnapshot(snapshot(gateway.id, at: Date()))
+        try await creds.save(placeholder, reference: gateway.credentialReference)
+        try await service.deleteAccount(id: gateway.id)
+        try check(try repo.account(id: gateway.id) == nil && repo.snapshot(accountID: gateway.id) == nil, "gateway removal clears metadata and snapshot")
+        try check(try repo.syncData().deletedAccountIDs[gateway.id] != nil, "gateway removal records sync tombstone")
+        try await rejectsAsync("gateway credential must be removed") { _ = try await creds.read(reference: gateway.credentialReference) }
+        try repo.upsertAccount(gateway)
+        try await service.deleteAccount(id: gateway.id)
+        try check(try repo.account(id: gateway.id) == nil, "gateway remains removable with a missing credential")
+        repo.rejectWrites = true
 
         let unreadable = FaultyCredentials(rejectRead: true)
         let unreadableService = AccountService(repository: repo, credentialStore: unreadable, adapters: registry)
@@ -488,6 +508,13 @@ struct RegressionChecks {
         try check(DashboardAggregator.todaySpendTotal(snapshots: [], targetCurrency: .cny, expectedAccountIDs: []).value == nil, "empty scope must not fabricate zero")
         let zero = snapshot(a.id, at: beforeMidnight, spend: 0)
         try check(DashboardAggregator.todaySpendTotal(snapshots: [zero], targetCurrency: .cny, now: beforeMidnight, calendar: calendar).value?.amount == 0, "reliable zero is not unknown")
+        store.setHidden(accountID: a.id, hidden: true)
+        try check(try repo.account(id: a.id)?.isHidden == true, "hiding an account must persist its setting")
+        try check(!store.dashboardAccounts.contains(where: { $0.id == a.id.uuidString }), "hidden accounts must be excluded from the home projection")
+        try check(store.balanceTotalCNY.value == nil, "hidden balance must be excluded from totals")
+        try check(store.accountModel(id: a.id)?.isHidden == true, "account model must expose hidden state")
+        store.setHidden(accountID: a.id, hidden: false)
+        try check(try repo.account(id: a.id)?.isHidden == false && !store.dashboardAccounts.isEmpty, "unhiding an account must restore the home projection")
         repo.rejectWrites = true
         var settings = store.settings
         settings.refreshIntervalSeconds = 900

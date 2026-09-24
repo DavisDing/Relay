@@ -32,6 +32,14 @@ public struct MainPopoverView: View {
         self.onPresentEdit = onPresentEdit
     }
 
+    private var visibleTopLevelAccounts: [AccountModel] {
+        store.accounts.filter { !$0.isHidden }
+    }
+
+    private var visibleDashboardAccounts: [AccountModel] {
+        store.dashboardAccounts
+    }
+
     private var totalBalance: Decimal? { store.balanceTotalCNY.value?.amount }
 
     private var totalTodaySpend: Decimal? {
@@ -39,10 +47,10 @@ public struct MainPopoverView: View {
         return store.todaySpendTotalCNY.value?.amount
     }
 
-    private var enabledAccountCount: Int { store.accounts.filter { $0.isEnabled && $0.kind != .workbuddy2api }.count }
+    private var enabledAccountCount: Int { visibleTopLevelAccounts.filter { $0.isEnabled && $0.kind != .workbuddy2api }.count }
 
     private var hasAnyError: Bool {
-        store.accounts.contains { account in
+        visibleTopLevelAccounts.contains { account in
             if case .error = account.status { return true }
             return false
         }
@@ -58,6 +66,8 @@ public struct MainPopoverView: View {
 
             if store.accounts.isEmpty {
                 emptyStateView
+            } else if visibleTopLevelAccounts.isEmpty {
+                hiddenAccountsStateView
             } else {
                 dashboard
             }
@@ -150,7 +160,7 @@ public struct MainPopoverView: View {
                         .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
                 }
 
-                if store.accounts.contains(where: { $0.kind != .workbuddy2api }) {
+                if visibleTopLevelAccounts.contains(where: { $0.kind != .workbuddy2api }) {
                     HStack(spacing: 8) {
                         summaryCard(title: "总可用折算余额",
                             value: totalBalance.map { RelayNumberFormatter.money($0, currency: store.settings.baseCurrency) } ?? "--",
@@ -161,7 +171,7 @@ public struct MainPopoverView: View {
                             accent: totalTodaySpend == nil ? .primary : .orange)
                     }
                 }
-                if store.accounts.contains(where: { $0.kind == .workbuddy2api }) {
+                if visibleTopLevelAccounts.contains(where: { $0.kind == .workbuddy2api }) {
                     HStack(spacing: 8) {
                         summaryCard(title: "总可用积分",
                             value: store.creditTotal().value.map { NSDecimalNumber(decimal: $0).stringValue } ?? "--",
@@ -175,14 +185,14 @@ public struct MainPopoverView: View {
                         .font(.system(size: 10)).foregroundStyle(.secondary)
                 }
                 HStack {
-                    Text("已连接账号 (\(store.dashboardAccounts.count))")
+                    Text("已连接账号 (\(visibleDashboardAccounts.count))")
                         .font(.system(size: 13, weight: .semibold))
                     Spacer()
                 }.padding(.top, 4)
 
                 LazyVStack(spacing: 7) {
                     ForEach(ProviderKind.supportedCases, id: \.self) { kind in
-                        let grouped = store.dashboardAccounts.filter { $0.kind == kind }
+                        let grouped = visibleDashboardAccounts.filter { $0.kind == kind }
                         if !grouped.isEmpty {
                             providerGroup(kind, accounts: grouped)
                         }
@@ -371,6 +381,30 @@ public struct MainPopoverView: View {
         .padding(.trailing, 5)
         .padding(.vertical, 9)
         .relayGlassTile(cornerRadius: 11)
+    }
+
+    private var hiddenAccountsStateView: some View {
+        VStack(spacing: 12) {
+            Spacer()
+            Image(systemName: "eye.slash")
+                .font(.system(size: 28))
+                .foregroundStyle(.secondary)
+            Text("所有账号均已隐藏")
+                .font(.system(size: 15, weight: .bold))
+            Text("账号仍会在后台刷新。可前往“设置 → 数据 → 账号管理”取消隐藏，或添加新账号。")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .lineSpacing(3)
+            Button(action: onPresentSettings) {
+                Label("打开账号管理", systemImage: "gearshape")
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+            }
+            .buttonStyle(.borderedProminent)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var emptyStateView: some View {
