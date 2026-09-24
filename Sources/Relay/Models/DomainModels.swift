@@ -20,6 +20,14 @@ public enum ProviderKind: String, Codable, CaseIterable, Sendable, Hashable {
 }
 
 public extension ProviderKind {
+    /// User-facing provider name. Keep `rawValue` stable because it is persisted.
+    var displayName: String {
+        switch self {
+        case .workbuddy2api: return "WordBuddy2Api"
+        default: return rawValue
+        }
+    }
+
     /// Providers with a production adapter in the current release.
     static var supportedCases: [ProviderKind] { [.pipio, .deepseek, .workbuddy2api] }
 }

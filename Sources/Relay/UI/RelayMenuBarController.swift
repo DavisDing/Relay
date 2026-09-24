@@ -87,7 +87,7 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
         // which made the settings and account forms appear unclickable.
         popover.behavior = .applicationDefined
         popover.animates = false
-        popover.contentSize = NSSize(width: 400, height: 520)
+        popover.contentSize = NSSize(width: RelayVisualStyle.panelWidth, height: 520)
         popover.contentViewController = NSHostingController(
             rootView: MainPopoverView(
                 store: store,
@@ -378,7 +378,7 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
     }
 
     private func showAddAccountWindow() {
-        presentAuxiliaryWindow(title: "添加服务商账号", size: NSSize(width: 400, height: 520)) {
+        presentAuxiliaryWindow(title: "添加服务商账号", size: NSSize(width: RelayVisualStyle.panelWidth, height: 520)) {
             AccountAddModalView(
                 onDismiss: { [weak self] in self?.closeAuxiliaryWindow() },
                 onSave: { [weak self] draft in
@@ -394,7 +394,7 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
     }
 
     private func showSettingsWindow() {
-        presentAuxiliaryWindow(title: "Relay 设置", size: NSSize(width: 400, height: 520)) {
+        presentAuxiliaryWindow(title: "Relay 设置", size: NSSize(width: RelayVisualStyle.panelWidth, height: 520)) {
             SettingsWindowView(
                 initialSettings: self.store.settings,
                 initialGlobalShortcutConfiguration: GlobalShortcutConfigurationStore.load(),
@@ -419,7 +419,7 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
         spendPoints: [DailySpendPoint],
         modelUsages: [ModelUsageItem]
     ) {
-        presentAuxiliaryWindow(title: "账号详情", size: NSSize(width: 400, height: 520)) {
+        presentAuxiliaryWindow(title: "账号详情", size: NSSize(width: RelayVisualStyle.panelWidth, height: 520)) {
             AccountDetailView(
                 account: account,
                 spendPoints: spendPoints,
@@ -435,7 +435,7 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
     }
 
     private func showAccountEditWindow(account: AccountModel) {
-        presentAuxiliaryWindow(title: "编辑账号", size: NSSize(width: 400, height: 520)) {
+        presentAuxiliaryWindow(title: "编辑账号", size: NSSize(width: RelayVisualStyle.panelWidth, height: 520)) {
             AccountEditModalView(
                 account: account,
                 onDismiss: { [weak self] in self?.closeAuxiliaryWindow() },

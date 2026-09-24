@@ -167,7 +167,7 @@ public struct SettingsWindowView: View {
             .padding(.horizontal, 18)
             .padding(.vertical, 11)
         }
-        .frame(width: 400, height: 520)
+        .frame(width: RelayVisualStyle.panelWidth, height: 520)
         .relayPanelSurface(cornerRadius: RelayVisualStyle.panelCornerRadius)
         .preferredColorScheme(preferredColorScheme)
         .alert("确认删除账号？", isPresented: Binding(
@@ -182,7 +182,7 @@ public struct SettingsWindowView: View {
                 Task { await store.deleteAccount(id: id) }
             }
         } message: {
-            Text("将删除本机账户数据和凭据。已启用同步时，删除标记也会同步到其他设备；workbuddy2api 网关及其内部账号会一并从本机移除。")
+            Text("将删除本机账户数据和凭据。已启用同步时，删除标记也会同步到其他设备；WordBuddy2Api 网关及其内部账号会一并从本机移除。")
         }
         .onDisappear {
             let parsedThreshold = Decimal(string: lowBalanceThreshold, locale: Locale(identifier: "en_US_POSIX")) ?? 20
@@ -407,7 +407,7 @@ public struct SettingsWindowView: View {
                 Text("账号管理")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundColor(.secondary)
-                Text("可删除、停用或隐藏已添加的服务商账号。隐藏只影响首页和汇总展示，不删除历史数据；workbuddy2api 网关账号也在这里管理。")
+                Text("可删除、停用或隐藏已添加的服务商账号。隐藏只影响首页和汇总展示，不删除历史数据；WordBuddy2Api 网关账号也在这里管理。")
                     .font(.system(size: 10))
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -445,7 +445,7 @@ public struct SettingsWindowView: View {
                     Text(account.name)
                         .font(.system(size: 12, weight: .medium))
                         .lineLimit(1)
-                    Text(account.kind.rawValue)
+                    Text(account.kind.displayName)
                         .font(.system(size: 9))
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 5)

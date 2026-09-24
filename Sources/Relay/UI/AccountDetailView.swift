@@ -81,7 +81,7 @@ public struct AccountDetailView: View {
             .padding(.horizontal, 18)
             .padding(.vertical, 11)
         }
-        .frame(width: 400, height: 520)
+        .frame(width: RelayVisualStyle.panelWidth, height: 520)
         .relayPanelSurface(cornerRadius: RelayVisualStyle.panelCornerRadius)
         .alert(confirmingAction == .enable ? "确认启用内部账号？" : "确认手动停用内部账号？",
                isPresented: Binding(get: { confirmingAction != nil }, set: { if !$0 { confirmingAction = nil } })) {
@@ -116,7 +116,7 @@ public struct AccountDetailView: View {
                     .truncationMode(.tail)
             }
             Spacer()
-            Text(account.kind.rawValue)
+            Text(account.kind.displayName)
                 .font(.system(size: 10, weight: .semibold))
                 .padding(.horizontal, 7)
                 .padding(.vertical, 3)
@@ -138,7 +138,7 @@ public struct AccountDetailView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 9) {
                 MetricCard(title: "可用积分",
-                    value: account.availablePoints.map { NSDecimalNumber(decimal: $0).stringValue } ?? "--",
+                    value: account.availablePoints.map { RelayNumberFormatter.decimal($0) } ?? "--",
                     subTitle: "网关当前快照", accentColor: .primary)
                 MetricCard(title: "统计来源", value: "/v1/stats",
                     subTitle: "刷新时读取并去重", accentColor: .secondary)
@@ -156,7 +156,7 @@ public struct AccountDetailView: View {
                 Button("解除手动停用") { confirmingAction = .enable }
                     .disabled(isActing || !account.manualDisabled)
             }.buttonStyle(.bordered)
-            Text("管理功能需在 workbuddy2api 中启用 admin.enabled；操作后会刷新快照。")
+            Text("管理功能需在 WordBuddy2Api 中启用 admin.enabled；操作后会刷新快照。")
                 .font(.system(size: 10)).foregroundStyle(.secondary)
         }
     }
@@ -267,7 +267,7 @@ public struct AccountDetailView: View {
                         VStack(alignment: .trailing, spacing: 1) {
                             Text(item.cost.map {
                                 account.kind == .workbuddy2api
-                                    ? "\(NSDecimalNumber(decimal: $0).stringValue) 积分"
+                                    ? "\(RelayNumberFormatter.decimal($0)) 积分"
                                     : RelayNumberFormatter.money($0, currency: item.currency)
                             } ?? "--")
                                 .font(.system(size: 11, weight: .semibold))

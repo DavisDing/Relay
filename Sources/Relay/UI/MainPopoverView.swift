@@ -74,7 +74,7 @@ public struct MainPopoverView: View {
 
             footer
         }
-        .frame(width: 400, height: 520)
+        .frame(width: RelayVisualStyle.panelWidth, height: 520)
         .relayPanelSurface(cornerRadius: RelayVisualStyle.panelCornerRadius)
         .preferredColorScheme(preferredColorScheme)
         .alert("确认删除账号？", isPresented: Binding(
@@ -174,7 +174,7 @@ public struct MainPopoverView: View {
                 if visibleTopLevelAccounts.contains(where: { $0.kind == .workbuddy2api }) {
                     HStack(spacing: 8) {
                         summaryCard(title: "总可用积分",
-                            value: store.creditTotal().value.map { NSDecimalNumber(decimal: $0).stringValue } ?? "--",
+                            value: store.creditTotal().value.map { RelayNumberFormatter.decimal($0) } ?? "--",
                             subtitle: store.creditTotal().isComplete ? "网关内部账号汇总" : "部分网关数据不可用", accent: .primary)
                         summaryCard(title: "今日消耗 / 获取积分", value: "暂不支持",
                             subtitle: "网关未提供可靠的自然日统计", accent: .secondary)
@@ -292,13 +292,13 @@ public struct MainPopoverView: View {
                 HStack(spacing: 8) {
                     Image(systemName: expandedProviders.contains(kind) ? "chevron.down" : "chevron.right")
                         .font(.system(size: 10, weight: .semibold))
-                    Text(kind.rawValue).font(.system(size: 13, weight: .semibold))
+                    Text(kind.displayName).font(.system(size: 13, weight: .semibold))
                     Text("\(accounts.count) 个账号").font(.system(size: 10)).foregroundStyle(.secondary)
                     Spacer()
                     VStack(alignment: .trailing, spacing: 3) {
                         if kind == .workbuddy2api {
-                            Text("积分 " + (store.creditTotal().value.map { NSDecimalNumber(decimal: $0).stringValue } ?? "--"))
-                            Text("今日累计 " + (workBuddyTodaySpend(for: accounts).map { NSDecimalNumber(decimal: $0).stringValue + " 积分" } ?? "--"))
+                            Text("积分 " + (store.creditTotal().value.map { RelayNumberFormatter.decimal($0) } ?? "--"))
+                            Text("今日累计 " + (workBuddyTodaySpend(for: accounts).map { RelayNumberFormatter.decimal($0) + " 积分" } ?? "--"))
                         } else {
                             let balance = store.balanceTotal(for: kind)
                             let today = store.todaySpendTotal(for: kind)
@@ -309,7 +309,7 @@ public struct MainPopoverView: View {
                 }.contentShape(Rectangle())
             }.buttonStyle(.plain)
                 .padding(11).relayGlassTile(cornerRadius: 11)
-                .accessibilityLabel("\(kind.rawValue) 分组，\(accounts.count) 个账号")
+                .accessibilityLabel("\(kind.displayName) 分组，\(accounts.count) 个账号")
             if expandedProviders.contains(kind) {
                 ForEach(accounts) { account in accountRow(account).padding(.leading, 12) }
             }
@@ -332,7 +332,7 @@ public struct MainPopoverView: View {
                             .foregroundStyle(.primary)
                             .lineLimit(1)
                         HStack(spacing: 5) {
-                            Text(account.kind.rawValue)
+                            Text(account.kind.displayName)
                                 .font(.system(size: 9))
                                 .foregroundStyle(.secondary)
                                 .padding(.horizontal, 6)
@@ -350,7 +350,7 @@ public struct MainPopoverView: View {
                     Spacer(minLength: 8)
 
                     VStack(alignment: .trailing, spacing: 4) {
-                        Text(account.kind == .workbuddy2api ? (account.availablePoints.map { "\(NSDecimalNumber(decimal: $0).stringValue) 积分" } ?? "积分 --") : (account.balance.map { RelayNumberFormatter.money($0, currency: account.currency) } ?? "--"))
+                        Text(account.kind == .workbuddy2api ? (account.availablePoints.map { "\(RelayNumberFormatter.decimal($0)) 积分" } ?? "积分 --") : (account.balance.map { RelayNumberFormatter.money($0, currency: account.currency) } ?? "--"))
                             .font(.system(size: 13, weight: .bold))
                             .foregroundStyle(.primary)
                             .lineLimit(1)
@@ -433,7 +433,7 @@ public struct MainPopoverView: View {
             }
             Text("尚未接入任何 AI 额度账号")
                 .font(.system(size: 15, weight: .bold))
-            Text("支持 Pipio、DeepSeek 和 workbuddy2api\n凭据仅保存在本机 Relay 数据目录")
+            Text("支持 Pipio、DeepSeek 和 WordBuddy2Api\n凭据仅保存在本机 Relay 数据目录")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

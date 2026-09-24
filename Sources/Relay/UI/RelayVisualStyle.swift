@@ -7,6 +7,8 @@ import SwiftUI
 /// appearance adaptive to the system appearance, wallpaper, vibrancy and
 /// accessibility settings while sharing one visual vocabulary across pages.
 public enum RelayVisualStyle {
+    /// Shared width for the main popover and auxiliary panels.
+    public static let panelWidth: CGFloat = 360
     public static let panelCornerRadius: CGFloat = 20
     public static let cardCornerRadius: CGFloat = 12
     public static let auxiliaryPanelCornerRadius: CGFloat = 18

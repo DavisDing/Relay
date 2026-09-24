@@ -66,7 +66,7 @@ public struct AccountAddModalView: View {
                             .foregroundColor(.secondary)
                         Picker("", selection: $selectedProvider) {
                             ForEach(ProviderKind.supportedCases, id: \.self) { provider in
-                                Text(provider.rawValue).tag(provider)
+                                Text(provider.displayName).tag(provider)
                             }
                         }
                         .labelsHidden()
@@ -139,7 +139,7 @@ public struct AccountAddModalView: View {
             .padding(.horizontal, 20)
             .padding(.bottom, 16)
         }
-        .frame(width: 400, height: 500)
+        .frame(width: RelayVisualStyle.panelWidth, height: 500)
         .relayPanelSurface(cornerRadius: RelayVisualStyle.panelCornerRadius)
     }
 
@@ -287,7 +287,7 @@ public struct AccountAddModalView: View {
 
     private func probeDescription(_ snapshot: ProviderSnapshot) -> String {
         if let children = snapshot.subAccounts {
-            let points = snapshot.creditMetrics?.available.map { NSDecimalNumber(decimal: $0).stringValue } ?? "--"
+            let points = snapshot.creditMetrics?.available.map { RelayNumberFormatter.decimal($0) } ?? "--"
             return "网关连接成功：\(children.count) 个内部账号，可用积分 \(points)"
         }
         let balance = snapshot.balance.map { "余额 \(RelayNumberFormatter.money($0.amount, currency: $0.currency))" } ?? "余额 --"
