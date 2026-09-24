@@ -39,6 +39,7 @@ public struct AccountDetailView: View {
                 LazyVStack(alignment: .leading, spacing: 16) {
                     if account.kind == .workbuddy2api {
                         creditDetails
+                        trendSection
                     } else {
                         metrics
                         trendSection
@@ -48,7 +49,7 @@ public struct AccountDetailView: View {
                         DeepSeekUsageSection(
                             report: deepSeekUsageReport ?? UUID(uuidString: account.id).map { DeepSeekUsageReport.unsupported(accountID: $0) }
                         )
-                    } else if account.kind != .workbuddy2api {
+                    } else {
                         modelUsageSection
                     }
                 }
@@ -139,14 +140,14 @@ public struct AccountDetailView: View {
                 MetricCard(title: "可用积分",
                     value: account.availablePoints.map { NSDecimalNumber(decimal: $0).stringValue } ?? "--",
                     subTitle: "网关当前快照", accentColor: .primary)
-                MetricCard(title: "今日消耗 / 获取", value: "暂不支持",
-                    subTitle: "暂无可靠自然日数据", accentColor: .secondary)
+                MetricCard(title: "统计来源", value: "/v1/stats",
+                    subTitle: "刷新时读取并去重", accentColor: .secondary)
             }
             Text("内部 UID：\(account.externalID ?? "--")")
                 .font(.system(size: 11, design: .monospaced)).textSelection(.enabled)
             Text("系统停用：\(account.disabled ? "是" : "否") · 手动停用：\(account.manualDisabled ? "是" : "否") · 冷却：\(account.cooling ? "是" : "否")")
                 .font(.system(size: 11)).foregroundStyle(.secondary)
-            Text("网关尚未提供可靠的按自然日积分流水，因此不显示积分走势图。")
+            Text("趋势按每次刷新读取的 /v1/stats 进程累计值计算增量并去重；容器重启前未刷新到 Relay 的区间无法恢复。")
                 .font(.system(size: 11)).foregroundStyle(.secondary)
             if let actionError { Text(actionError).font(.system(size: 11)).foregroundStyle(.red) }
             HStack {
@@ -191,12 +192,12 @@ public struct AccountDetailView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("近 7 日消耗趋势")
                         .font(.system(size: 13, weight: .semibold))
-                    Text(account.kind == .pipio ? "Pipio 会从公开统计接口回填可用的近 7 日；后续刷新持续更新当天累计。" : "官方接口未提供历史时，仅显示 Relay 已保存的每日累计。")
+                    Text(account.kind == .pipio ? "Pipio 会从公开统计接口回填可用的近 7 日；后续刷新持续更新当天累计。" : account.kind == .workbuddy2api ? "根据 /v1/stats 的进程累计积分计算刷新增量；容器重启后开启新的累计周期。" : "官方接口未提供历史时，仅显示 Relay 已保存的每日累计。")
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Text(account.currency.rawValue)
+                Text(account.kind == .workbuddy2api ? "积分" : account.currency.rawValue)
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(.secondary)
             }
@@ -205,12 +206,12 @@ public struct AccountDetailView: View {
                 ContentUnavailableView(
                     "暂未积累趋势数据",
                     systemImage: "chart.line.uptrend.xyaxis",
-                    description: Text(account.kind == .pipio ? "Pipio 未返回可用的历史统计；请稍后刷新。" : "后续成功同步会保存当天累计，并逐日形成趋势。")
+                    description: Text(account.kind == .pipio ? "Pipio 未返回可用的历史统计；请稍后刷新。" : account.kind == .workbuddy2api ? "首次刷新后会保存积分增量；请继续刷新以形成趋势。" : "后续成功同步会保存当天累计，并逐日形成趋势。")
                 )
                 .frame(height: 155)
                 .background(.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
             } else {
-                AdaptiveLineChart(dataPoints: spendPoints, unit: account.currency.symbol)
+                AdaptiveLineChart(dataPoints: spendPoints, unit: account.kind == .workbuddy2api ? "积分" : account.currency.symbol)
                     .frame(height: 165)
                     .padding(8)
                     .background(.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
@@ -264,7 +265,11 @@ public struct AccountDetailView: View {
                             .foregroundStyle(.secondary)
                             .frame(width: 58, alignment: .trailing)
                         VStack(alignment: .trailing, spacing: 1) {
-                            Text(item.cost.map { RelayNumberFormatter.money($0, currency: item.currency) } ?? "--")
+                            Text(item.cost.map {
+                                account.kind == .workbuddy2api
+                                    ? "\(NSDecimalNumber(decimal: $0).stringValue) 积分"
+                                    : RelayNumberFormatter.money($0, currency: item.currency)
+                            } ?? "--")
                                 .font(.system(size: 11, weight: .semibold))
                             Text(item.percentage.map { String(format: "%.0f%%", $0 * 100) } ?? "--")
                                 .font(.system(size: 9))

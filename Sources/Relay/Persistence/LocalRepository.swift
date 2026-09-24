@@ -213,8 +213,18 @@ public final class FileLocalRepository: LocalRepository {
     }
 
     private func pruneHistoryIfNeeded(_ candidate: inout State) {
-        guard candidate.settings.historyRetention == .oneYear else { return }
-        let cutoff = Calendar.current.date(byAdding: .year, value: -1, to: Date()) ?? Date.distantPast
+        let cutoff: Date?
+        switch candidate.settings.historyRetention {
+        case .oneMonth:
+            cutoff = Calendar.current.date(byAdding: .month, value: -1, to: Date())
+        case .halfYear:
+            cutoff = Calendar.current.date(byAdding: .month, value: -6, to: Date())
+        case .oneYear:
+            cutoff = Calendar.current.date(byAdding: .year, value: -1, to: Date())
+        case .forever:
+            cutoff = nil
+        }
+        guard let cutoff else { return }
         candidate.dailyUsage.removeAll { $0.day < cutoff }
     }
 
@@ -261,7 +271,10 @@ public final class InMemoryLocalRepository: LocalRepository {
         guard let limit, limit > 0 else { return all }
         return Array(all.suffix(limit))
     }
-    public func upsertDailyUsage(_ record: DailyUsageRecord) throws { usage[record.id] = record }
+    public func upsertDailyUsage(_ record: DailyUsageRecord) throws {
+        usage[record.id] = record
+        pruneHistoryIfNeeded()
+    }
     public func settings() throws -> RelaySettings { storedSettings }
     public func updateSettings(_ settings: RelaySettings) throws {
         var oldPreferences = storedSettings
@@ -273,6 +286,7 @@ public final class InMemoryLocalRepository: LocalRepository {
             ))
         }
         storedSettings = settings
+        pruneHistoryIfNeeded()
     }
     public func syncData() throws -> RelaySyncData {
         RelaySyncData(accounts: Array(accounts.values), snapshots: Array(snapshots.values), dailyUsage: Array(usage.values), settings: storedSettings, settingsUpdatedAt: settingsUpdatedAt, deletedAccountIDs: deletedAccountIDs)
@@ -285,5 +299,22 @@ public final class InMemoryLocalRepository: LocalRepository {
         storedSettings = merged.settings
         settingsUpdatedAt = merged.settingsUpdatedAt
         deletedAccountIDs = merged.deletedAccountIDs
+        pruneHistoryIfNeeded()
+    }
+
+    private func pruneHistoryIfNeeded() {
+        let cutoff: Date?
+        switch storedSettings.historyRetention {
+        case .oneMonth:
+            cutoff = Calendar.current.date(byAdding: .month, value: -1, to: Date())
+        case .halfYear:
+            cutoff = Calendar.current.date(byAdding: .month, value: -6, to: Date())
+        case .oneYear:
+            cutoff = Calendar.current.date(byAdding: .year, value: -1, to: Date())
+        case .forever:
+            cutoff = nil
+        }
+        guard let cutoff else { return }
+        usage = usage.filter { $0.value.day >= cutoff }
     }
 }

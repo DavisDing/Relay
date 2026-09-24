@@ -74,6 +74,7 @@ public struct SettingsWindowView: View {
     private let onApplyGlobalShortcut: ((GlobalShortcutConfiguration) -> GlobalShortcutRegistrationOutcome)?
     private let onCheckForUpdates: () async throws -> RelayUpdateCheckResult
     private let onDownloadUpdate: (RelayAppUpdate) async throws -> URL
+    private let onEditAccount: ((AccountModel) -> Void)?
 
     public var onClose: () -> Void
     public var onSave: (RelaySettings) -> Void
@@ -91,6 +92,7 @@ public struct SettingsWindowView: View {
         onDownloadUpdate: @escaping (RelayAppUpdate) async throws -> URL = { update in
             try await UpdateService().download(update)
         },
+        onEditAccount: ((AccountModel) -> Void)? = nil,
         store: RelayStore,
         onClose: @escaping () -> Void = {},
         onSave: @escaping (RelaySettings) -> Void = { _ in }
@@ -103,6 +105,7 @@ public struct SettingsWindowView: View {
         self.onResolveSyncConflict = onResolveSyncConflict
         self.onCheckForUpdates = onCheckForUpdates
         self.onDownloadUpdate = onDownloadUpdate
+        self.onEditAccount = onEditAccount
         self.store = store
         self.onClose = onClose
         self.onSave = onSave
@@ -387,8 +390,10 @@ public struct SettingsWindowView: View {
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundColor(.secondary)
                 Picker("保留策略", selection: $historyRetention) {
-                    Text("保留 1 年").tag(HistoryRetention.oneYear)
-                    Text("永久保留").tag(HistoryRetention.forever)
+                    Text("一月").tag(HistoryRetention.oneMonth)
+                    Text("半年").tag(HistoryRetention.halfYear)
+                    Text("一年").tag(HistoryRetention.oneYear)
+                    Text("永久").tag(HistoryRetention.forever)
                 }
                 .pickerStyle(.segmented)
                 Text("仅保存每日聚合数据，不长期保存原始请求日志。")
@@ -460,6 +465,11 @@ public struct SettingsWindowView: View {
             }
             Menu {
                 if let id = UUID(uuidString: account.id) {
+                    if let onEditAccount {
+                        Button("编辑账号") {
+                            onEditAccount(account)
+                        }
+                    }
                     Button(account.isEnabled ? "停用账号" : "启用账号") {
                         store.setEnabled(accountID: id, enabled: !account.isEnabled)
                     }

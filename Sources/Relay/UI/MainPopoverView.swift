@@ -225,8 +225,23 @@ public struct MainPopoverView: View {
         .padding(.vertical, 12)
     }
 
+    private func workBuddyTodaySpend(for accounts: [AccountModel]) -> Decimal? {
+        let parentIDs = Set(accounts.compactMap(\.parentAccountID))
+        var total = Decimal.zero
+        var found = false
+        for parentID in parentIDs {
+            guard let record = store.dailyUsage(accountID: parentID, limit: nil)
+                .first(where: { Calendar.current.isDateInToday($0.day) }),
+                  let spend = record.spend,
+                  spend.currency == .cny else { continue }
+            total += spend.amount
+            found = true
+        }
+        return found ? total : nil
+    }
+
     private func spendPoints(for account: AccountModel) -> [DailySpendPoint] {
-        guard let id = UUID(uuidString: account.id) else { return [] }
+        guard let id = account.parentAccountID ?? UUID(uuidString: account.id) else { return [] }
         return store.dailyUsage(accountID: id, limit: 7).compactMap { record in
             guard let spend = record.spend else { return nil }
             return DailySpendPoint(
@@ -237,7 +252,7 @@ public struct MainPopoverView: View {
     }
 
     private func modelUsages(for account: AccountModel) -> [ModelUsageItem] {
-        guard let id = UUID(uuidString: account.id),
+        guard let id = account.parentAccountID ?? UUID(uuidString: account.id),
               let snapshot = store.snapshots.first(where: { $0.accountID == id }),
               let summaries = snapshot.modelUsages else { return [] }
         return ModelUsageItem.items(from: summaries, currency: account.currency)
@@ -283,7 +298,7 @@ public struct MainPopoverView: View {
                     VStack(alignment: .trailing, spacing: 3) {
                         if kind == .workbuddy2api {
                             Text("积分 " + (store.creditTotal().value.map { NSDecimalNumber(decimal: $0).stringValue } ?? "--"))
-                            Text("今日消耗 暂不支持")
+                            Text("今日累计 " + (workBuddyTodaySpend(for: accounts).map { NSDecimalNumber(decimal: $0).stringValue + " 积分" } ?? "--"))
                         } else {
                             let balance = store.balanceTotal(for: kind)
                             let today = store.todaySpendTotal(for: kind)

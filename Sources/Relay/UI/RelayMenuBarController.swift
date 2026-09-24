@@ -51,6 +51,8 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
 
     private let statusItemAutosaveName = NSStatusItem.AutosaveName("cloud.dinghao.relay.status-item")
     private let fixedStatusItemLength: CGFloat = 70
+    // Match the compact visual scale used by native macOS menu-bar items.
+    private let statusItemSymbolPointSize: CGFloat = 14
 
     public init(
         store: RelayStore,
@@ -74,6 +76,8 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
         statusItem.button?.action = #selector(handleStatusItemClick(_:))
         statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         statusItem.button?.imagePosition = .imageLeading
+        statusItem.button?.imageScaling = .scaleProportionallyDown
+        statusItem.button?.alignment = .center
         statusItem.button?.toolTip = "Relay（左键打开，右键显示菜单）"
         statusItem.button?.cell?.usesSingleLineMode = true
         statusItem.button?.cell?.lineBreakMode = .byTruncatingTail
@@ -401,6 +405,9 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
                     self?.store.resolveSyncConflict(decision)
                 },
                 store: self.store,
+                onEditAccount: { [weak self] account in
+                    self?.showAccountEditWindow(account: account)
+                },
                 onClose: { [weak self] in self?.closeAuxiliaryWindow() },
                 onSave: { [weak self] settings in self?.store.updateSettings(settings) }
             )
@@ -475,13 +482,25 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
             isRefreshing: store.isRefreshing,
             hasWarning: store.hasAnyWarning || store.hasLowBalance
         )
-        let image = NSImage(systemSymbolName: presentation.symbolName, accessibilityDescription: presentation.statusDescription)
+        let symbolConfiguration = NSImage.SymbolConfiguration(
+            pointSize: statusItemSymbolPointSize,
+            weight: .regular
+        )
+        let image = NSImage(
+            systemSymbolName: presentation.symbolName,
+            accessibilityDescription: presentation.statusDescription
+        )?.withSymbolConfiguration(symbolConfiguration)
         image?.isTemplate = true
         button.image = image
+        button.imageScaling = .scaleProportionallyDown
         button.contentTintColor = nil
         button.imagePosition = presentation.title.isEmpty ? .imageOnly : .imageLeading
+        button.alignment = .center
         button.title = presentation.title
-        button.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+        button.font = NSFont.monospacedDigitSystemFont(
+            ofSize: NSFont.smallSystemFontSize,
+            weight: .regular
+        )
         button.toolTip = presentation.toolTip
         button.setAccessibilityLabel(presentation.toolTip)
         let fixedWidth = UserDefaults.standard.object(forKey: "fixedMenuBarWidth") as? Bool ?? true

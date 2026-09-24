@@ -92,22 +92,69 @@ public final class RefreshCoordinator {
             now: Date(),
             calendar: calendar
         )
+        // If an older gateway has no /v1/stats endpoint, keep the previous
+        // stats baseline so a later successful response is not counted twice.
+        let fetchedWithStats: ProviderSnapshot
+        if account.providerKind == .workbuddy2api,
+           fetched.workBuddyStats == nil,
+           let oldStats = oldSnapshot?.workBuddyStats {
+            fetchedWithStats = ProviderSnapshot(
+                accountID: fetched.accountID,
+                balance: fetched.balance,
+                todaySpend: fetched.todaySpend,
+                monthSpend: fetched.monthSpend,
+                requestCount: fetched.requestCount,
+                modelUsages: fetched.modelUsages,
+                capabilities: fetched.capabilities,
+                freshness: fetched.freshness,
+                fetchedAt: fetched.fetchedAt,
+                rate: fetched.rate,
+                creditMetrics: fetched.creditMetrics,
+                subAccounts: fetched.subAccounts,
+                workBuddyStats: oldStats
+            )
+        } else {
+            fetchedWithStats = fetched
+        }
         let snapshot = rateResolution.isStale ? ProviderSnapshot(
-            accountID: fetched.accountID,
-            balance: fetched.balance,
-            todaySpend: fetched.todaySpend,
-            monthSpend: fetched.monthSpend,
-            requestCount: fetched.requestCount,
-            modelUsages: fetched.modelUsages,
-            capabilities: fetched.capabilities,
+            accountID: fetchedWithStats.accountID,
+            balance: fetchedWithStats.balance,
+            todaySpend: fetchedWithStats.todaySpend,
+            monthSpend: fetchedWithStats.monthSpend,
+            requestCount: fetchedWithStats.requestCount,
+            modelUsages: fetchedWithStats.modelUsages,
+            capabilities: fetchedWithStats.capabilities,
             freshness: .stale,
-            fetchedAt: fetched.fetchedAt,
-            rate: fetched.rate,
-            creditMetrics: fetched.creditMetrics,
-            subAccounts: fetched.subAccounts
-        ) : fetched
+            fetchedAt: fetchedWithStats.fetchedAt,
+            rate: fetchedWithStats.rate,
+            creditMetrics: fetchedWithStats.creditMetrics,
+            subAccounts: fetchedWithStats.subAccounts,
+            workBuddyStats: fetchedWithStats.workBuddyStats
+        ) : fetchedWithStats
         try repository.upsertSnapshot(snapshot)
-        if account.providerKind != .workbuddy2api {
+        if account.providerKind == .workbuddy2api, let currentStats = snapshot.workBuddyStats {
+            let previousStats = oldSnapshot?.workBuddyStats
+            let delta: Decimal
+            if let previousStats, previousStats.since == currentStats.since {
+                delta = max(currentStats.total.credit - previousStats.total.credit, .zero)
+            } else {
+                // A changed `since` means the gateway process restarted. The
+                // new process starts at zero, so its current total is a new epoch.
+                delta = max(currentStats.total.credit, .zero)
+            }
+            if delta > 0 {
+                let day = calendar.startOfDay(for: snapshot.fetchedAt)
+                let existing = try repository.dailyUsage(accountID: account.id, limit: nil)
+                    .first(where: { calendar.isDate($0.day, inSameDayAs: day) })
+                let amount = (existing?.spend?.currency == .cny ? existing?.spend?.amount : nil) ?? .zero
+                try repository.upsertDailyUsage(DailyUsageRecord(
+                    accountID: account.id,
+                    day: day,
+                    spend: MoneyValue(amount: amount + delta, currency: .cny),
+                    updatedAt: snapshot.fetchedAt
+                ))
+            }
+        } else if account.providerKind != .workbuddy2api {
             let historyCalendar = account.providerKind == .deepseek
                 ? DeepSeekUsageService.historyCalendar
                 : calendar

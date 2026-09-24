@@ -14,5 +14,6 @@ swiftc -swift-version 5 -D DEBUG -parse-as-library \
   "$ROOT/Tests/MenuBarPresentationChecks.swift" \
   "$ROOT/Tests/AccountFeedbackChecks.swift" \
   "$ROOT/Tests/PipioDashboardContractChecks.swift" \
+  "$ROOT/Tests/WorkBuddy2APIContractChecks.swift" \
   "$ROOT/Tests/RegressionChecks.swift" -o "$WORK/relay-regressions"
 "$WORK/relay-regressions"

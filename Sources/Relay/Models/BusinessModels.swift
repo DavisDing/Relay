@@ -188,6 +188,82 @@ public enum DataFreshness: String, Codable, Sendable {
     case partial
 }
 
+public struct WorkBuddyStatsCounter: Codable, Sendable, Equatable {
+    public let requests: Int64
+    public let success: Int64
+    public let failed: Int64
+    public let streaming: Int64
+    public let promptTokens: Int64
+    public let completionTokens: Int64
+    public let totalTokens: Int64
+    public let cacheHitTokens: Int64
+    public let cacheMissTokens: Int64
+    public let cacheWriteTokens: Int64
+    public let credit: Decimal
+
+    public init(
+        requests: Int64 = 0,
+        success: Int64 = 0,
+        failed: Int64 = 0,
+        streaming: Int64 = 0,
+        promptTokens: Int64 = 0,
+        completionTokens: Int64 = 0,
+        totalTokens: Int64 = 0,
+        cacheHitTokens: Int64 = 0,
+        cacheMissTokens: Int64 = 0,
+        cacheWriteTokens: Int64 = 0,
+        credit: Decimal = .zero
+    ) {
+        self.requests = requests
+        self.success = success
+        self.failed = failed
+        self.streaming = streaming
+        self.promptTokens = promptTokens
+        self.completionTokens = completionTokens
+        self.totalTokens = totalTokens
+        self.cacheHitTokens = cacheHitTokens
+        self.cacheMissTokens = cacheMissTokens
+        self.cacheWriteTokens = cacheWriteTokens
+        self.credit = credit
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case requests, success, failed, streaming
+        case promptTokens = "prompt_tokens"
+        case completionTokens = "completion_tokens"
+        case totalTokens = "total_tokens"
+        case cacheHitTokens = "cache_hit_tokens"
+        case cacheMissTokens = "cache_miss_tokens"
+        case cacheWriteTokens = "cache_write_tokens"
+        case credit
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        requests = try c.decodeIfPresent(Int64.self, forKey: .requests) ?? 0
+        success = try c.decodeIfPresent(Int64.self, forKey: .success) ?? 0
+        failed = try c.decodeIfPresent(Int64.self, forKey: .failed) ?? 0
+        streaming = try c.decodeIfPresent(Int64.self, forKey: .streaming) ?? 0
+        promptTokens = try c.decodeIfPresent(Int64.self, forKey: .promptTokens) ?? 0
+        completionTokens = try c.decodeIfPresent(Int64.self, forKey: .completionTokens) ?? 0
+        totalTokens = try c.decodeIfPresent(Int64.self, forKey: .totalTokens) ?? 0
+        cacheHitTokens = try c.decodeIfPresent(Int64.self, forKey: .cacheHitTokens) ?? 0
+        cacheMissTokens = try c.decodeIfPresent(Int64.self, forKey: .cacheMissTokens) ?? 0
+        cacheWriteTokens = try c.decodeIfPresent(Int64.self, forKey: .cacheWriteTokens) ?? 0
+        credit = try c.decodeIfPresent(Decimal.self, forKey: .credit) ?? .zero
+    }
+}
+
+public struct WorkBuddyStatsSnapshot: Codable, Sendable, Equatable {
+    public let since: Date
+    public let total: WorkBuddyStatsCounter
+
+    public init(since: Date, total: WorkBuddyStatsCounter) {
+        self.since = since
+        self.total = total
+    }
+}
+
 public struct ModelUsageSummary: Codable, Sendable, Equatable, Identifiable {
     public let id: String
     public let modelName: String
@@ -290,10 +366,12 @@ public struct ProviderSnapshot: Codable, Sendable, Equatable {
     public let rate: AccountRate
     public let creditMetrics: CreditMetrics?
     public let subAccounts: [ProviderSubAccountSnapshot]?
+    /// Process-lifetime workbuddy2api statistics used as the deduplication baseline.
+    public let workBuddyStats: WorkBuddyStatsSnapshot?
 
     private enum CodingKeys: String, CodingKey {
         case accountID, balance, todaySpend, monthSpend, requestCount, modelUsages
-        case capabilities, freshness, fetchedAt, rate, creditMetrics, subAccounts
+        case capabilities, freshness, fetchedAt, rate, creditMetrics, subAccounts, workBuddyStats
     }
 
     public init(from decoder: Decoder) throws {
@@ -310,6 +388,7 @@ public struct ProviderSnapshot: Codable, Sendable, Equatable {
         rate = try c.decode(AccountRate.self, forKey: .rate)
         creditMetrics = try c.decodeIfPresent(CreditMetrics.self, forKey: .creditMetrics)
         subAccounts = try c.decodeIfPresent([ProviderSubAccountSnapshot].self, forKey: .subAccounts)
+        workBuddyStats = try c.decodeIfPresent(WorkBuddyStatsSnapshot.self, forKey: .workBuddyStats)
     }
 
     public init(
@@ -324,7 +403,8 @@ public struct ProviderSnapshot: Codable, Sendable, Equatable {
         fetchedAt: Date = Date(),
         rate: AccountRate,
         creditMetrics: CreditMetrics? = nil,
-        subAccounts: [ProviderSubAccountSnapshot]? = nil
+        subAccounts: [ProviderSubAccountSnapshot]? = nil,
+        workBuddyStats: WorkBuddyStatsSnapshot? = nil
     ) {
         self.accountID = accountID
         self.balance = balance
@@ -338,6 +418,7 @@ public struct ProviderSnapshot: Codable, Sendable, Equatable {
         self.rate = rate
         self.creditMetrics = creditMetrics
         self.subAccounts = subAccounts
+        self.workBuddyStats = workBuddyStats
     }
 }
 
@@ -382,6 +463,8 @@ public enum RateRefreshInterval: String, Codable, CaseIterable, Sendable {
 }
 
 public enum HistoryRetention: String, Codable, CaseIterable, Sendable {
+    case oneMonth
+    case halfYear
     case oneYear
     case forever
 }

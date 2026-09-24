@@ -60,6 +60,48 @@ private func decoded(_ data: Data) throws -> RelaySyncData {
     return try decoder.decode(RelaySyncData.self, from: data)
 }
 
+@MainActor
+private final class SequenceWorkBuddyAdapter: ProviderAdapter {
+    let kind: ProviderKind = .workbuddy2api
+    private var snapshots: [ProviderSnapshot]
+    private var index = 0
+
+    init(snapshots: [ProviderSnapshot]) { self.snapshots = snapshots }
+
+    func fetchAccountRate(for account: AccountConfiguration, credential: ProviderCredential) async throws -> AccountRate {
+        AccountRate(accountID: account.id, source: .providerNativeCurrency, nativeCurrency: .cny)
+    }
+    func validateAccount(_ account: AccountConfiguration, credential: ProviderCredential) async throws {}
+    func fetchSnapshot(for account: AccountConfiguration, credential: ProviderCredential, rate: AccountRate, now: Date, calendar: Calendar) async throws -> ProviderSnapshot {
+        let snapshot = snapshots[min(index, snapshots.count - 1)]
+        index += 1
+        return ProviderSnapshot(
+            accountID: account.id, balance: snapshot.balance, todaySpend: snapshot.todaySpend,
+            monthSpend: snapshot.monthSpend, requestCount: snapshot.requestCount,
+            modelUsages: snapshot.modelUsages, capabilities: snapshot.capabilities,
+            freshness: snapshot.freshness, fetchedAt: now, rate: rate,
+            creditMetrics: snapshot.creditMetrics, subAccounts: snapshot.subAccounts,
+            workBuddyStats: snapshot.workBuddyStats
+        )
+    }
+}
+
+private func workBuddySnapshot(_ accountID: UUID, since: Date, credit: Decimal) -> ProviderSnapshot {
+    ProviderSnapshot(
+        accountID: accountID, balance: nil, todaySpend: nil, monthSpend: nil,
+        requestCount: 10, modelUsages: [ModelUsageSummary(
+            modelName: "model-a", tokenCount: 100, requestCount: 10,
+            cacheHitRate: Decimal(string: "0.5"),
+            spend: MoneyValue(amount: credit, currency: .cny)
+        )], capabilities: [.creditBalance, .requestCount, .modelUsage], freshness: .fresh,
+        rate: AccountRate(accountID: accountID, source: .providerNativeCurrency, nativeCurrency: .cny),
+        creditMetrics: CreditMetrics(available: 100),
+        workBuddyStats: WorkBuddyStatsSnapshot(
+            since: since, total: WorkBuddyStatsCounter(requests: 10, totalTokens: 100, credit: credit)
+        )
+    )
+}
+
 /// The failure is injected AFTER successful setup, never by altering assertions.
 @MainActor
 private final class RejectingRepository: LocalRepository {
@@ -125,6 +167,7 @@ struct RegressionChecks {
         try BusinessLogicSelfCheck.run()
         print("PASSED: existing business logic self-check")
         try await PipioDashboardContractChecks.run()
+        try await WorkBuddy2APIContractChecks.run()
         try MenuBarPresentationChecks.run()
         try await AccountFeedbackChecks.run()
         try await credentials(root)
@@ -141,6 +184,8 @@ struct RegressionChecks {
         print("PASSED: two-device exchange, deletion and damaged file protection")
         try presentation()
         print("PASSED: enabled-account coverage, midnight/timezone invalidation and settings failure")
+        try await workBuddyStatsAndHistory()
+        print("PASSED: workbuddy2api stats decoding, de-duplicated epochs and retention policies")
         print("PASSED: all regression groups (temporary fixtures, no provider requests)")
     }
 
@@ -476,6 +521,54 @@ struct RegressionChecks {
         try rejects("unavailable sync directory") { try FileSyncService.exchange(repository: a, directory: shared.appendingPathComponent("missing"), writeBack: true) }
         try a.upsertAccount(account("still works locally"))
         try check(try a.fetchAccounts().count == 2, "sync failures must leave local repository usable")
+    }
+
+    @MainActor static func workBuddyStatsAndHistory() async throws {
+        let repo = InMemoryLocalRepository()
+        let credentials = InMemoryCredentialStore()
+        let account = AccountConfiguration(
+            displayName: "workbuddy", providerKind: .workbuddy2api,
+            siteOrigin: URL(string: "http://localhost:7863")!
+        )
+        try repo.upsertAccount(account)
+        try await credentials.save(ProviderCredential(secret: "test-key"), reference: account.credentialReference)
+        let epoch = Date(timeIntervalSince1970: 1_800_000_000)
+        let adapter = SequenceWorkBuddyAdapter(snapshots: [
+            workBuddySnapshot(account.id, since: epoch, credit: 10),
+            workBuddySnapshot(account.id, since: epoch, credit: 10),
+            workBuddySnapshot(account.id, since: epoch, credit: 15),
+            workBuddySnapshot(account.id, since: epoch.addingTimeInterval(1), credit: 3)
+        ])
+        let coordinator = RefreshCoordinator(
+            repository: repo, credentialStore: credentials,
+            adapters: ProviderAdapterRegistry(adapters: [adapter]), maxRetryCount: 0
+        )
+        for _ in 0..<4 {
+            let result = await coordinator.refresh(accountID: account.id)
+            try check(result.isSuccess, "workbuddy refresh should succeed")
+        }
+        let usage = try repo.dailyUsage(accountID: account.id, limit: nil)
+        try check(usage.count == 1, "same-day workbuddy refreshes should merge into one record")
+        try check(usage[0].spend?.amount == 18, "workbuddy stats should add only monotonic deltas and new epochs")
+        try check(try repo.snapshot(accountID: account.id)?.workBuddyStats?.total.credit == 3, "latest workbuddy stats baseline must persist")
+
+        let retentionCases: [(HistoryRetention, Int, Bool)] = [
+            (.oneMonth, -60, false), (.halfYear, -240, false),
+            (.oneYear, -800, false), (.forever, -800, true)
+        ]
+        for (retention, oldDays, shouldKeepOld) in retentionCases {
+            let history = InMemoryLocalRepository()
+            var settings = try history.settings()
+            settings.historyRetention = retention
+            try history.updateSettings(settings)
+            let oldDay = Calendar.current.date(byAdding: .day, value: oldDays, to: Date())!
+            let recentDay = Calendar.current.date(byAdding: .day, value: -2, to: Date())!
+            try history.upsertDailyUsage(DailyUsageRecord(accountID: account.id, day: oldDay, spend: MoneyValue(amount: 1, currency: .cny)))
+            try history.upsertDailyUsage(DailyUsageRecord(accountID: account.id, day: recentDay, spend: MoneyValue(amount: 2, currency: .cny)))
+            let days = try history.dailyUsage(accountID: account.id, limit: nil)
+            try check(days.contains(where: { Calendar.current.isDate($0.day, inSameDayAs: recentDay) }), "recent history should remain for \(retention)")
+            try check(days.contains(where: { Calendar.current.isDate($0.day, inSameDayAs: oldDay) }) == shouldKeepOld, "retention policy should handle \(retention)")
+        }
     }
 
     @MainActor static func presentation() throws {
