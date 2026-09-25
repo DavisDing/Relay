@@ -5,6 +5,7 @@ import SwiftUI
 public struct MainPopoverView: View {
     @ObservedObject private var store: RelayStore
     @AppStorage("appearanceMode") private var appearanceMode: AppearanceMode = .followSystem
+    @AppStorage("homeAmountsHidden") private var homeAmountsHidden = false
     @State private var accountPendingDeletion: AccountModel?
     @State private var expandedProviders = Set<ProviderKind>()
     private let initialGlobalShortcutConfiguration: GlobalShortcutConfiguration
@@ -41,6 +42,11 @@ public struct MainPopoverView: View {
     }
 
     private var totalBalance: Decimal? { store.balanceTotalCNY.value?.amount }
+
+    /// Mask only the home projection; stored values, menu-bar text and detail pages stay unchanged.
+    private func homeAmount(_ value: String) -> String {
+        homeAmountsHidden ? "••••" : value
+    }
 
     private var totalTodaySpend: Decimal? {
         guard store.todaySpendTotalCNY.isComplete else { return nil }
@@ -120,6 +126,16 @@ public struct MainPopoverView: View {
                 .overlay(Capsule().stroke(.blue.opacity(0.6), lineWidth: 1))
 
             Button {
+                homeAmountsHidden.toggle()
+            } label: {
+                Image(systemName: homeAmountsHidden ? "eye.slash" : "eye")
+                    .frame(width: 18, height: 18)
+            }
+            .buttonStyle(.plain)
+            .help(homeAmountsHidden ? "显示首页金额与积分" : "隐藏首页金额与积分")
+            .accessibilityLabel(homeAmountsHidden ? "显示首页金额与积分" : "隐藏首页金额与积分")
+
+            Button {
                 Task { await store.refreshAll(forceRateRefresh: true) }
             } label: {
                 Group {
@@ -163,10 +179,10 @@ public struct MainPopoverView: View {
                 if visibleTopLevelAccounts.contains(where: { $0.kind != .workbuddy2api }) {
                     HStack(spacing: 8) {
                         summaryCard(title: "总可用折算余额",
-                            value: totalBalance.map { RelayNumberFormatter.money($0, currency: store.settings.baseCurrency) } ?? "--",
+                            value: homeAmount(totalBalance.map { RelayNumberFormatter.money($0, currency: store.settings.baseCurrency) } ?? "--"),
                             subtitle: store.balanceTotalCNY.isComplete ? "\(enabledAccountCount) 个账号运行正常" : "部分账号缺少可靠数据或汇率", accent: .primary)
                         summaryCard(title: "今日总消耗",
-                            value: totalTodaySpend.map { RelayNumberFormatter.money($0, currency: store.settings.baseCurrency) } ?? "--",
+                            value: homeAmount(totalTodaySpend.map { RelayNumberFormatter.money($0, currency: store.settings.baseCurrency) } ?? "--"),
                             subtitle: totalTodaySpend == nil ? "数据不完整，已不参与统计" : "全量统计（已完整）",
                             accent: totalTodaySpend == nil ? .primary : .orange)
                     }
@@ -174,7 +190,7 @@ public struct MainPopoverView: View {
                 if visibleTopLevelAccounts.contains(where: { $0.kind == .workbuddy2api }) {
                     HStack(spacing: 8) {
                         summaryCard(title: "总可用积分",
-                            value: store.creditTotal().value.map { RelayNumberFormatter.decimal($0) } ?? "--",
+                            value: homeAmount(store.creditTotal().value.map { RelayNumberFormatter.decimal($0) } ?? "--"),
                             subtitle: store.creditTotal().isComplete ? "网关内部账号汇总" : "部分网关数据不可用", accent: .primary)
                         summaryCard(title: "今日消耗 / 获取积分", value: "暂不支持",
                             subtitle: "网关未提供可靠的自然日统计", accent: .secondary)
@@ -297,13 +313,13 @@ public struct MainPopoverView: View {
                     Spacer()
                     VStack(alignment: .trailing, spacing: 3) {
                         if kind == .workbuddy2api {
-                            Text("积分 " + (store.creditTotal().value.map { RelayNumberFormatter.decimal($0) } ?? "--"))
-                            Text("今日累计 " + (workBuddyTodaySpend(for: accounts).map { RelayNumberFormatter.decimal($0) + " 积分" } ?? "--"))
+                            Text("积分 " + homeAmount(store.creditTotal().value.map { RelayNumberFormatter.decimal($0) } ?? "--"))
+                            Text("今日累计 " + homeAmount(workBuddyTodaySpend(for: accounts).map { RelayNumberFormatter.decimal($0) + " 积分" } ?? "--"))
                         } else {
                             let balance = store.balanceTotal(for: kind)
                             let today = store.todaySpendTotal(for: kind)
-                            Text("余额 " + (balance.value.map { RelayNumberFormatter.money($0.amount, currency: store.settings.baseCurrency) } ?? "--"))
-                            Text("今日 " + (today.isComplete ? (today.value.map { RelayNumberFormatter.money($0.amount, currency: store.settings.baseCurrency) } ?? "--") : "--"))
+                            Text("余额 " + homeAmount(balance.value.map { RelayNumberFormatter.money($0.amount, currency: store.settings.baseCurrency) } ?? "--"))
+                            Text("今日 " + homeAmount(today.isComplete ? (today.value.map { RelayNumberFormatter.money($0.amount, currency: store.settings.baseCurrency) } ?? "--") : "--"))
                         }
                     }.font(.system(size: 10)).foregroundStyle(.secondary)
                 }.contentShape(Rectangle())
@@ -350,12 +366,14 @@ public struct MainPopoverView: View {
                     Spacer(minLength: 8)
 
                     VStack(alignment: .trailing, spacing: 4) {
-                        Text(account.kind == .workbuddy2api ? (account.availablePoints.map { "\(RelayNumberFormatter.decimal($0)) 积分" } ?? "积分 --") : (account.balance.map { RelayNumberFormatter.money($0, currency: account.currency) } ?? "--"))
+                        Text(account.kind == .workbuddy2api
+                            ? "积分 " + homeAmount(account.availablePoints.map { RelayNumberFormatter.decimal($0) } ?? "--")
+                            : homeAmount(account.balance.map { RelayNumberFormatter.money($0, currency: account.currency) } ?? "--"))
                             .font(.system(size: 13, weight: .bold))
                             .foregroundStyle(.primary)
                             .lineLimit(1)
                         if let todaySpend = account.todaySpend {
-                            Text("今日 \(RelayNumberFormatter.money(todaySpend, currency: account.currency))")
+                            Text("今日 " + homeAmount(RelayNumberFormatter.money(todaySpend, currency: account.currency)))
                                 .font(.system(size: 9))
                                 .foregroundStyle(.secondary)
                         }

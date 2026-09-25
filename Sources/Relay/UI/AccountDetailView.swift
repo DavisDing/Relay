@@ -230,40 +230,44 @@ public struct AccountDetailView: View {
                     .foregroundStyle(.secondary)
                     .padding(.vertical, 5)
             } else {
-                HStack(spacing: 8) {
+                ModelUsageColumnLayout {
                     Text("模型")
-                    Spacer()
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     Text("总 Token")
-                        .frame(width: 76, alignment: .trailing)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
                     Text("缓存读取")
-                        .frame(width: 58, alignment: .trailing)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
                     Text("消耗")
-                        .frame(width: 68, alignment: .trailing)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
                 }
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 9)
 
                 ForEach(modelUsages) { item in
-                    HStack(spacing: 8) {
+                    ModelUsageColumnLayout {
                         Text(item.modelName)
                             .font(.system(size: 11, weight: .medium))
                             .lineLimit(1)
-                            .truncationMode(.tail)
+                            .minimumScaleFactor(0.8)
+                            .truncationMode(.middle)
                             .frame(maxWidth: .infinity, alignment: .leading)
+                            .help(item.modelName)
                         Text(item.tokenCount.map { RelayNumberFormatter.tokens($0) } ?? item.tokens)
                             .font(.system(size: 10))
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .minimumScaleFactor(0.75)
-                            .frame(width: 76, alignment: .trailing)
+                            .frame(maxWidth: .infinity, alignment: .trailing)
                             .help("\(item.tokens) Token")
                             .accessibilityLabel("总 Token：\(item.tokens)")
                         Text(item.cacheHitRate.map(RelayNumberFormatter.percent) ?? "--")
                             .font(.system(size: 10))
                             .foregroundStyle(.secondary)
-                            .frame(width: 58, alignment: .trailing)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+                            .frame(maxWidth: .infinity, alignment: .trailing)
                         VStack(alignment: .trailing, spacing: 1) {
                             Text(item.cost.map {
                                 account.kind == .workbuddy2api
@@ -271,11 +275,14 @@ public struct AccountDetailView: View {
                                     : RelayNumberFormatter.money($0, currency: item.currency)
                             } ?? "--")
                                 .font(.system(size: 11, weight: .semibold))
+                                .lineLimit(2)
+                                .minimumScaleFactor(0.75)
+                                .multilineTextAlignment(.trailing)
                             Text(item.percentage.map { String(format: "%.0f%%", $0 * 100) } ?? "--")
                                 .font(.system(size: 9))
                                 .foregroundStyle(.secondary)
                         }
-                        .frame(width: 68, alignment: .trailing)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
                     }
                     .padding(.horizontal, 9)
                     .padding(.vertical, 7)
@@ -350,5 +357,36 @@ private struct MetricCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(9)
         .relayGlassTile(cornerRadius: 10)
+    }
+}
+
+/// Fixed 2:1:1:1 column proportions for both the header and every model row.
+/// The first column gets two shares so model identifiers have more room while
+/// staying on one line and not competing with the numeric columns.
+private struct ModelUsageColumnLayout: Layout {
+    private let spacing: CGFloat = 4
+
+    private func columnWidths(for totalWidth: CGFloat) -> [CGFloat] {
+        let share = max(0, totalWidth - spacing * 3) / 5
+        return [share * 2, share, share, share]
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? subviews.reduce(CGFloat.zero) { $0 + $1.sizeThatFits(.unspecified).width } + spacing * 3
+        let widths = columnWidths(for: width)
+        let height = zip(subviews, widths).map { subview, columnWidth in
+            subview.sizeThatFits(ProposedViewSize(width: columnWidth, height: proposal.height)).height
+        }.max() ?? 0
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let widths = columnWidths(for: bounds.width)
+        var x = bounds.minX
+        for (subview, columnWidth) in zip(subviews, widths) {
+            subview.place(at: CGPoint(x: x, y: bounds.midY), anchor: .leading,
+                          proposal: ProposedViewSize(width: columnWidth, height: bounds.height))
+            x += columnWidth + spacing
+        }
     }
 }
