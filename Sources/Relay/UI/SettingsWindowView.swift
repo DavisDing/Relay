@@ -486,13 +486,14 @@ public struct SettingsWindowView: View {
                     }
                 }
             } label: {
-                Image(systemName: "ellipsis")
+                Image(systemName: "chevron.down")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.secondary)
                     .frame(width: 24, height: 24)
                     .contentShape(Rectangle())
             }
             .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
             .help("账号操作")
         }
         .padding(.horizontal, 9)

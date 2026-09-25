@@ -271,7 +271,7 @@ public struct AccountDetailView: View {
                         VStack(alignment: .trailing, spacing: 1) {
                             Text(item.cost.map {
                                 account.kind == .workbuddy2api
-                                    ? "\(RelayNumberFormatter.decimal($0)) 积分"
+                                    ? RelayNumberFormatter.decimal($0)
                                     : RelayNumberFormatter.money($0, currency: item.currency)
                             } ?? "--")
                                 .font(.system(size: 11, weight: .semibold))
