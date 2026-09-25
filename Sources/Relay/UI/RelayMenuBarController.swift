@@ -48,6 +48,7 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
     private var appearanceObserver: NSObjectProtocol?
     private var auxiliaryWindowController: NSWindowController?
     private let onApplyGlobalShortcut: ((GlobalShortcutConfiguration) -> GlobalShortcutRegistrationOutcome)?
+    private let updateState: RelayUpdateState
 
     private let statusItemAutosaveName = NSStatusItem.AutosaveName("cloud.dinghao.relay.status-item")
     private let fixedStatusItemLength: CGFloat = 70
@@ -61,6 +62,7 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
     ) {
         self.store = store
         self.onApplyGlobalShortcut = onApplyGlobalShortcut
+        self.updateState = RelayUpdateState()
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         self.popover = NSPopover()
         super.init()
@@ -113,6 +115,12 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
         installAppearanceObservation()
         applyConfiguredAppearance()
         updateStatusItem()
+        // Perform one silent release check for every app launch. The result is
+        // shared with Settings → 关于 so opening that page does not duplicate
+        // the request.
+        Task { @MainActor [weak self] in
+            _ = await self?.updateState.checkForUpdates()
+        }
     }
 
     deinit {
@@ -256,45 +264,47 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
     @objc private func checkForUpdatesFromMenu(_ sender: Any?) {
         Task { @MainActor [weak self] in
             guard let self else { return }
-            let service = UpdateService()
-            do {
-                switch try await service.checkForUpdates() {
-                case .upToDate(let currentVersion):
-                    presentUpdateAlert(
-                        title: "Relay 已是最新版本",
-                        message: "当前版本：\(currentVersion)",
+            let result = await self.updateState.checkForUpdates()
+            guard let result else {
+                if case .failed(let message) = self.updateState.status {
+                    self.presentUpdateAlert(
+                        title: "检查更新失败",
+                        message: message,
                         buttons: ["知道了"]
                     )
-                case .available(let update):
-                    let alert = NSAlert()
-                    alert.messageText = "发现 Relay 新版本 \(update.version)"
-                    alert.informativeText = "是否下载 macOS Apple Silicon 安装包？下载后会保存到“下载”文件夹。"
-                    alert.addButton(withTitle: "下载")
-                    alert.addButton(withTitle: "稍后")
-                    guard alert.runModal() == .alertFirstButtonReturn else { return }
-
-                    do {
-                        let downloadedURL = try await service.download(update)
-                        NSWorkspace.shared.activateFileViewerSelecting([downloadedURL])
-                        presentUpdateAlert(
-                            title: "更新包已下载",
-                            message: "已保存到：\n\(downloadedURL.path)\n请退出 Relay 后，用新版本替换 Applications 文件夹中的旧版本。",
-                            buttons: ["知道了"]
-                        )
-                    } catch {
-                        presentUpdateAlert(
-                            title: "下载失败",
-                            message: error.localizedDescription,
-                            buttons: ["知道了"]
-                        )
-                    }
                 }
-            } catch {
-                presentUpdateAlert(
-                    title: "检查更新失败",
-                    message: error.localizedDescription,
+                return
+            }
+            switch result {
+            case .upToDate(let currentVersion):
+                self.presentUpdateAlert(
+                    title: "Relay 已是最新版本",
+                    message: "当前版本：\(currentVersion)",
                     buttons: ["知道了"]
                 )
+            case .available(let update):
+                let alert = NSAlert()
+                alert.messageText = "发现 Relay 新版本 \(update.version)"
+                alert.informativeText = "是否下载 macOS Apple Silicon 安装包？下载后会保存到“下载”文件夹。"
+                alert.addButton(withTitle: "下载")
+                alert.addButton(withTitle: "稍后")
+                guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+                do {
+                    let downloadedURL = try await self.updateState.download(update)
+                    NSWorkspace.shared.activateFileViewerSelecting([downloadedURL])
+                    self.presentUpdateAlert(
+                        title: "更新包已下载",
+                        message: "已保存到：\n\(downloadedURL.path)\n请退出 Relay 后，用新版本替换 Applications 文件夹中的旧版本。",
+                        buttons: ["知道了"]
+                    )
+                } catch {
+                    self.presentUpdateAlert(
+                        title: "下载失败",
+                        message: error.localizedDescription,
+                        buttons: ["知道了"]
+                    )
+                }
             }
         }
     }
@@ -407,6 +417,7 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
                 onEditAccount: { [weak self] account in
                     self?.showAccountEditWindow(account: account)
                 },
+                updateState: self.updateState,
                 store: self.store,
                 onClose: { [weak self] in self?.closeAuxiliaryWindow() },
                 onSave: { [weak self] settings in self?.store.updateSettings(settings) }

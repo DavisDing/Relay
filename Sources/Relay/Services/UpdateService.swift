@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 /// A release published by the Relay GitHub repository.
 public struct RelayAppUpdate: Identifiable, Sendable, Equatable {
@@ -20,6 +21,56 @@ public struct RelayAppUpdate: Identifiable, Sendable, Equatable {
 public enum RelayUpdateCheckResult: Sendable, Equatable {
     case upToDate(currentVersion: String)
     case available(RelayAppUpdate)
+}
+
+public enum RelayUpdateStatus: Equatable, Sendable {
+    case idle
+    case checking
+    case upToDate(currentVersion: String)
+    case available(RelayAppUpdate)
+    case failed(message: String)
+
+    public var availableUpdate: RelayAppUpdate? {
+        guard case .available(let update) = self else { return nil }
+        return update
+    }
+}
+
+/// Shared update state so the launch check and the Settings/About page show the
+/// same result without issuing duplicate requests.
+public final class RelayUpdateState: ObservableObject {
+    @Published public private(set) var status: RelayUpdateStatus = .idle
+
+    private let service: UpdateService
+
+    public init(service: UpdateService = UpdateService()) {
+        self.service = service
+    }
+
+    @MainActor
+    @discardableResult
+    public func checkForUpdates() async -> RelayUpdateCheckResult? {
+        guard status != .checking else { return nil }
+        status = .checking
+        do {
+            let result = try await service.checkForUpdates()
+            switch result {
+            case .upToDate(let currentVersion):
+                status = .upToDate(currentVersion: currentVersion)
+            case .available(let update):
+                status = .available(update)
+            }
+            return result
+        } catch {
+            status = .failed(message: error.localizedDescription)
+            return nil
+        }
+    }
+
+    @MainActor
+    public func download(_ update: RelayAppUpdate) async throws -> URL {
+        try await service.download(update)
+    }
 }
 
 public enum UpdateServiceError: LocalizedError, Sendable {

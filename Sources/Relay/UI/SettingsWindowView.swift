@@ -8,7 +8,7 @@ public struct SettingsWindowView: View {
         case data
         case shortcuts
         case sync
-        case updates
+        case accountManagement
         case about
 
         var id: String { rawValue }
@@ -19,7 +19,7 @@ public struct SettingsWindowView: View {
             case .data: return "数据"
             case .shortcuts: return "快捷键"
             case .sync: return "同步"
-            case .updates: return "更新"
+            case .accountManagement: return "账管"
             case .about: return "关于"
             }
         }
@@ -30,7 +30,7 @@ public struct SettingsWindowView: View {
             case .data: return "chart.bar.xaxis"
             case .shortcuts: return "keyboard"
             case .sync: return "icloud"
-            case .updates: return "arrow.down.circle"
+            case .accountManagement: return "person.2"
             case .about: return "info.circle"
             }
         }
@@ -42,7 +42,7 @@ public struct SettingsWindowView: View {
     @State private var showTodayInMenuBar: Bool
     @State private var baseCurrency: Currency
     @State private var lowBalanceThreshold: String
-    @State private var refreshIntervalMinutes: Int
+    @State private var refreshIntervalMinutes: String
     @State private var historyRetention: HistoryRetention
     @State private var enableICloudFileSync: Bool
     @State private var iCloudDirectoryURL: URL?
@@ -52,14 +52,13 @@ public struct SettingsWindowView: View {
     @State private var showGlobalShortcutSettings = false
     @State private var showSyncConflict = false
     @State private var syncConflictActionError: String?
-    @State private var isCheckingForUpdates = false
     @State private var isDownloadingUpdate = false
     @State private var updateStatusMessage: String?
-    @State private var availableUpdate: RelayAppUpdate?
     @State private var downloadedUpdateURL: URL?
     @State private var showDownloadCompleteAlert = false
     @State private var selectedTab: SettingsTab = .general
     @ObservedObject private var store: RelayStore
+    @ObservedObject private var updateState: RelayUpdateState
     @State private var accountPendingDeletion: AccountModel?
 
     private var managedAccounts: [AccountModel] {
@@ -72,13 +71,12 @@ public struct SettingsWindowView: View {
     private let onResolveSyncConflict: ((SyncConflictDecision) -> String?)?
     private let initialGlobalShortcutConfiguration: GlobalShortcutConfiguration
     private let onApplyGlobalShortcut: ((GlobalShortcutConfiguration) -> GlobalShortcutRegistrationOutcome)?
-    private let onCheckForUpdates: () async throws -> RelayUpdateCheckResult
-    private let onDownloadUpdate: (RelayAppUpdate) async throws -> URL
     private let onEditAccount: ((AccountModel) -> Void)?
 
     public var onClose: () -> Void
     public var onSave: (RelaySettings) -> Void
     
+    @MainActor
     public init(
         initialSettings: RelaySettings = RelaySettings(),
         initialGlobalShortcutConfiguration: GlobalShortcutConfiguration = GlobalShortcutConfigurationStore.load(),
@@ -86,13 +84,8 @@ public struct SettingsWindowView: View {
         syncStatus: SyncStatus = .idle,
         syncConflictReport: SyncConflictReport? = nil,
         onResolveSyncConflict: ((SyncConflictDecision) -> String?)? = nil,
-        onCheckForUpdates: @escaping () async throws -> RelayUpdateCheckResult = {
-            try await UpdateService().checkForUpdates()
-        },
-        onDownloadUpdate: @escaping (RelayAppUpdate) async throws -> URL = { update in
-            try await UpdateService().download(update)
-        },
         onEditAccount: ((AccountModel) -> Void)? = nil,
+        updateState: RelayUpdateState = RelayUpdateState(),
         store: RelayStore,
         onClose: @escaping () -> Void = {},
         onSave: @escaping (RelaySettings) -> Void = { _ in }
@@ -103,23 +96,27 @@ public struct SettingsWindowView: View {
         self.syncStatus = syncStatus
         self.syncConflictReport = syncConflictReport
         self.onResolveSyncConflict = onResolveSyncConflict
-        self.onCheckForUpdates = onCheckForUpdates
-        self.onDownloadUpdate = onDownloadUpdate
         self.onEditAccount = onEditAccount
         self.store = store
+        self._updateState = ObservedObject(wrappedValue: updateState)
         self.onClose = onClose
         self.onSave = onSave
         _showTodayInMenuBar = State(initialValue: initialSettings.showTodayInMenuBar)
         _baseCurrency = State(initialValue: initialSettings.baseCurrency)
         _lowBalanceThreshold = State(initialValue: NSDecimalNumber(decimal: initialSettings.defaultLowBalanceThreshold).stringValue)
         let initialMinutes = max(1, initialSettings.refreshIntervalSeconds / 60)
-        _refreshIntervalMinutes = State(initialValue: [1, 5, 15, 30].contains(initialMinutes) ? initialMinutes : 5)
+        _refreshIntervalMinutes = State(initialValue: String(initialMinutes))
         _historyRetention = State(initialValue: initialSettings.historyRetention)
         _enableICloudFileSync = State(initialValue: initialSettings.iCloudFileSyncEnabled)
         _iCloudDirectoryURL = State(initialValue: FileSyncService.configuredDirectoryURL())
         _launchAtLoginEnabled = State(initialValue: LaunchAtLoginService.isEnabled)
     }
     
+    private var normalizedRefreshIntervalMinutes: Int {
+        let value = Int(refreshIntervalMinutes.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 5
+        return max(1, value)
+    }
+
     private var preferredColorScheme: ColorScheme? {
         RelayVisualStyle.preferredColorScheme(for: appearanceMode)
     }
@@ -188,7 +185,7 @@ public struct SettingsWindowView: View {
             let parsedThreshold = Decimal(string: lowBalanceThreshold, locale: Locale(identifier: "en_US_POSIX")) ?? 20
             onSave(RelaySettings(
                 schemaVersion: schemaVersion,
-                refreshIntervalSeconds: max(60, refreshIntervalMinutes * 60),
+                refreshIntervalSeconds: max(60, normalizedRefreshIntervalMinutes * 60),
                 showTodayInMenuBar: showTodayInMenuBar,
                 baseCurrency: baseCurrency,
                 defaultLowBalanceThreshold: parsedThreshold,
@@ -240,8 +237,8 @@ public struct SettingsWindowView: View {
             shortcutSettingsPage
         case .sync:
             syncSettingsPage
-        case .updates:
-            updateSettingsPage
+        case .accountManagement:
+            accountManagementSettingsPage
         case .about:
             aboutSettingsPage
         }
@@ -371,13 +368,17 @@ public struct SettingsWindowView: View {
                 Text("数据刷新")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundColor(.secondary)
-                Picker("自动刷新频率", selection: $refreshIntervalMinutes) {
-                    Text("1 分钟").tag(1)
-                    Text("5 分钟").tag(5)
-                    Text("15 分钟").tag(15)
-                    Text("30 分钟").tag(30)
+                HStack(spacing: 8) {
+                    Text("自动数据刷新频率：")
+                        .font(.system(size: 12))
+                    TextField("5", text: $refreshIntervalMinutes)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 58)
+                        .multilineTextAlignment(.trailing)
+                    Text("分钟")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
                 }
-                .pickerStyle(.segmented)
                 Text("刷新失败时保留上一份可用快照，不用 0 覆盖未知数据。")
                     .font(.system(size: 10))
                     .foregroundColor(.secondary)
@@ -401,8 +402,11 @@ public struct SettingsWindowView: View {
                     .foregroundColor(.secondary)
             }
 
-            Divider().opacity(0.4)
+        }
+    }
 
+    private var accountManagementSettingsPage: some View {
+        settingsScroll {
             VStack(alignment: .leading, spacing: 8) {
                 Text("账号管理")
                     .font(.system(size: 12, weight: .semibold))
@@ -631,72 +635,6 @@ public struct SettingsWindowView: View {
         }
     }
 
-    private var updateSettingsPage: some View {
-        settingsScroll {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("应用更新")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(.secondary)
-
-                HStack(spacing: 10) {
-                    Button {
-                        checkForUpdates()
-                    } label: {
-                        if isCheckingForUpdates {
-                            ProgressView()
-                                .controlSize(.small)
-                        } else {
-                            Text("检查更新")
-                        }
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(isCheckingForUpdates || isDownloadingUpdate)
-
-                    if let updateStatusMessage {
-                        Text(updateStatusMessage)
-                            .font(.system(size: 11))
-                            .foregroundColor(.secondary)
-                            .lineLimit(2)
-                    }
-                }
-
-                Text("Relay 会从 GitHub Releases 检查 macOS Apple Silicon 版本。下载后放入“下载”文件夹，由你确认退出并替换旧版本。")
-                    .font(.system(size: 10))
-                    .foregroundColor(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .alert("发现 Relay 新版本", isPresented: Binding(
-                get: { availableUpdate != nil },
-                set: { if !$0 { availableUpdate = nil } }
-            )) {
-                Button("下载") {
-                    if let update = availableUpdate {
-                        availableUpdate = nil
-                        download(update)
-                    }
-                }
-                Button("稍后", role: .cancel) { availableUpdate = nil }
-            } message: {
-                if let update = availableUpdate {
-                    Text("发现版本 \(update.version)。现在下载安装包吗？")
-                }
-            }
-            .alert("更新包已下载", isPresented: $showDownloadCompleteAlert) {
-                Button("在 Finder 中显示") {
-                    if let downloadedUpdateURL {
-                        NSWorkspace.shared.activateFileViewerSelecting([downloadedUpdateURL])
-                    }
-                }
-                Button("知道了", role: .cancel) {}
-            } message: {
-                if let downloadedUpdateURL {
-                    Text("安装包已保存到：\n\(downloadedUpdateURL.path)\n请退出 Relay 后，用新版本替换 Applications 文件夹中的旧版本。")
-                }
-            }
-        }
-    }
-
     private var aboutSettingsPage: some View {
         settingsScroll {
             VStack(alignment: .center, spacing: 10) {
@@ -731,6 +669,7 @@ public struct SettingsWindowView: View {
 
             VStack(alignment: .leading, spacing: 10) {
                 aboutInfoRow(title: "版本", value: appVersionText, systemImage: "tag")
+                latestVersionRow
                 aboutInfoRow(title: "系统要求", value: "macOS 27.0 或更高版本", systemImage: "laptopcomputer")
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                     Image(systemName: "link")
@@ -747,12 +686,105 @@ public struct SettingsWindowView: View {
             .padding(12)
             .relayInsetSurface(cornerRadius: 12)
 
+            VStack(alignment: .leading, spacing: 8) {
+                Text("应用更新")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.secondary)
+                if case .failed(let message) = updateState.status {
+                    Text(message)
+                        .font(.system(size: 11))
+                        .foregroundColor(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let updateStatusMessage {
+                    Text(updateStatusMessage)
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Text("Relay 会从 GitHub Releases 检查 macOS Apple Silicon 版本。发现新版本后，点击“最新版本”即可下载；下载后放入“下载”文件夹，由你确认退出并替换旧版本。")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(12)
+            .relayInsetSurface(cornerRadius: 12)
+
             Text("© 2026 Relay · 开源项目")
                 .font(.system(size: 10))
                 .foregroundStyle(.tertiary)
                 .frame(maxWidth: .infinity)
                 .padding(.bottom, 4)
         }
+        .alert("更新包已下载", isPresented: $showDownloadCompleteAlert) {
+            Button("在 Finder 中显示") {
+                if let downloadedUpdateURL {
+                    NSWorkspace.shared.activateFileViewerSelecting([downloadedUpdateURL])
+                }
+            }
+            Button("知道了", role: .cancel) {}
+        } message: {
+            if let downloadedUpdateURL {
+                Text("安装包已保存到：\n\(downloadedUpdateURL.path)\n请退出 Relay 后，用新版本替换 Applications 文件夹中的旧版本。")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var latestVersionRow: some View {
+        Button {
+            switch updateState.status {
+            case .available(let update):
+                download(update)
+            case .checking:
+                break
+            case .idle, .upToDate, .failed:
+                checkForUpdates()
+            }
+        } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Image(systemName: "arrow.down.circle")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 18)
+                Text("最新版本")
+                    .font(.system(size: 12, weight: .medium))
+                Spacer(minLength: 8)
+                latestVersionValue
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(updateState.status == .checking || isDownloadingUpdate)
+        .help(latestVersionHelp)
+    }
+
+    @ViewBuilder
+    private var latestVersionValue: some View {
+        switch updateState.status {
+        case .idle:
+            Text("点击检测")
+                .foregroundStyle(.secondary)
+        case .checking:
+            ProgressView()
+                .controlSize(.small)
+        case .upToDate:
+            Text("无更新")
+                .foregroundStyle(.secondary)
+        case .available(let update):
+            Text(update.version)
+                .foregroundStyle(Color.accentColor)
+                .fontWeight(.semibold)
+        case .failed:
+            Text("检查失败")
+                .foregroundStyle(.red)
+        }
+    }
+
+    private var latestVersionHelp: String {
+        if case .available = updateState.status {
+            return "点击下载最新版本"
+        }
+        return "点击检测更新"
     }
 
     private var applicationIcon: NSImage? {
@@ -789,21 +821,8 @@ public struct SettingsWindowView: View {
     }
 
     private func checkForUpdates() {
-        guard !isCheckingForUpdates else { return }
-        isCheckingForUpdates = true
-        updateStatusMessage = nil
-        Task {
-            do {
-                switch try await onCheckForUpdates() {
-                case .upToDate(let currentVersion):
-                    updateStatusMessage = "已是最新版本（\(currentVersion)）"
-                case .available(let update):
-                    availableUpdate = update
-                }
-            } catch {
-                updateStatusMessage = "检查失败：\(error.localizedDescription)"
-            }
-            isCheckingForUpdates = false
+        Task { @MainActor in
+            _ = await updateState.checkForUpdates()
         }
     }
 
@@ -811,9 +830,9 @@ public struct SettingsWindowView: View {
         guard !isDownloadingUpdate else { return }
         isDownloadingUpdate = true
         updateStatusMessage = "正在下载 \(update.version)…"
-        Task {
+        Task { @MainActor in
             do {
-                downloadedUpdateURL = try await onDownloadUpdate(update)
+                downloadedUpdateURL = try await updateState.download(update)
                 updateStatusMessage = "已下载到“下载”文件夹"
                 showDownloadCompleteAlert = true
             } catch {
