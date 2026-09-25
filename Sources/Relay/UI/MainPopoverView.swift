@@ -401,14 +401,14 @@ public struct MainPopoverView: View {
                     Button("删除账号", role: .destructive) { accountPendingDeletion = account }
                 }
             } label: {
-                Image(systemName: account.parentAccountID == nil ? "ellipsis" : "chevron.down")
+                Image(systemName: "chevron.down")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.secondary)
                     .frame(width: 24, height: 32)
                     .contentShape(Rectangle())
             }
             .menuStyle(.borderlessButton)
-            .menuIndicator(account.parentAccountID == nil ? .visible : .hidden)
+            .menuIndicator(.hidden)
             .help("账号操作")
         }
         .padding(.leading, 10)
