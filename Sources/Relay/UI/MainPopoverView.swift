@@ -12,7 +12,7 @@ public struct MainPopoverView: View {
     private let onApplyGlobalShortcut: ((GlobalShortcutConfiguration) -> GlobalShortcutRegistrationOutcome)?
     private let onPresentAddAccount: () -> Void
     private let onPresentSettings: () -> Void
-    private let onPresentDetail: (AccountModel, [DailySpendPoint], [ModelUsageItem]) -> Void
+    private let onPresentDetail: (AccountModel) -> Void
     private let onPresentEdit: (AccountModel) -> Void
 
     public init(
@@ -21,7 +21,7 @@ public struct MainPopoverView: View {
         onApplyGlobalShortcut: ((GlobalShortcutConfiguration) -> GlobalShortcutRegistrationOutcome)? = nil,
         onPresentAddAccount: @escaping () -> Void = {},
         onPresentSettings: @escaping () -> Void = {},
-        onPresentDetail: @escaping (AccountModel, [DailySpendPoint], [ModelUsageItem]) -> Void = { _, _, _ in },
+        onPresentDetail: @escaping (AccountModel) -> Void = { _ in },
         onPresentEdit: @escaping (AccountModel) -> Void = { _ in }
     ) {
         self.store = store
@@ -256,24 +256,6 @@ public struct MainPopoverView: View {
         return found ? total : nil
     }
 
-    private func spendPoints(for account: AccountModel) -> [DailySpendPoint] {
-        guard let id = account.parentAccountID ?? UUID(uuidString: account.id) else { return [] }
-        return store.dailyUsage(accountID: id, limit: 7).compactMap { record in
-            guard let spend = record.spend else { return nil }
-            return DailySpendPoint(
-                dateString: record.day.formatted(.dateTime.month(.twoDigits).day(.twoDigits)),
-                amount: spend.amount
-            )
-        }
-    }
-
-    private func modelUsages(for account: AccountModel) -> [ModelUsageItem] {
-        guard let id = account.parentAccountID ?? UUID(uuidString: account.id),
-              let snapshot = store.snapshots.first(where: { $0.accountID == id }),
-              let summaries = snapshot.modelUsages else { return [] }
-        return ModelUsageItem.items(from: summaries, currency: account.currency)
-    }
-
     private var lastSyncText: String {
         guard let lastSyncedAt = store.lastSyncedAt else { return "上次同步：尚未同步" }
         return "上次同步：\(lastSyncedAt.formatted(date: .omitted, time: .shortened))"
@@ -335,7 +317,7 @@ public struct MainPopoverView: View {
     private func accountRow(_ account: AccountModel) -> some View {
         HStack(spacing: 5) {
             Button {
-                onPresentDetail(account, spendPoints(for: account), modelUsages(for: account))
+                onPresentDetail(account)
             } label: {
                 HStack(spacing: 9) {
                     Circle()
@@ -385,7 +367,7 @@ public struct MainPopoverView: View {
             .accessibilityLabel("查看 \(account.name) 的详情与走势")
 
             Menu {
-                Button("查看详情与走势折线图") { onPresentDetail(account, spendPoints(for: account), modelUsages(for: account)) }
+                Button("查看详情与走势折线图") { onPresentDetail(account) }
                 if account.parentAccountID == nil { Button("编辑账号") { onPresentEdit(account) } }
                 Button("立即手动同步") {
                     guard let id = account.parentAccountID ?? UUID(uuidString: account.id) else { return }

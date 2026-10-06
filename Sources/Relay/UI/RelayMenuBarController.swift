@@ -97,12 +97,8 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
                 onApplyGlobalShortcut: onApplyGlobalShortcut,
                 onPresentAddAccount: { [weak self] in self?.showAddAccountWindow() },
                 onPresentSettings: { [weak self] in self?.showSettingsWindow() },
-                onPresentDetail: { [weak self] account, spendPoints, modelUsages in
-                    self?.showAccountDetailWindow(
-                        account: account,
-                        spendPoints: spendPoints,
-                        modelUsages: modelUsages
-                    )
+                onPresentDetail: { [weak self] account in
+                    self?.showAccountDetailWindow(accountID: account.id)
                 },
                 onPresentEdit: { [weak self] account in self?.showAccountEditWindow(account: account) }
             )
@@ -425,17 +421,11 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
         }
     }
 
-    private func showAccountDetailWindow(
-        account: AccountModel,
-        spendPoints: [DailySpendPoint],
-        modelUsages: [ModelUsageItem]
-    ) {
+    private func showAccountDetailWindow(accountID: String) {
         presentAuxiliaryWindow(title: "账号详情", size: NSSize(width: RelayVisualStyle.panelWidth, height: 520)) {
-            AccountDetailView(
-                account: account,
-                spendPoints: spendPoints,
-                modelUsages: modelUsages,
-                deepSeekUsageReport: UUID(uuidString: account.id).flatMap { self.store.deepSeekUsageReport(for: $0) },
+            AccountDetailContainerView(
+                store: self.store,
+                accountID: accountID,
                 onClose: { [weak self] in self?.closeAuxiliaryWindow() },
                 onSubAccountAction: { [weak self] action, parent, uid in
                     guard let self else { return }

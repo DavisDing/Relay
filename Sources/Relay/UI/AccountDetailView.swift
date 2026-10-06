@@ -1,6 +1,33 @@
 import AppKit
 import SwiftUI
 
+/// Observe the shared store inside the hosted window. Keep the child view's
+/// identity stable so refreshes do not recreate the window or reset local UI state.
+@MainActor
+struct AccountDetailContainerView: View {
+    @ObservedObject var store: RelayStore
+    let accountID: String
+    var onClose: () -> Void
+    var onSubAccountAction: (ProviderSubAccountAction, UUID, String) async throws -> Void
+
+    var body: some View {
+        if let data = store.accountDetail(for: accountID) {
+            AccountDetailView(
+                account: data.account,
+                spendPoints: data.spendPoints,
+                modelUsages: data.modelUsages,
+                deepSeekUsageReport: data.deepSeekUsageReport,
+                onClose: onClose,
+                onSubAccountAction: onSubAccountAction
+            )
+        } else {
+            // An account removed by sync (or a removed gateway child) must not
+            // leave its obsolete snapshot visible in the retained detail window.
+            Color.clear.onAppear(perform: onClose)
+        }
+    }
+}
+
 /// Account details with persisted daily aggregates and the provider's current
 /// model aggregate. Relay backfills only documented provider history and never
 /// fabricates a spend value for days that cannot be queried.

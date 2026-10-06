@@ -239,6 +239,29 @@ public final class RelayStore: ObservableObject {
         (try? repository.dailyUsage(accountID: accountID, limit: limit)) ?? []
     }
 
+    /// Resolve by stable identity on every view update, including gateway children
+    /// whose IDs are not UUIDs. History and model usage belong to their parent.
+    public func accountDetail(for accountID: String) -> AccountDetailData? {
+        guard let account = accounts.first(where: { $0.id == accountID })
+                ?? dashboardAccounts.first(where: { $0.id == accountID }),
+              let snapshotID = account.parentAccountID ?? UUID(uuidString: account.id) else { return nil }
+        let points = dailyUsage(accountID: snapshotID, limit: 7).compactMap { record -> DailySpendPoint? in
+            guard let spend = record.spend else { return nil }
+            return DailySpendPoint(
+                id: record.id,
+                dateString: record.day.formatted(.dateTime.month(.twoDigits).day(.twoDigits)),
+                amount: spend.amount
+            )
+        }
+        let models = snapshots.first(where: { $0.accountID == snapshotID })?.modelUsages
+        return AccountDetailData(
+            account: account,
+            spendPoints: points,
+            modelUsages: models.map { ModelUsageItem.items(from: $0, currency: account.currency) } ?? [],
+            deepSeekUsageReport: deepSeekUsageReport(for: snapshotID)
+        )
+    }
+
     /// Builds the detail-page projection from the same persisted snapshot and
     /// daily history used by the main popover. Credentials never enter this
     /// projection; the report is only a view model for already-fetched data.

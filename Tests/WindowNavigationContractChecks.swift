@@ -22,8 +22,18 @@ struct WindowNavigationContractChecks {
         try await Task.sleep(nanoseconds: 150_000_000)
     }
 
+    @MainActor static func accessibleText(in node: Any, depth: Int = 0) -> [String] {
+        guard depth < 30, let element = node as? NSAccessibilityProtocol else { return [] }
+        let own = [element.accessibilityLabel(), element.accessibilityValue() as? String].compactMap { $0 }
+        return own + (element.accessibilityChildren() ?? []).flatMap { accessibleText(in: $0, depth: depth + 1) }
+    }
+
     @MainActor static func run() async throws {
-        let store = RelayStore(repository: InMemoryLocalRepository(), credentialStore: InMemoryCredentialStore(),
+        let repository = InMemoryLocalRepository()
+        let configuration = AccountConfiguration(displayName: "Navigation fixture (offline)", providerKind: .pipio,
+                                                 siteOrigin: URL(string: "https://example.invalid")!)
+        try repository.upsertAccount(configuration)
+        let store = RelayStore(repository: repository, credentialStore: InMemoryCredentialStore(),
                                adapters: ProviderAdapterRegistry(adapters: []), automaticallyRefresh: false)
         let controller = RelayMenuBarController(store: store)
         defer { controller.close() }
@@ -34,16 +44,15 @@ struct WindowNavigationContractChecks {
         let settings: () -> Void = try field("onPresentSettings", in: host.rootView)
         let add: () -> Void = try field("onPresentAddAccount", in: host.rootView)
         let edit: (AccountModel) -> Void = try field("onPresentEdit", in: host.rootView)
-        let detail: (AccountModel, [DailySpendPoint], [ModelUsageItem]) -> Void = try field("onPresentDetail", in: host.rootView)
-        let account = AccountModel(name: "Navigation fixture (offline)", kind: .pipio,
-                                   baseURL: "https://example.invalid", balance: nil, currency: .usd)
+        let detail: (AccountModel) -> Void = try field("onPresentDetail", in: host.rootView)
+        let account = store.accounts[0]
         func currentWindow() throws -> NSWindow? {
             let windowController: NSWindowController? = try field("auxiliaryWindowController", in: controller)
             return windowController?.window
         }
         let routes: [(String, () -> Void)] = [
             ("settings", settings), ("add", add), ("edit", { edit(account) }),
-            ("detail", { detail(account, [], []) })
+            ("detail", { detail(account) })
         ]
         controller.toggle()
         try await settle()
@@ -60,6 +69,46 @@ struct WindowNavigationContractChecks {
             try await settle()
             try check(try currentWindow() == nil && popover.isShown, "Closing \(name) returns home")
         }
+        // Verify SwiftUI observes changes while the real detail window stays open.
+        // This exercises the hosted container, not only the store projection.
+        detail(account)
+        try await settle()
+        guard let detailWindow = try currentWindow(), let detailView = detailWindow.contentView else {
+            throw NavigationCheckFailure(message: "Missing live detail window")
+        }
+        let initialText = accessibleText(in: detailView)
+        try check(initialText.contains(where: { $0.contains(configuration.displayName) }), "Initial detail is rendered")
+        var updatedConfiguration = configuration
+        updatedConfiguration.displayName = "Updated detail fixture"
+        try repository.upsertAccount(updatedConfiguration)
+        let updatedSnapshot = ProviderSnapshot(
+            accountID: configuration.id, balance: MoneyValue(amount: 321, currency: .cny),
+            todaySpend: MoneyValue(amount: 7, currency: .cny), monthSpend: MoneyValue(amount: 21, currency: .cny),
+            requestCount: nil, capabilities: [.balance], freshness: .fresh,
+            rate: AccountRate(accountID: configuration.id, source: .providerNativeCurrency, nativeCurrency: .cny)
+        )
+        try repository.upsertSnapshot(updatedSnapshot)
+        store.updateTemporalPresentation(at: updatedSnapshot.fetchedAt)
+        try await settle()
+        let updatedText = accessibleText(in: detailView)
+        try check(updatedText.contains(where: { $0.contains(updatedConfiguration.displayName) }), "Open detail observes the latest account")
+        try check(updatedText.contains(where: { $0.contains(RelayNumberFormatter.money(321, currency: .cny)) }), "Open detail renders the latest balance")
+        try check(try currentWindow() === detailWindow, "Data updates retain the same detail window")
+        // Hidden details retain observation and receive changes before reopening.
+        controller.close()
+        updatedConfiguration.displayName = "Updated while hidden"
+        try repository.upsertAccount(updatedConfiguration)
+        store.updateTemporalPresentation(at: updatedSnapshot.fetchedAt)
+        controller.toggle()
+        try await settle()
+        try check(try currentWindow() === detailWindow, "Reopening retains the detail window")
+        try check(accessibleText(in: detailView).contains(where: { $0.contains(updatedConfiguration.displayName) }), "Reopened detail displays latest data")
+        try repository.deleteAccount(id: configuration.id)
+        store.updateTemporalPresentation(at: updatedSnapshot.fetchedAt)
+        try await settle()
+        try check(try currentWindow() == nil && popover.isShown, "Deleted detail returns home instead of showing stale data")
+        print("PASSED: hosted detail updates visible/hidden data without replacing the window; removal returns home")
+
         settings()
         let retainedWindow = try currentWindow()
         controller.close()

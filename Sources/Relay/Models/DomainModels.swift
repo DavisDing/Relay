@@ -119,6 +119,14 @@ public struct AccountModel: Identifiable, Sendable {
     }
 }
 
+/// Current detail-page values derived from the shared store, not an opening-time copy.
+public struct AccountDetailData: Sendable {
+    public let account: AccountModel
+    public let spendPoints: [DailySpendPoint]
+    public let modelUsages: [ModelUsageItem]
+    public let deepSeekUsageReport: DeepSeekUsageReport?
+}
+
 public struct DailySpendPoint: Identifiable, Sendable {
     public let id: String
     public let dateString: String

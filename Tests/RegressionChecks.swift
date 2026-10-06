@@ -170,6 +170,7 @@ struct RegressionChecks {
         try await WorkBuddy2APIContractChecks.run()
         try MenuBarPresentationChecks.run()
         try await AccountFeedbackChecks.run()
+        try await AccountDetailRefreshChecks.run()
         try await credentials(root)
         print("PASSED: credential load failure, retry, atomic write and permissions")
         try repositoryTransactions(root)
