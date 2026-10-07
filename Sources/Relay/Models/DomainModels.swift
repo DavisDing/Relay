@@ -127,6 +127,26 @@ public struct AccountDetailData: Sendable {
     public let deepSeekUsageReport: DeepSeekUsageReport?
 }
 
+/// Absence means removal only after a successful repository read.
+public enum AccountDetailState: Sendable {
+    case available(AccountDetailData)
+    case unavailable(AccountDetailData?, message: String)
+    case removed
+
+    public var data: AccountDetailData? {
+        switch self {
+        case .available(let data): return data
+        case .unavailable(let data, _): return data
+        case .removed: return nil
+        }
+    }
+
+    public var errorMessage: String? {
+        if case .unavailable(_, let message) = self { return message }
+        return nil
+    }
+}
+
 public struct DailySpendPoint: Identifiable, Sendable {
     public let id: String
     public let dateString: String

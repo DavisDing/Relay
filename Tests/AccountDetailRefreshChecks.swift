@@ -23,6 +23,44 @@ private actor DetailRefreshAdapter: ProviderAdapter {
     }
 }
 
+/// Inject failures after setup, including after some account reads succeeded.
+@MainActor
+final class DetailFailureRepository: LocalRepository {
+    let base = InMemoryLocalRepository()
+    var failAccountReads = false
+    var failSettingsReads = false
+    var failSnapshotID: UUID?
+    var failHistoryID: UUID?
+
+    func fetchAccounts() throws -> [AccountConfiguration] {
+        if failAccountReads { throw LocalRepositoryError.unavailable }
+        return try base.fetchAccounts()
+    }
+    func account(id: UUID) throws -> AccountConfiguration? { try base.account(id: id) }
+    func upsertAccount(_ account: AccountConfiguration) throws { try base.upsertAccount(account) }
+    func deleteAccount(id: UUID) throws { try base.deleteAccount(id: id) }
+    func snapshot(accountID: UUID) throws -> ProviderSnapshot? {
+        if failSnapshotID == accountID { throw LocalRepositoryError.unavailable }
+        return try base.snapshot(accountID: accountID)
+    }
+    func upsertSnapshot(_ snapshot: ProviderSnapshot) throws { try base.upsertSnapshot(snapshot) }
+    func commitRefresh(_ snapshot: ProviderSnapshot, dailyUsage: DailyUsageRecord?) throws {
+        try base.commitRefresh(snapshot, dailyUsage: dailyUsage)
+    }
+    func dailyUsage(accountID: UUID, limit: Int?) throws -> [DailyUsageRecord] {
+        if failHistoryID == accountID { throw LocalRepositoryError.unavailable }
+        return try base.dailyUsage(accountID: accountID, limit: limit)
+    }
+    func upsertDailyUsage(_ record: DailyUsageRecord) throws { try base.upsertDailyUsage(record) }
+    func settings() throws -> RelaySettings {
+        if failSettingsReads { throw LocalRepositoryError.unavailable }
+        return try base.settings()
+    }
+    func updateSettings(_ settings: RelaySettings) throws { try base.updateSettings(settings) }
+    func syncData() throws -> RelaySyncData { try base.syncData() }
+    func mergeSyncData(_ data: RelaySyncData) throws { try base.mergeSyncData(data) }
+}
+
 enum AccountDetailRefreshChecks {
     @MainActor private static func check(_ condition: Bool, _ message: String) throws {
         if !condition { throw DetailRefreshFailure(message: message) }
@@ -36,7 +74,8 @@ enum AccountDetailRefreshChecks {
     @MainActor static func run() async throws {
         for kind in [ProviderKind.pipio, .deepseek] { try await monetaryAccount(kind) }
         try await gatewayAccount()
-        print("PASSED: live detail projections, successful/failed refresh, recovery, unknown metrics, DeepSeek usage and gateway children")
+        try repositoryReadFailures()
+        print("PASSED: live detail projections, successful/failed refresh, recovery, unknown metrics, DeepSeek usage, hidden/disabled gateway children and repository read failure recovery")
     }
 
     @MainActor private static func monetaryAccount(_ kind: ProviderKind) async throws {
@@ -128,7 +167,8 @@ enum AccountDetailRefreshChecks {
         }
         try repository.upsertSnapshot(snapshot([oldChild], credit: 1))
         let adapter = DetailRefreshAdapter(kind: .workbuddy2api, responses: [.success(snapshot([newChild], credit: 3)),
-                                                                          .failure(.unauthorized), .success(snapshot([], credit: 3))])
+                                                                          .failure(.unauthorized), .success(snapshot([newChild], credit: 4)),
+                                                                          .success(snapshot([], credit: 4))])
         let store = RelayStore(repository: repository, credentialStore: credentials,
                                adapters: ProviderAdapterRegistry(adapters: [adapter]), automaticallyRefresh: false)
         try check(try requireDetail(store, oldChild.id).account.availablePoints == 100, "Opening gateway child")
@@ -142,7 +182,96 @@ enum AccountDetailRefreshChecks {
         let failed = try requireDetail(store, oldChild.id)
         try check(failed.account.availablePoints == 125, "Gateway failure retains credits")
         guard case .error = failed.account.status else { throw DetailRefreshFailure(message: "Gateway error reaches child detail") }
+        store.setHidden(accountID: parent.id, hidden: true)
+        try check(store.dashboardAccounts.isEmpty, "Hidden gateway stays excluded from home")
+        try check(try requireDetail(store, oldChild.id).account.availablePoints == 125, "Hiding gateway retains child detail")
+        await store.refresh(accountID: parent.id)
+        try check(try requireDetail(store, oldChild.id).modelUsages.first?.cost == 4, "Hidden gateway detail still receives refreshes")
+        store.setEnabled(accountID: parent.id, enabled: false)
+        try check(store.snapshots.isEmpty, "Disabled snapshots stay excluded from totals")
+        let disabled = try requireDetail(store, oldChild.id)
+        try check(!disabled.account.isEnabled && disabled.account.availablePoints == 125 && disabled.modelUsages.first?.cost == 4,
+                  "Disabled gateway retains full cached child detail")
+        guard case .warning("网关已停用") = disabled.account.status else {
+            throw DetailRefreshFailure(message: "Disabled gateway status reaches child")
+        }
+        store.setEnabled(accountID: parent.id, enabled: true)
         await store.refreshAll()
-        try check(store.accountDetail(for: oldChild.id) == nil, "Removed gateway child must not retain stale data")
+        guard case .removed = store.accountDetailState(for: oldChild.id) else {
+            throw DetailRefreshFailure(message: "Removed gateway child must not retain stale data")
+        }
     }
+
+    @MainActor private static func repositoryReadFailures() throws {
+        let repository = DetailFailureRepository()
+        let first = AccountConfiguration(displayName: "First detail", providerKind: .deepseek,
+                                         siteOrigin: URL(string: "https://fixture.invalid")!, sortOrder: 0)
+        var second = AccountConfiguration(displayName: "Second detail", providerKind: .pipio,
+                                          siteOrigin: URL(string: "https://fixture.invalid")!, sortOrder: 1)
+        let now = Date()
+        for account in [first, second] {
+            try repository.upsertAccount(account)
+            let snapshot = ProviderSnapshot(
+                accountID: account.id, balance: MoneyValue(amount: 100, currency: .cny),
+                todaySpend: MoneyValue(amount: 1, currency: .cny), monthSpend: nil, requestCount: nil,
+                capabilities: [.balance, .monthlyUsage], freshness: .fresh, fetchedAt: now,
+                rate: AccountRate(accountID: account.id, source: .providerNativeCurrency, nativeCurrency: .cny)
+            )
+            try repository.upsertSnapshot(snapshot)
+            try repository.upsertDailyUsage(DailyUsageRecord(accountID: account.id, day: Calendar.current.startOfDay(for: now), spend: snapshot.todaySpend))
+        }
+        let store = RelayStore(repository: repository, credentialStore: InMemoryCredentialStore(),
+                               adapters: ProviderAdapterRegistry(adapters: []), automaticallyRefresh: false)
+        let id = first.id.uuidString
+        let before = try requireDetail(store, id)
+        // A deletion read must not be published halfway through a failed reload.
+        try repository.deleteAccount(id: first.id)
+        second.displayName = "Changed second"
+        try repository.upsertAccount(second)
+        for failure in 0..<4 {
+            repository.failSettingsReads = failure == 0
+            repository.failAccountReads = failure == 1
+            repository.failSnapshotID = failure == 2 ? second.id : nil
+            repository.failHistoryID = failure == 3 ? second.id : nil
+            store.updateTemporalPresentation(at: now)
+            guard case .unavailable(let cached?, let message) = store.accountDetailState(for: id) else {
+                throw DetailRefreshFailure(message: "Read failure must not close the cached detail")
+            }
+            try check(!message.isEmpty && cached.account.balance == before.account.balance && cached.spendPoints.first?.amount == 1,
+                      "Read failure retains all last successful values with visible error")
+            try check(cached.deepSeekUsageReport?.daily?.count == before.deepSeekUsageReport?.daily?.count,
+                      "Read failure retains cached DeepSeek history")
+            try check(store.accounts.count == 2 && store.accounts[1].name == "Second detail", "Failed reload publishes no partial account changes")
+            try check(store.snapshots.count == 2 && store.repositoryErrorMessage != nil, "Failed reload preserves snapshots and exposes error")
+        }
+        repository.failSettingsReads = false
+        repository.failAccountReads = false
+        repository.failSnapshotID = nil
+        repository.failHistoryID = nil
+        store.updateTemporalPresentation(at: now)
+        guard case .removed = store.accountDetailState(for: id) else {
+            throw DetailRefreshFailure(message: "Successful read confirms actual deletion")
+        }
+        try check(store.repositoryErrorMessage == nil && store.globalErrorMessage == nil, "Recovery clears repository error")
+        try check(store.accounts.count == 1 && store.accounts[0].name == "Changed second", "Recovery publishes the new complete state")
+
+        repository.failAccountReads = true
+        let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: now)!
+        store.updateTemporalPresentation(at: tomorrow)
+        let expired = try requireDetail(store, second.id.uuidString)
+        try check(expired.account.todaySpend == nil && expired.account.balance == 100 && expired.spendPoints.first?.amount == 1,
+                  "Read failure across midnight expires today but preserves balance and historical trend")
+        try check(store.todaySpendTotalCNY.value == nil, "Storage failure must not present yesterday's amount as today's total")
+        let unavailable = RelayStore(repository: repository, credentialStore: InMemoryCredentialStore(),
+                                    adapters: ProviderAdapterRegistry(adapters: []), automaticallyRefresh: false)
+        guard case .unavailable(nil, _) = unavailable.accountDetailState(for: second.id.uuidString) else {
+            throw DetailRefreshFailure(message: "Initial read failure is unavailable, never a confirmed deletion")
+        }
+        repository.failAccountReads = false
+        unavailable.updateTemporalPresentation(at: now)
+        guard case .available = unavailable.accountDetailState(for: second.id.uuidString) else {
+            throw DetailRefreshFailure(message: "Initial failure remains recoverable")
+        }
+    }
+
 }

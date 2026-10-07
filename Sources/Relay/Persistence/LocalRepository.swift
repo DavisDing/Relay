@@ -7,6 +7,8 @@ public protocol LocalRepository: AnyObject {
     @MainActor func deleteAccount(id: UUID) throws
     @MainActor func snapshot(accountID: UUID) throws -> ProviderSnapshot?
     @MainActor func upsertSnapshot(_ snapshot: ProviderSnapshot) throws
+    /// Commit a refreshed snapshot and its history together, or leave both unchanged.
+    @MainActor func commitRefresh(_ snapshot: ProviderSnapshot, dailyUsage: DailyUsageRecord?) throws
     @MainActor func dailyUsage(accountID: UUID, limit: Int?) throws -> [DailyUsageRecord]
     @MainActor func upsertDailyUsage(_ record: DailyUsageRecord) throws
     @MainActor func settings() throws -> RelaySettings
@@ -152,6 +154,18 @@ public final class FileLocalRepository: LocalRepository {
         try commit(candidate)
     }
 
+    public func commitRefresh(_ snapshot: ProviderSnapshot, dailyUsage record: DailyUsageRecord?) throws {
+        var candidate = state
+        candidate.snapshots.removeAll { $0.accountID == snapshot.accountID }
+        candidate.snapshots.append(snapshot)
+        if let record {
+            candidate.dailyUsage.removeAll { $0.id == record.id }
+            candidate.dailyUsage.append(record)
+            pruneHistoryIfNeeded(&candidate)
+        }
+        try commit(candidate)
+    }
+
     public func dailyUsage(accountID: UUID, limit: Int? = nil) throws -> [DailyUsageRecord] {
         let records = state.dailyUsage
             .filter { $0.accountID == accountID }
@@ -266,6 +280,13 @@ public final class InMemoryLocalRepository: LocalRepository {
     }
     public func snapshot(accountID: UUID) throws -> ProviderSnapshot? { snapshots[accountID] }
     public func upsertSnapshot(_ snapshot: ProviderSnapshot) throws { snapshots[snapshot.accountID] = snapshot }
+    public func commitRefresh(_ snapshot: ProviderSnapshot, dailyUsage record: DailyUsageRecord?) throws {
+        snapshots[snapshot.accountID] = snapshot
+        if let record {
+            usage[record.id] = record
+            pruneHistoryIfNeeded()
+        }
+    }
     public func dailyUsage(accountID: UUID, limit: Int?) throws -> [DailyUsageRecord] {
         let all = usage.values.filter { $0.accountID == accountID }.sorted { $0.day < $1.day }
         guard let limit, limit > 0 else { return all }

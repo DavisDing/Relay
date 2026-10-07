@@ -11,18 +11,26 @@ struct AccountDetailContainerView: View {
     var onSubAccountAction: (ProviderSubAccountAction, UUID, String) async throws -> Void
 
     var body: some View {
-        if let data = store.accountDetail(for: accountID) {
+        let state = store.accountDetailState(for: accountID)
+        if let data = state.data {
             AccountDetailView(
                 account: data.account,
                 spendPoints: data.spendPoints,
                 modelUsages: data.modelUsages,
                 deepSeekUsageReport: data.deepSeekUsageReport,
+                dataErrorMessage: state.errorMessage,
                 onClose: onClose,
                 onSubAccountAction: onSubAccountAction
             )
+        } else if let message = state.errorMessage {
+            VStack(spacing: 12) {
+                Text(message).foregroundStyle(.secondary)
+                Button("返回首页", action: onClose)
+            }
+            .frame(width: RelayVisualStyle.panelWidth, height: 520)
+            .relayPanelSurface(cornerRadius: RelayVisualStyle.panelCornerRadius)
         } else {
-            // An account removed by sync (or a removed gateway child) must not
-            // leave its obsolete snapshot visible in the retained detail window.
+            // Only a successful read confirming removal may close the page.
             Color.clear.onAppear(perform: onClose)
         }
     }
@@ -36,6 +44,7 @@ public struct AccountDetailView: View {
     public let spendPoints: [DailySpendPoint]
     public let modelUsages: [ModelUsageItem]
     public let deepSeekUsageReport: DeepSeekUsageReport?
+    public let dataErrorMessage: String?
     public var onClose: () -> Void
     public var onSubAccountAction: (ProviderSubAccountAction, UUID, String) async throws -> Void
     @State private var confirmingAction: ProviderSubAccountAction?
@@ -47,6 +56,7 @@ public struct AccountDetailView: View {
         spendPoints: [DailySpendPoint] = [],
         modelUsages: [ModelUsageItem] = [],
         deepSeekUsageReport: DeepSeekUsageReport? = nil,
+        dataErrorMessage: String? = nil,
         onClose: @escaping () -> Void = {},
         onSubAccountAction: @escaping (ProviderSubAccountAction, UUID, String) async throws -> Void = { _, _, _ in }
     ) {
@@ -54,6 +64,7 @@ public struct AccountDetailView: View {
         self.spendPoints = spendPoints
         self.modelUsages = modelUsages
         self.deepSeekUsageReport = deepSeekUsageReport
+        self.dataErrorMessage = dataErrorMessage
         self.onClose = onClose
         self.onSubAccountAction = onSubAccountAction
     }
@@ -88,9 +99,10 @@ public struct AccountDetailView: View {
 
             Divider().opacity(0.35)
             HStack {
-                Text(lastUpdatedText)
+                Text(dataErrorMessage.map { "读取失败，保留上次数据：" + $0 } ?? lastUpdatedText)
                     .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(dataErrorMessage == nil ? Color.secondary : Color.red)
+                    .help(dataErrorMessage ?? lastUpdatedText)
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: 6)

@@ -131,7 +131,7 @@ public final class RefreshCoordinator {
             subAccounts: fetchedWithStats.subAccounts,
             workBuddyStats: fetchedWithStats.workBuddyStats
         ) : fetchedWithStats
-        try repository.upsertSnapshot(snapshot)
+        var dailyRecord: DailyUsageRecord?
         if account.providerKind == .workbuddy2api, let currentStats = snapshot.workBuddyStats {
             let previousStats = oldSnapshot?.workBuddyStats
             let delta: Decimal
@@ -147,20 +147,23 @@ public final class RefreshCoordinator {
                 let existing = try repository.dailyUsage(accountID: account.id, limit: nil)
                     .first(where: { calendar.isDate($0.day, inSameDayAs: day) })
                 let amount = (existing?.spend?.currency == .cny ? existing?.spend?.amount : nil) ?? .zero
-                try repository.upsertDailyUsage(DailyUsageRecord(
+                dailyRecord = DailyUsageRecord(
                     accountID: account.id,
                     day: day,
                     spend: MoneyValue(amount: amount + delta, currency: .cny),
                     updatedAt: snapshot.fetchedAt
-                ))
+                )
             }
         } else if account.providerKind != .workbuddy2api {
             let historyCalendar = account.providerKind == .deepseek
                 ? DeepSeekUsageService.historyCalendar
                 : calendar
             let day = historyCalendar.startOfDay(for: snapshot.fetchedAt)
-            try repository.upsertDailyUsage(DailyUsageRecord(accountID: account.id, day: day, spend: snapshot.todaySpend, updatedAt: snapshot.fetchedAt))
+            dailyRecord = DailyUsageRecord(accountID: account.id, day: day, spend: snapshot.todaySpend, updatedAt: snapshot.fetchedAt)
         }
+
+        // The cumulative baseline must advance only when its delta is persisted.
+        try repository.commitRefresh(snapshot, dailyUsage: dailyRecord)
 
         // The seven-day backfill is intentionally performed only during initial
         // account setup. Regular refreshes query and persist the current day so

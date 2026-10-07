@@ -10,6 +10,7 @@ swiftc -swift-version 5 -D DEBUG -parse-as-library \
   -module-cache-path "${SWIFTPM_MODULECACHE_OVERRIDE:-$WORK/module-cache}" -sdk "$SDK" \
   "$ROOT"/Sources/Relay/Models/*.swift "$ROOT"/Sources/Relay/Persistence/*.swift \
   "$ROOT"/Sources/Relay/Services/*.swift "$ROOT"/Sources/Relay/UI/*.swift \
+  "$ROOT/Tests/AccountDetailRefreshChecks.swift" \
   "$ROOT/Tests/WindowNavigationContractChecks.swift" -o "$WORK/RelayNavigationChecks.app/Contents/MacOS/relay-navigation-checks"
 cat > "$WORK/RelayNavigationChecks.app/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>

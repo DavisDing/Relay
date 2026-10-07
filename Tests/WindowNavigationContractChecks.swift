@@ -29,7 +29,7 @@ struct WindowNavigationContractChecks {
     }
 
     @MainActor static func run() async throws {
-        let repository = InMemoryLocalRepository()
+        let repository = DetailFailureRepository()
         let configuration = AccountConfiguration(displayName: "Navigation fixture (offline)", providerKind: .pipio,
                                                  siteOrigin: URL(string: "https://example.invalid")!)
         try repository.upsertAccount(configuration)
@@ -103,11 +103,51 @@ struct WindowNavigationContractChecks {
         try await settle()
         try check(try currentWindow() === detailWindow, "Reopening retains the detail window")
         try check(accessibleText(in: detailView).contains(where: { $0.contains(updatedConfiguration.displayName) }), "Reopened detail displays latest data")
+        repository.failAccountReads = true
+        store.updateTemporalPresentation(at: updatedSnapshot.fetchedAt)
+        try await settle()
+        try check(try currentWindow() === detailWindow, "Temporary read failure keeps the same detail window")
+        let failedText = accessibleText(in: detailView)
+        try check(failedText.contains(where: { $0.contains(updatedConfiguration.displayName) }), "Read failure retains last successful detail")
+        try check(failedText.contains(where: { $0.contains("读取失败，保留上次数据") }), "Read failure is visible in existing footer")
+        repository.failAccountReads = false
+        store.updateTemporalPresentation(at: updatedSnapshot.fetchedAt)
+        try await settle()
+        try check(try currentWindow() === detailWindow, "Recovery keeps the same detail window")
+        try check(!accessibleText(in: detailView).contains(where: { $0.contains("读取失败，保留上次数据") }), "Recovery clears the footer error")
         try repository.deleteAccount(id: configuration.id)
         store.updateTemporalPresentation(at: updatedSnapshot.fetchedAt)
         try await settle()
         try check(try currentWindow() == nil && popover.isShown, "Deleted detail returns home instead of showing stale data")
         print("PASSED: hosted detail updates visible/hidden data without replacing the window; removal returns home")
+
+        let gateway = AccountConfiguration(displayName: "Gateway detail fixture", providerKind: .workbuddy2api,
+                                           siteOrigin: URL(string: "https://gateway.example.invalid")!)
+        let child = ProviderSubAccountSnapshot(parentAccountID: gateway.id, externalID: "uid-1", displayName: "Gateway child fixture", availablePoints: 125)
+        try repository.upsertAccount(gateway)
+        try repository.upsertSnapshot(ProviderSnapshot(
+            accountID: gateway.id, balance: nil, todaySpend: nil, monthSpend: nil, requestCount: nil,
+            capabilities: [.creditBalance], freshness: .fresh,
+            rate: AccountRate(accountID: gateway.id, source: .providerNativeCurrency, nativeCurrency: .cny), subAccounts: [child]
+        ))
+        store.updateTemporalPresentation(at: Date())
+        guard let childModel = store.dashboardAccounts.first else { throw NavigationCheckFailure(message: "Missing gateway child fixture") }
+        detail(childModel)
+        try await settle()
+        guard let childWindow = try currentWindow(), let childView = childWindow.contentView else {
+            throw NavigationCheckFailure(message: "Missing child detail window")
+        }
+        store.setHidden(accountID: gateway.id, hidden: true)
+        try await settle()
+        try check(try currentWindow() === childWindow, "Hiding gateway does not close child detail")
+        store.setEnabled(accountID: gateway.id, enabled: false)
+        try await settle()
+        try check(try currentWindow() === childWindow, "Disabling gateway does not close child detail")
+        try check(accessibleText(in: childView).contains(where: { $0.contains(child.displayName) }), "Disabled child retains displayed data")
+        childWindow.close()
+        try await settle()
+        try check(popover.isShown, "Child detail still returns home explicitly")
+        print("PASSED: detail read failure/recovery and hidden/disabled gateway retention")
 
         settings()
         let retainedWindow = try currentWindow()

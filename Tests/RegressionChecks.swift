@@ -102,6 +102,17 @@ private func workBuddySnapshot(_ accountID: UUID, since: Date, credit: Decimal) 
     )
 }
 
+private struct RepeatedRefreshAdapter: ProviderAdapter {
+    let kind: ProviderKind
+    let value: ProviderSnapshot
+    func validateAccount(_ account: AccountConfiguration, credential: ProviderCredential) async throws {}
+    func fetchAccountRate(for account: AccountConfiguration, credential: ProviderCredential) async throws -> AccountRate {
+        value.rate
+    }
+    func fetchSnapshot(for account: AccountConfiguration, credential: ProviderCredential, rate: AccountRate,
+                       now: Date, calendar: Calendar) async throws -> ProviderSnapshot { value }
+}
+
 /// The failure is injected AFTER successful setup, never by altering assertions.
 @MainActor
 private final class RejectingRepository: LocalRepository {
@@ -116,6 +127,10 @@ private final class RejectingRepository: LocalRepository {
     func deleteAccount(id: UUID) throws { try base.deleteAccount(id: id) }
     func snapshot(accountID: UUID) throws -> ProviderSnapshot? { try base.snapshot(accountID: accountID) }
     func upsertSnapshot(_ snapshot: ProviderSnapshot) throws { try base.upsertSnapshot(snapshot) }
+    func commitRefresh(_ snapshot: ProviderSnapshot, dailyUsage: DailyUsageRecord?) throws {
+        if rejectWrites { throw LocalRepositoryError.unavailable }
+        try base.commitRefresh(snapshot, dailyUsage: dailyUsage)
+    }
     func dailyUsage(accountID: UUID, limit: Int?) throws -> [DailyUsageRecord] { try base.dailyUsage(accountID: accountID, limit: limit) }
     func upsertDailyUsage(_ record: DailyUsageRecord) throws { try base.upsertDailyUsage(record) }
     func settings() throws -> RelaySettings { try base.settings() }
@@ -174,6 +189,8 @@ struct RegressionChecks {
         try await credentials(root)
         print("PASSED: credential load failure, retry, atomic write and permissions")
         try repositoryTransactions(root)
+        try await atomicRefreshTransactions(root)
+        print("PASSED: atomic refresh failure/recovery, persisted baseline, no lost/duplicate delta and unchanged JSON schema")
         print("PASSED: all repository writes preserve state on failure")
         try await accountEditing()
         print("PASSED: imported credential entry, replacement and rollback errors")
@@ -254,6 +271,10 @@ struct RegressionChecks {
         settings.refreshIntervalSeconds = 900
         try rejects("account save") { try repo.upsertAccount(added) }
         try rejects("snapshot save") { try repo.upsertSnapshot(snapshot(a.id, at: Date(), spend: 99)) }
+        try rejects("atomic refresh") {
+            try repo.commitRefresh(snapshot(a.id, at: Date(), spend: 99),
+                                   dailyUsage: DailyUsageRecord(accountID: a.id, day: usage.day, spend: nil))
+        }
         try rejects("daily save") { try repo.upsertDailyUsage(DailyUsageRecord(accountID: a.id, day: usage.day, spend: nil)) }
         try rejects("settings save") { try repo.updateSettings(settings) }
         try rejects("account deletion") { try repo.deleteAccount(id: a.id) }
@@ -269,6 +290,12 @@ struct RegressionChecks {
         try check(try reopened.account(id: added.id) == nil, "later save must not commit previously failed insertion")
         try check(try reopened.snapshot(accountID: a.id)?.todaySpend == snap.todaySpend, "later save must not commit previously failed snapshot")
         try check(try reopened.account(id: a.id) != nil, "failed delete must not become persistent")
+        let refreshed = snapshot(a.id, at: Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970)), spend: 99)
+        let refreshedUsage = DailyUsageRecord(accountID: a.id, day: usage.day, spend: refreshed.todaySpend, updatedAt: refreshed.fetchedAt)
+        try reopened.commitRefresh(refreshed, dailyUsage: refreshedUsage)
+        let refreshedRepository = try FileLocalRepository(fileURL: url)
+        try check(try refreshedRepository.snapshot(accountID: a.id) == refreshed, "atomic refresh snapshot survives reopening")
+        try check(try refreshedRepository.dailyUsage(accountID: a.id, limit: nil) == [refreshedUsage], "atomic refresh history survives reopening")
         let mode = try manager.attributesOfItem(atPath: url.path)[.posixPermissions] as? NSNumber
         try check(mode?.intValue == 0o600, "repository file permissions")
         var legacy = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
@@ -276,6 +303,79 @@ struct RegressionChecks {
         try JSONSerialization.data(withJSONObject: legacy).write(to: url)
         let legacyRepo = try FileLocalRepository(fileURL: url)
         try check(try legacyRepo.account(id: a.id) != nil, "legacy local JSON remains readable")
+    }
+
+    @MainActor static func atomicRefreshTransactions(_ root: URL) async throws {
+        let manager = FileManager.default
+        let now = Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970))
+        let day = Calendar.current.startOfDay(for: now)
+        for kind in [ProviderKind.pipio, .deepseek, .workbuddy2api] {
+            let url = root.appendingPathComponent("atomic-refresh-" + kind.rawValue + "/local.json")
+            let repo = try FileLocalRepository(fileURL: url)
+            let a = AccountConfiguration(displayName: "Atomic fixture", providerKind: kind,
+                                         siteOrigin: URL(string: "https://fixture.invalid")!)
+            let credentials = InMemoryCredentialStore()
+            try await credentials.save(placeholder, reference: a.credentialReference)
+            let rate = AccountRate(accountID: a.id, source: .providerNativeCurrency, nativeCurrency: .cny, fetchedAt: now)
+            func value(_ credit: Decimal, at date: Date) -> ProviderSnapshot {
+                ProviderSnapshot(
+                    accountID: a.id, balance: kind == .workbuddy2api ? nil : MoneyValue(amount: 100 - credit, currency: .cny),
+                    todaySpend: kind == .workbuddy2api ? nil : MoneyValue(amount: credit, currency: .cny),
+                    monthSpend: nil, requestCount: nil, capabilities: [.balance], freshness: .fresh, fetchedAt: date, rate: rate,
+                    workBuddyStats: kind == .workbuddy2api
+                        ? WorkBuddyStatsSnapshot(since: now.addingTimeInterval(-3600), total: WorkBuddyStatsCounter(credit: credit)) : nil
+                )
+            }
+            let old = value(1, at: now.addingTimeInterval(-60))
+            let fresh = value(3, at: now)
+            let historyDay = kind == .deepseek ? DeepSeekUsageService.historyCalendar.startOfDay(for: now) : day
+            let usage = DailyUsageRecord(accountID: a.id, day: historyDay, spend: MoneyValue(amount: 1, currency: .cny), updatedAt: old.fetchedAt)
+            try repo.upsertAccount(a)
+            try repo.commitRefresh(old, dailyUsage: usage)
+            let coordinator = RefreshCoordinator(repository: repo, credentialStore: credentials,
+                adapters: ProviderAdapterRegistry(adapters: [RepeatedRefreshAdapter(kind: kind, value: fresh)]), maxRetryCount: 0)
+            let before = try Data(contentsOf: url)
+            let backup = url.appendingPathExtension("backup")
+            try manager.moveItem(at: url, to: backup)
+            try manager.createDirectory(at: url, withIntermediateDirectories: false)
+            let failed = await coordinator.refresh(accountID: a.id)
+            try check(!failed.isSuccess, "unwritable refresh reports failure")
+            try check(try repo.snapshot(accountID: a.id) == old, "failed refresh does not advance snapshot or counter baseline")
+            try check(try repo.dailyUsage(accountID: a.id, limit: nil) == [usage], "failed refresh preserves history")
+            try check(try Data(contentsOf: backup) == before, "failed refresh preserves disk data")
+            try manager.removeItem(at: url)
+            try manager.moveItem(at: backup, to: url)
+            let persistedBefore = try FileLocalRepository(fileURL: url)
+            try check(try persistedBefore.snapshot(accountID: a.id) == old, "failure survives process restart without advancing baseline")
+            let recovered = await coordinator.refresh(accountID: a.id)
+            try check(recovered.isSuccess, "next refresh succeeds after storage recovery")
+            let persisted = try FileLocalRepository(fileURL: url)
+            try check(try persisted.snapshot(accountID: a.id) == fresh, "successful transaction persists snapshot")
+            try check(try persisted.dailyUsage(accountID: a.id, limit: nil).first?.spend?.amount == 3,
+                      "recovery records full delta rather than losing consumption")
+            let repeated = await coordinator.refresh(accountID: a.id)
+            try check(repeated.isSuccess, "repeated refresh succeeds")
+            try check(try repo.dailyUsage(accountID: a.id, limit: nil).first?.spend?.amount == 3,
+                      "repeat does not duplicate consumption")
+            let json = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
+            try check(json["schemaVersion"] as? Int == 2, "atomic refresh requires no schema migration")
+        }
+        // Failure before the commit (reading today's aggregate) must be equally safe.
+        let repository = DetailFailureRepository()
+        let gateway = AccountConfiguration(displayName: "History read fixture", providerKind: .workbuddy2api,
+                                           siteOrigin: URL(string: "https://fixture.invalid")!)
+        try repository.upsertAccount(gateway)
+        let old = workBuddySnapshot(gateway.id, since: now.addingTimeInterval(-3600), credit: 1)
+        try repository.upsertSnapshot(old)
+        let credentials = InMemoryCredentialStore()
+        try await credentials.save(placeholder, reference: gateway.credentialReference)
+        let coordinator = RefreshCoordinator(repository: repository, credentialStore: credentials,
+            adapters: ProviderAdapterRegistry(adapters: [RepeatedRefreshAdapter(kind: .workbuddy2api,
+                value: workBuddySnapshot(gateway.id, since: now.addingTimeInterval(-3600), credit: 3))]), maxRetryCount: 0)
+        repository.failHistoryID = gateway.id
+        let failed = await coordinator.refresh(accountID: gateway.id)
+        try check(!failed.isSuccess, "history read failure reports failure")
+        try check(try repository.snapshot(accountID: gateway.id) == old, "history read failure never advances baseline")
     }
 
     @MainActor static func manualExchangeRates(_ root: URL) async throws {

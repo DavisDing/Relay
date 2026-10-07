@@ -21,6 +21,13 @@ public final class RelayStore: ObservableObject {
     @Published public private(set) var accountErrors: [String: String] = [:]
     @Published public private(set) var settings: RelaySettings
 
+    @Published public private(set) var repositoryErrorMessage: String?
+    // Retain a complete, last-successful read for detail pages independently of
+    // enabled/hidden dashboard filtering and transient repository failures.
+    private var detailConfigurations: [AccountConfiguration] = []
+    private var detailSnapshots: [ProviderSnapshot] = []
+    private var detailHistory: [UUID: [DailyUsageRecord]] = [:]
+
     private let repository: any LocalRepository
     private let accountService: AccountService
     private let refreshCoordinator: RefreshCoordinator
@@ -242,10 +249,17 @@ public final class RelayStore: ObservableObject {
     /// Resolve by stable identity on every view update, including gateway children
     /// whose IDs are not UUIDs. History and model usage belong to their parent.
     public func accountDetail(for accountID: String) -> AccountDetailData? {
-        guard let account = accounts.first(where: { $0.id == accountID })
-                ?? dashboardAccounts.first(where: { $0.id == accountID }),
-              let snapshotID = account.parentAccountID ?? UUID(uuidString: account.id) else { return nil }
-        let points = dailyUsage(accountID: snapshotID, limit: 7).compactMap { record -> DailySpendPoint? in
+        let account: AccountModel
+        if let parent = accounts.first(where: { $0.id == accountID }) {
+            account = parent
+        } else {
+            guard let snapshot = detailSnapshots.first(where: { $0.subAccounts?.contains(where: { $0.id == accountID }) == true }),
+                  let parent = accounts.first(where: { $0.id == snapshot.accountID.uuidString }),
+                  let child = snapshot.subAccounts?.first(where: { $0.id == accountID }) else { return nil }
+            account = makeSubAccountModel(child, parent: parent)
+        }
+        guard let snapshotID = account.parentAccountID ?? UUID(uuidString: account.id) else { return nil }
+        let points = (detailHistory[snapshotID] ?? []).suffix(7).compactMap { record -> DailySpendPoint? in
             guard let spend = record.spend else { return nil }
             return DailySpendPoint(
                 id: record.id,
@@ -253,7 +267,7 @@ public final class RelayStore: ObservableObject {
                 amount: spend.amount
             )
         }
-        let models = snapshots.first(where: { $0.accountID == snapshotID })?.modelUsages
+        let models = detailSnapshots.first(where: { $0.accountID == snapshotID })?.modelUsages
         return AccountDetailData(
             account: account,
             spendPoints: points,
@@ -262,12 +276,18 @@ public final class RelayStore: ObservableObject {
         )
     }
 
+    public func accountDetailState(for accountID: String) -> AccountDetailState {
+        let data = accountDetail(for: accountID)
+        if let message = repositoryErrorMessage { return .unavailable(data, message: message) }
+        return data.map(AccountDetailState.available) ?? .removed
+    }
+
     /// Builds the detail-page projection from the same persisted snapshot and
     /// daily history used by the main popover. Credentials never enter this
     /// projection; the report is only a view model for already-fetched data.
     public func deepSeekUsageReport(for accountID: UUID) -> DeepSeekUsageReport? {
         guard accounts.first(where: { UUID(uuidString: $0.id) == accountID })?.kind == .deepseek,
-              let snapshot = snapshots.first(where: { $0.accountID == accountID }) else {
+              let snapshot = detailSnapshots.first(where: { $0.accountID == accountID }) else {
             return nil
         }
         // A fresh balance-only snapshot means no platform token was configured.
@@ -279,7 +299,7 @@ public final class RelayStore: ObservableObject {
             return .unsupported(accountID: accountID, reason: .userTokenNotConfigured, fetchedAt: snapshot.fetchedAt)
         }
         let dailyCalendar = DeepSeekUsageService.historyCalendar
-        let daily = dailyUsage(accountID: accountID, limit: 30).map { record in
+        let daily = (detailHistory[accountID] ?? []).suffix(30).map { record in
             DeepSeekDailyUsage(
                 day: dailyCalendar.startOfDay(for: record.day),
                 spend: record.spend
@@ -322,22 +342,27 @@ public final class RelayStore: ObservableObject {
             guard let id = UUID(uuidString: parent.id),
                   let snapshot = snapshots.first(where: { $0.accountID == id }) else { return [] }
             return (snapshot.subAccounts ?? []).map { child in
-                let state: AccountStatus
-                if case .error(let message) = parent.status { state = .error("网关同步失败：" + message) }
-                else if child.manualDisabled { state = .warning("手动停用") }
-                else if child.disabled { state = .warning("系统停用") }
-                else if child.cooling { state = .warning("冷却中") }
-                else { state = parent.status }
-                return AccountModel(
-                    id: child.id, name: child.displayName, kind: .workbuddy2api,
-                    baseURL: parent.baseURL, balance: nil, currency: .cny,
-                    status: state, lastUpdated: child.fetchedAt, isEnabled: parent.isEnabled,
-                    availablePoints: child.availablePoints, parentAccountID: id,
-                    externalID: child.externalID, disabled: child.disabled,
-                    manualDisabled: child.manualDisabled, cooling: child.cooling
-                )
+                makeSubAccountModel(child, parent: parent)
             }
         }
+    }
+
+    private func makeSubAccountModel(_ child: ProviderSubAccountSnapshot, parent: AccountModel) -> AccountModel {
+        let status: AccountStatus
+        if case .error(let message) = parent.status { status = .error("网关同步失败：" + message) }
+        else if !parent.isEnabled { status = .warning("网关已停用") }
+        else if child.manualDisabled { status = .warning("手动停用") }
+        else if child.disabled { status = .warning("系统停用") }
+        else if child.cooling { status = .warning("冷却中") }
+        else { status = parent.status }
+        return AccountModel(
+            id: child.id, name: child.displayName, kind: .workbuddy2api,
+            baseURL: parent.baseURL, balance: nil, currency: .cny,
+            status: status, lastUpdated: child.fetchedAt, isEnabled: parent.isEnabled,
+            availablePoints: child.availablePoints, parentAccountID: child.parentAccountID,
+            externalID: child.externalID, disabled: child.disabled,
+            manualDisabled: child.manualDisabled, cooling: child.cooling
+        )
     }
 
     public var gatewayNotices: [String] {
@@ -494,34 +519,54 @@ public final class RelayStore: ObservableObject {
             }
             // Read AFTER the exchange so remote changes appear in this update.
             let previousInterval = settings.refreshIntervalSeconds
-            settings = try repository.settings()
+            let loadedSettings = try repository.settings()
             let configurations = try repository.fetchAccounts()
-            expectedAccountIDs = Set(configurations.filter { $0.isEnabled && !$0.isHidden && $0.providerKind != .workbuddy2api }.map(\.id))
             var loadedSnapshots: [ProviderSnapshot] = []
-            presentationDate = now
-            accounts = configurations.map { configuration in
-                let snapshot: ProviderSnapshot?
-                do {
-                    snapshot = try repository.snapshot(accountID: configuration.id)
-                } catch {
-                    snapshot = nil
-                    accountErrors[configuration.id.uuidString] = Self.userFacingMessage(for: error)
-                }
-                if configuration.isEnabled, let snapshot { loadedSnapshots.append(snapshot) }
-                return makeAccountModel(
+            var loadedHistory: [UUID: [DailyUsageRecord]] = [:]
+            var loadedAccounts: [AccountModel] = []
+            for configuration in configurations {
+                let snapshot = try repository.snapshot(accountID: configuration.id)
+                if let snapshot { loadedSnapshots.append(snapshot) }
+                loadedHistory[configuration.id] = try repository.dailyUsage(accountID: configuration.id, limit: 30)
+                loadedAccounts.append(makeAccountModel(
                     configuration: configuration,
                     snapshot: snapshot,
-                    errorMessage: accountErrors[configuration.id.uuidString]
-                )
+                    errorMessage: accountErrors[configuration.id.uuidString],
+                    now: now
+                ))
             }
-            snapshots = loadedSnapshots
+            // Publish only after the entire read succeeds; failures cannot look
+            // like deletions or discard the last complete detail projection.
+            if let previousError = repositoryErrorMessage, globalErrorMessage == previousError {
+                globalErrorMessage = nil
+            }
+            settings = loadedSettings
+            presentationDate = now
+            expectedAccountIDs = Set(configurations.filter { $0.isEnabled && !$0.isHidden && $0.providerKind != .workbuddy2api }.map(\.id))
+            detailConfigurations = configurations
+            detailSnapshots = loadedSnapshots
+            detailHistory = loadedHistory
+            accounts = loadedAccounts
+            let enabledIDs = Set(configurations.filter(\.isEnabled).map(\.id))
+            snapshots = loadedSnapshots.filter { enabledIDs.contains($0.accountID) }
+            repositoryErrorMessage = nil
             if previousInterval != settings.refreshIntervalSeconds { startAutomaticRefresh() }
             if synchronize { notifyLowBalanceAccountsIfNeeded() }
         } catch {
-            accounts = []
-            snapshots = []
-            expectedAccountIDs = []
-            globalErrorMessage = Self.userFacingMessage(for: error)
+            // The last complete read remains authoritative, but clock-scoped
+            // values must still expire while storage is unavailable.
+            presentationDate = now
+            accounts = detailConfigurations.map { configuration in
+                makeAccountModel(
+                    configuration: configuration,
+                    snapshot: detailSnapshots.first(where: { $0.accountID == configuration.id }),
+                    errorMessage: accountErrors[configuration.id.uuidString],
+                    now: now
+                )
+            }
+            let message = Self.userFacingMessage(for: error)
+            repositoryErrorMessage = message
+            globalErrorMessage = message
         }
     }
 
@@ -582,7 +627,8 @@ public final class RelayStore: ObservableObject {
     private func makeAccountModel(
         configuration: AccountConfiguration,
         snapshot: ProviderSnapshot?,
-        errorMessage: String?
+        errorMessage: String?,
+        now: Date
     ) -> AccountModel {
         let status: AccountStatus
         if let errorMessage {
@@ -610,7 +656,7 @@ public final class RelayStore: ObservableObject {
             baseURL: configuration.siteOrigin.absoluteString,
             balance: snapshot?.balance?.amount,
             currency: snapshot?.balance?.currency ?? snapshot?.rate.nativeCurrency ?? .cny,
-            todaySpend: snapshot?.todaySpend(on: presentationDate, calendar: calendar)?.amount,
+            todaySpend: snapshot?.todaySpend(on: now, calendar: calendar)?.amount,
             monthSpend: snapshot?.monthSpend?.amount,
             status: status,
             lastUpdated: snapshot?.fetchedAt,
@@ -620,7 +666,7 @@ public final class RelayStore: ObservableObject {
             manualUSDToCNY: configuration.manualUSDToCNY,
             quotaPerUnit: snapshot?.rate.quotaPerUnit,
             siteUSDToCNY: snapshot?.rate.nativeCurrency == .usd ? snapshot?.rate.conversionToCNY : nil,
-            siteRateIsExpired: snapshot?.rate.isExpired(at: presentationDate) ?? false
+            siteRateIsExpired: snapshot?.rate.isExpired(at: now) ?? false
         )
     }
 
