@@ -46,6 +46,7 @@ Release 附件命名示例：
 Relay-1.2.3-macos-arm64.zip
 Relay-1.2.3-macos-arm64.dmg
 Relay-1.2.3-metadata.txt
+Relay-1.2.3-sha256.txt
 ```
 
 其中 DMG 内同时包含 `Relay.app` 和指向 `/Applications` 的快捷入口，适合普通用户打开后拖动安装；ZIP 保留给脚本、开发者和更新器使用。
@@ -89,5 +90,10 @@ Relay 通过右键菜单“检查更新…”或“偏好设置 → 应用更新
 （或用户实际安装位置）。
 
 当前 Release 使用 ad-hoc 签名，没有 Developer ID 签名与公证，因此暂不做静默替换或自动重启。
-未来若接入 Developer ID + notarization，可评估引入 Sparkle，实现签名验证、后台下载和“重启安装”；
-在此之前保留“用户确认下载、用户手动安装”的流程，避免更新过程中破坏当前可运行版本。
+2026-10-09 用户明确不使用 Developer ID 或公证，继续“用户确认下载、用户手动安装”。
+
+更新器重新读取精确 Release tag 并绑定版本化文件名/路径，优先校验资产 SHA-256 digest，缺失时读取同 Release 的 `Relay-<version>-sha256.txt`。畸形、缺失或不匹配的校验值、长度不一致或错误来源会阻止文件进入 Downloads，并清理暂存。旧 Release 若没有 digest/checksum，应用内下载被阻止，手动安装不受影响。
+
+这些同源未签名校验用于完整性核对，不提供独立发布者身份认证。打包时生成并复算 checksum，构建 job 上传该文件，发布 job 下载后再次复算，再与 ZIP/DMG/metadata 一起发布。
+
+CI 还执行 `scripts/test-contracts.sh` 和 `scripts/test-window-navigation.sh --build-only`；后者仅证明编译成功，真实 GUI 导航仍需有效图形会话，skipped/77 不等于通过。

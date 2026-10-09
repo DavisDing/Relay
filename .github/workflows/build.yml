@@ -38,11 +38,21 @@ jobs:
       - name: Run offline regression checks
         run: scripts/test-regressions.sh
 
+      - name: Run offline contract checks
+        run: scripts/test-contracts.sh
+
+      - name: Compile GUI navigation checks (no GUI pass claimed)
+        run: scripts/test-window-navigation.sh --build-only
+
       - name: Build and package
         env:
           RELAY_VERSION: ${{ steps.version.outputs.marketing_version }}
           SWIFT_SCRATCH_PATH: ${{ runner.temp }}/relay-swift-build
         run: scripts/package-app.sh "$GITHUB_WORKSPACE/.build/package"
+
+      - name: Verify packaged SHA-256 checksums
+        working-directory: .build/package
+        run: shasum -a 256 --check "Relay-${{ steps.version.outputs.marketing_version }}-sha256.txt"
 
       - name: Upload package artifact
         uses: actions/upload-artifact@v6
@@ -52,6 +62,7 @@ jobs:
             .build/package/Relay-${{ steps.version.outputs.marketing_version }}-macos-arm64.zip
             .build/package/Relay-${{ steps.version.outputs.marketing_version }}-macos-arm64.dmg
             .build/package/Relay-${{ steps.version.outputs.marketing_version }}-metadata.txt
+            .build/package/Relay-${{ steps.version.outputs.marketing_version }}-sha256.txt
           if-no-files-found: error
           retention-days: 30
 
@@ -71,6 +82,10 @@ jobs:
           name: Relay-${{ needs.build.outputs.version }}-macos-arm64
           path: .build/package
 
+      - name: Verify downloaded SHA-256 checksums
+        working-directory: .build/package
+        run: sha256sum --check "Relay-${{ needs.build.outputs.version }}-sha256.txt"
+
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -88,5 +103,6 @@ jobs:
             .build/package/Relay-*-macos-arm64.zip \
             .build/package/Relay-*-macos-arm64.dmg \
             .build/package/Relay-${{ needs.build.outputs.version }}-metadata.txt \
+            .build/package/Relay-${{ needs.build.outputs.version }}-sha256.txt \
             --title "Relay $RELEASE_TAG" \
             --generate-notes

@@ -336,7 +336,7 @@ public struct MainPopoverView: View {
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)
                                 .background(.secondary.opacity(0.14), in: RoundedRectangle(cornerRadius: 4))
-                            if let message = statusMessage(for: account.status) {
+                            if let message = healthMessage(for: account) {
                                 Text(message)
                                     .font(.system(size: 9))
                                     .foregroundStyle(statusColor(for: account.status))
@@ -365,6 +365,8 @@ public struct MainPopoverView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("查看 \(account.name) 的详情与走势")
+            .accessibilityValue(healthDescription(for: account))
+            .help(healthDescription(for: account))
 
             Menu {
                 Button("查看详情与走势折线图") { onPresentDetail(account) }
@@ -392,6 +394,7 @@ public struct MainPopoverView: View {
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .help("账号操作")
+            .accessibilityLabel("\(account.name) 的账号操作")
         }
         .padding(.leading, 10)
         .padding(.trailing, 5)
@@ -448,6 +451,20 @@ public struct MainPopoverView: View {
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func healthMessage(for account: AccountModel) -> String? {
+        guard account.isEnabled, let id = account.parentAccountID ?? UUID(uuidString: account.id) else {
+            return statusMessage(for: account.status)
+        }
+        let health = store.health(for: id)
+        if health.phase.isActive || health.issue != nil || health.freshness == .stale { return health.summary }
+        return statusMessage(for: account.status)
+    }
+
+    private func healthDescription(for account: AccountModel) -> String {
+        guard let id = account.parentAccountID ?? UUID(uuidString: account.id) else { return "" }
+        return account.isEnabled ? store.health(for: id).detail : "已停用，停止采集"
     }
 
     private func statusMessage(for status: AccountStatus) -> String? {

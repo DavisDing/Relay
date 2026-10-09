@@ -18,6 +18,7 @@ public final class RelayStore: ObservableObject {
     @Published public private(set) var syncStatus: SyncStatus = .idle
     @Published public private(set) var syncConflictReport: SyncConflictReport?
     @Published public private(set) var presentationDate = Date()
+    @Published public private(set) var accountHealthStates: [UUID: AccountHealth] = [:]
     @Published public private(set) var accountErrors: [String: String] = [:]
     @Published public private(set) var settings: RelaySettings
 
@@ -68,7 +69,21 @@ public final class RelayStore: ObservableObject {
             calendar: calendar
         )
         self.settings = initialSettings
+        refreshCoordinator.onHealthChange = { [weak self] id, state in
+            guard let self else { return }
+            self.accountHealthStates[id] = state
+            self.isRefreshing = self.accountHealthStates.values.contains { $0.phase.isActive }
+            self.rebuildHealthProjection()
+        }
+        refreshCoordinator.onResult = { [weak self] result in self?.applyRefreshResult(result) }
+        refreshCoordinator.onRepositoryError = { [weak self] message in self?.globalErrorMessage = message }
         reloadFromRepository()
+        NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)
+            .sink { [weak self] _ in
+                self?.refreshLoopTask?.cancel()
+                self?.presentationTask?.cancel()
+                self?.cancelRefreshes()
+            }.store(in: &clockObservers)
         if automaticallyRefresh {
             startAutomaticRefresh(refreshImmediately: true)
             startPresentationUpdates()
@@ -113,41 +128,50 @@ public final class RelayStore: ObservableObject {
         try await accountService.probe(draft)
     }
 
-    public func refreshAll(forceRateRefresh: Bool = false) async {
-        guard !isRefreshing else { return }
-        isRefreshing = true
+    public func refreshAll(forceRateRefresh: Bool = false, source: RefreshSource = .manualAll) async {
         globalErrorMessage = nil
-        defer {
-            isRefreshing = false
-            lastSyncedAt = Date()
-        }
-
-        let results = await refreshCoordinator.refreshAll(forceRateRefresh: forceRateRefresh)
-        for result in results {
-            if let error = result.error {
-                accountErrors[result.accountID.uuidString] = error.localizedDescription
-            } else {
-                accountErrors.removeValue(forKey: result.accountID.uuidString)
-            }
-        }
-        reloadFromRepository()
+        _ = await refreshCoordinator.refreshAll(forceRateRefresh: forceRateRefresh, source: source)
+        if !Task.isCancelled { reloadFromRepository() }
     }
 
     public func refresh(accountID: UUID, forceRateRefresh: Bool = false) async {
-        guard !isRefreshing else { return }
-        isRefreshing = true
-        defer {
-            isRefreshing = false
-            lastSyncedAt = Date()
-        }
-
         let result = await refreshCoordinator.refresh(accountID: accountID, forceRateRefresh: forceRateRefresh)
-        if let error = result.error {
-            accountErrors[accountID.uuidString] = error.localizedDescription
-        } else {
-            accountErrors.removeValue(forKey: accountID.uuidString)
+        // Read failures happen before the coordinator operation/health callback.
+        if result.error == .storageUnavailable { applyRefreshResult(result) }
+        if !Task.isCancelled && !result.isCancelled { reloadFromRepository() }
+    }
+
+    public func cancelRefreshes() { refreshCoordinator.cancelAll() }
+
+    public func health(for accountID: UUID) -> AccountHealth {
+        var state = accountHealthStates[accountID] ?? AccountHealth()
+        if state.lastSuccessAt == nil, let snapshot = detailSnapshots.first(where: { $0.accountID == accountID }) {
+            state.lastSuccessAt = snapshot.fetchedAt
+            state.freshness = snapshot.freshness
         }
-        reloadFromRepository()
+        if let lastSuccessAt = state.lastSuccessAt,
+           presentationDate.timeIntervalSince(lastSuccessAt) > Double(max(120, settings.refreshIntervalSeconds * 2)),
+           state.freshness == .fresh { state.freshness = .stale }
+        return state
+    }
+
+    private func applyRefreshResult(_ result: AccountRefreshResult) {
+        guard !result.isCancelled else { return }
+        if let error = result.error {
+            accountErrors[result.accountID.uuidString] = AccountHealthIssue(error: error).guidance
+        } else if let snapshot = result.snapshot {
+            accountErrors.removeValue(forKey: result.accountID.uuidString)
+            lastSyncedAt = max(lastSyncedAt ?? .distantPast, snapshot.fetchedAt)
+        }
+        reloadFromRepository(synchronize: false)
+    }
+
+    private func rebuildHealthProjection() {
+        accounts = detailConfigurations.map { configuration in
+            makeAccountModel(configuration: configuration,
+                snapshot: detailSnapshots.first(where: { $0.accountID == configuration.id }),
+                errorMessage: accountErrors[configuration.id.uuidString], now: presentationDate)
+        }
     }
 
     /// Applies a user's explicit conflict decision. A failed decision leaves
@@ -175,8 +199,10 @@ public final class RelayStore: ObservableObject {
     }
 
     public func deleteAccount(id: UUID) async {
+        refreshCoordinator.cancel(accountID: id)
         do {
             try await accountService.deleteAccount(id: id)
+            accountHealthStates.removeValue(forKey: id)
             accountErrors.removeValue(forKey: id.uuidString)
             globalErrorMessage = nil
             reloadFromRepository()
@@ -188,6 +214,7 @@ public final class RelayStore: ObservableObject {
     public func setEnabled(accountID: UUID, enabled: Bool) {
         do {
             try accountService.setEnabled(accountID: accountID, enabled: enabled)
+            if !enabled { refreshCoordinator.cancel(accountID: accountID) }
             globalErrorMessage = nil
             reloadFromRepository()
         } catch {
@@ -214,6 +241,7 @@ public final class RelayStore: ObservableObject {
         manualUSDToCNY: ManualExchangeRateUpdate = .unchanged,
         deepSeekUserTokenUpdate: OptionalStringUpdate = .unchanged
     ) async throws {
+        refreshCoordinator.cancel(accountID: accountID)
         do {
             try await accountService.updateAccount(
                 accountID: accountID,
@@ -447,11 +475,11 @@ public final class RelayStore: ObservableObject {
         refreshLoopTask?.cancel()
         let interval = UInt64(max(60, settings.refreshIntervalSeconds)) * 1_000_000_000
         refreshLoopTask = Task { @MainActor [weak self] in
-            if refreshImmediately { await self?.refreshAll() }
+            if refreshImmediately { await self?.refreshAll(source: .scheduled) }
             while !Task.isCancelled {
                 do { try await Task.sleep(nanoseconds: interval) } catch { return }
                 guard !Task.isCancelled, self != nil else { return }
-                await self?.refreshAll()
+                await self?.refreshAll(source: .scheduled)
             }
         }
     }
@@ -631,7 +659,13 @@ public final class RelayStore: ObservableObject {
         now: Date
     ) -> AccountModel {
         let status: AccountStatus
-        if let errorMessage {
+        if !configuration.isEnabled {
+            status = .warning("已停用")
+        } else if accountHealthStates[configuration.id]?.phase.isActive == true {
+            let retryAt = accountHealthStates[configuration.id]?.retryAt
+            let seconds = retryAt.map { Int(max(0, min(86_400, $0.timeIntervalSince(now)))) } ?? 0
+            status = .retrying(seconds: seconds)
+        } else if let errorMessage {
             status = .error(errorMessage)
         } else if let snapshot {
             if let threshold = configuration.lowBalanceThreshold,

@@ -4,7 +4,14 @@ public struct AccountRefreshResult: Sendable {
     public let accountID: UUID
     public let snapshot: ProviderSnapshot?
     public let error: ProviderError?
-    public var isSuccess: Bool { snapshot != nil && error == nil }
+    public let isCancelled: Bool
+    public var isSuccess: Bool { snapshot != nil && error == nil && !isCancelled }
+    public init(accountID: UUID, snapshot: ProviderSnapshot?, error: ProviderError?, isCancelled: Bool = false) {
+        self.accountID = accountID; self.snapshot = snapshot; self.error = error; self.isCancelled = isCancelled
+    }
+    public static func cancelled(_ id: UUID) -> Self {
+        Self(accountID: id, snapshot: nil, error: nil, isCancelled: true)
+    }
 }
 
 @MainActor
@@ -15,6 +22,25 @@ public final class RefreshCoordinator {
     private let rateService: RateService
     private let calendar: Calendar
     private let maxRetryCount: Int
+    private let clock: RefreshClock
+    private let maxConcurrentAccounts: Int
+    public private(set) var health: [UUID: AccountHealth] = [:]
+    public var onHealthChange: ((UUID, AccountHealth) -> Void)?
+    public var onResult: ((AccountRefreshResult) -> Void)?
+    public var onRepositoryError: ((String) -> Void)?
+    private lazy var scheduler: RefreshScheduler = {
+        let scheduler = RefreshScheduler(maxConcurrentAccounts: maxConcurrentAccounts, clock: clock) { [weak self] account, force in
+            guard let self else { return .cancelled(account.id) }
+            return await self.execute(account: account, forceRateRefresh: force)
+        }
+        scheduler.onPhaseChange = { [weak self] id, phase in
+            self?.updateHealth(id) {
+                $0.phase = phase
+                if case .backingOff(let until) = phase { $0.issue = .rateLimit; $0.retryAt = until }
+            }
+        }
+        return scheduler
+    }()
 
     public init(
         repository: any LocalRepository,
@@ -22,7 +48,9 @@ public final class RefreshCoordinator {
         adapters: ProviderAdapterRegistry,
         rateService: RateService = RateService(),
         calendar: Calendar = .current,
-        maxRetryCount: Int = 2
+        maxRetryCount: Int = 2,
+        maxConcurrentAccounts: Int = 3,
+        clock: RefreshClock? = nil
     ) {
         self.repository = repository
         self.credentialStore = credentialStore
@@ -30,46 +58,101 @@ public final class RefreshCoordinator {
         self.rateService = rateService
         self.calendar = calendar
         self.maxRetryCount = max(0, maxRetryCount)
+        self.maxConcurrentAccounts = max(1, maxConcurrentAccounts)
+        self.clock = clock ?? RefreshClock()
     }
 
-    public func refreshAll(forceRateRefresh: Bool = false) async -> [AccountRefreshResult] {
+    public func refreshAll(forceRateRefresh: Bool = false, source: RefreshSource = .manualAll) async -> [AccountRefreshResult] {
         let accounts: [AccountConfiguration]
-        do { accounts = try repository.fetchAccounts().filter(\.isEnabled) } catch { return [] }
-
-        // Keep account isolation: one failure, including all retries, never aborts others.
-        var results: [AccountRefreshResult] = []
-        for account in accounts {
-            results.append(await refresh(account: account, forceRateRefresh: forceRateRefresh))
+        do { accounts = try repository.fetchAccounts().filter(\.isEnabled) }
+        catch { onRepositoryError?("无法读取账户列表，保留上次成功数据。"); return [] }
+        return await withTaskGroup(of: AccountRefreshResult.self) { group in
+            for account in accounts {
+                group.addTask { await self.scheduler.refresh(account: account, forceRateRefresh: forceRateRefresh, source: source) }
+            }
+            var results: [UUID: AccountRefreshResult] = [:]
+            for await result in group { results[result.accountID] = result }
+            return accounts.compactMap { results[$0.id] }
         }
-        return results
     }
 
-    public func refresh(accountID: UUID, forceRateRefresh: Bool = false) async -> AccountRefreshResult {
+    public func refresh(accountID: UUID, forceRateRefresh: Bool = false, source: RefreshSource = .manualAccount) async -> AccountRefreshResult {
         do {
             guard let account = try repository.account(id: accountID), account.isEnabled else {
-                return AccountRefreshResult(accountID: accountID, snapshot: nil, error: nil)
+                return .cancelled(accountID)
             }
-            return await refresh(account: account, forceRateRefresh: forceRateRefresh)
+            return await scheduler.refresh(account: account, forceRateRefresh: forceRateRefresh, source: source)
         } catch { return AccountRefreshResult(accountID: accountID, snapshot: nil, error: sanitized(error)) }
     }
 
-    private func refresh(account: AccountConfiguration, forceRateRefresh: Bool) async -> AccountRefreshResult {
+    public func cancel(accountID: UUID) { scheduler.cancel(accountID: accountID) }
+    public func cancelAll() { scheduler.cancelAll() }
+
+    private func updateHealth(_ id: UUID, _ update: (inout AccountHealth) -> Void) {
+        var state = health[id] ?? AccountHealth()
+        update(&state)
+        health[id] = state
+        onHealthChange?(id, state)
+    }
+
+    private func restoreFailureState(_ id: UUID, from previous: AccountHealth) {
+        updateHealth(id) {
+            $0.issue = previous.issue; $0.retryAt = previous.retryAt
+            $0.consecutiveFailures = previous.consecutiveFailures
+        }
+    }
+
+    private func execute(account: AccountConfiguration, forceRateRefresh: Bool) async -> AccountRefreshResult {
+        let previousHealth = health[account.id] ?? AccountHealth()
         var attempt = 0
         while true {
             do {
+                try Task.checkCancellation()
+                updateHealth(account.id) { $0.phase = .refreshing }
                 let snapshot = try await performRefresh(account: account, forceRateRefresh: forceRateRefresh)
-                return AccountRefreshResult(accountID: account.id, snapshot: snapshot, error: nil)
+                updateHealth(account.id) {
+                    $0.lastSuccessAt = snapshot.fetchedAt; $0.consecutiveFailures = 0
+                    $0.issue = nil; $0.retryAt = nil; $0.freshness = snapshot.freshness
+                }
+                let result = AccountRefreshResult(accountID: account.id, snapshot: snapshot, error: nil)
+                onResult?(result)
+                return result
             } catch {
                 let providerError = sanitized(error)
+                // A received Retry-After remains authoritative even if the request was cancelled.
+                let until: Date?
+                if case .rateLimited(let retryAfter) = providerError {
+                    until = scheduler.recordRateLimit(for: account.siteOrigin, retryAfter: retryAfter)
+                } else { until = nil }
+                if Task.isCancelled || error is CancellationError || !scheduler.hasInterestedSubscribers(accountID: account.id) {
+                    restoreFailureState(account.id, from: previousHealth)
+                    return .cancelled(account.id)
+                }
                 guard attempt < maxRetryCount, isRetryable(providerError) else {
-                    // The old snapshot remains untouched on final failure.
-                    return AccountRefreshResult(accountID: account.id, snapshot: nil, error: providerError)
+                    updateHealth(account.id) {
+                        $0.issue = AccountHealthIssue(error: providerError)
+                        $0.consecutiveFailures += 1; $0.retryAt = until
+                    }
+                    let result = AccountRefreshResult(accountID: account.id, snapshot: nil, error: providerError)
+                    onResult?(result)
+                    return result
                 }
-                let delay = retryDelay(for: providerError, attempt: attempt)
+                let delay = until.map { max(0, $0.timeIntervalSince(clock.now())) } ?? retryDelay(for: providerError, attempt: attempt)
                 attempt += 1
-                do { try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) } catch {
-                    return AccountRefreshResult(accountID: account.id, snapshot: nil, error: .transport)
+                updateHealth(account.id) {
+                    $0.phase = .backingOff(until: until ?? clock.now().addingTimeInterval(delay))
+                    $0.issue = AccountHealthIssue(error: providerError)
+                    $0.retryAt = until ?? clock.now().addingTimeInterval(delay)
                 }
+                do {
+                    if let until {
+                        while clock.now() < until {
+                            try Task.checkCancellation()
+                            try await clock.sleep(min(86_400, until.timeIntervalSince(clock.now())))
+                        }
+                    } else { try await clock.sleep(delay) }
+                }
+                catch { restoreFailureState(account.id, from: previousHealth); return .cancelled(account.id) }
             }
         }
     }
@@ -85,13 +168,15 @@ public final class RefreshCoordinator {
             persistedRate: oldSnapshot?.rate,
             forceRefresh: forceRateRefresh
         )
+        try Task.checkCancellation()
         let fetched = try await adapter.fetchSnapshot(
             for: account,
             credential: credential,
             rate: rateResolution.rate,
-            now: Date(),
+            now: clock.now(),
             calendar: calendar
         )
+        try Task.checkCancellation()
         // If an older gateway has no /v1/stats endpoint, keep the previous
         // stats baseline so a later successful response is not counted twice.
         let fetchedWithStats: ProviderSnapshot
@@ -163,6 +248,11 @@ public final class RefreshCoordinator {
         }
 
         // The cumulative baseline must advance only when its delta is persisted.
+        try Task.checkCancellation()
+        // Main-actor validation + commit has no suspension: edits/deletion cannot race the write.
+        guard scheduler.hasInterestedSubscribers(accountID: account.id),
+              let current = try repository.account(id: account.id), current.isEnabled,
+              current == account else { throw CancellationError() }
         try repository.commitRefresh(snapshot, dailyUsage: dailyRecord)
 
         // The seven-day backfill is intentionally performed only during initial
@@ -173,21 +263,25 @@ public final class RefreshCoordinator {
 
     private func isRetryable(_ error: ProviderError) -> Bool {
         switch error {
-        case .transport, .server, .rateLimited: return true
+        case .transport, .rateLimited: return true
+        case .server(let status): return status >= 500 && status < 600
         default: return false
         }
     }
 
     private func retryDelay(for error: ProviderError, attempt: Int) -> TimeInterval {
         if case .rateLimited(let retryAfter) = error, let retryAfter {
-            return min(max(retryAfter, 1), 60)
+            return RefreshScheduler.safeRetryDelay(retryAfter)
         }
         return min(pow(2, Double(attempt + 1)), 30)
     }
 
     private func sanitized(_ error: Error) -> ProviderError {
         if let providerError = error as? ProviderError { return providerError }
-        if error is CredentialStoreError { return .invalidCredential }
+        if error is LocalRepositoryError { return .storageUnavailable }
+        if let credentialError = error as? CredentialStoreError {
+            return credentialError == .notFound ? .invalidCredential : .storageUnavailable
+        }
         return .transport
     }
 }

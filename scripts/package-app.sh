@@ -123,6 +123,15 @@ hdiutil create \
 cleanup_dmg_staging
 trap - EXIT
 
+# Versioned filenames bind this unsigned integrity record to the exact release
+# packages. This is not Developer ID signing or independent publisher identity.
+checksum_name="Relay-${marketing_version}-sha256.txt"
+(
+    cd "$output_dir"
+    shasum -a 256 "$archive_name" "$dmg_name" > "$checksum_name"
+    shasum -a 256 --check "$checksum_name"
+)
+
 metadata_name="Relay-${marketing_version}-metadata.txt"
 cat > "$output_dir/$metadata_name" <<METADATA
 name=Relay
@@ -133,6 +142,7 @@ platform=macos-arm64
 archive=$archive_name
 disk_image=$dmg_name
 metadata=$metadata_name
+checksum=$checksum_name
 METADATA
 
 printf 'Packaged %s and %s (version %s, build %s, commit %s)\n' \

@@ -314,6 +314,7 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
     }
 
     @objc private func quitFromMenu(_ sender: Any?) {
+        store.cancelRefreshes()
         NSApplication.shared.terminate(nil)
     }
 

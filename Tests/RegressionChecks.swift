@@ -179,6 +179,9 @@ struct RegressionChecks {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("relay-fixtures-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
+        try await UpdateIntegrityChecks.run()
+        try await RefreshSchedulingChecks.run()
+        try RepositoryPerformanceChecks.run()
         try BusinessLogicSelfCheck.run()
         print("PASSED: existing business logic self-check")
         try await PipioDashboardContractChecks.run()

@@ -1,7 +1,10 @@
 import AppKit
 import SwiftUI
 
-private struct NavigationCheckFailure: Error { let message: String }
+private struct NavigationCheckFailure: Error, CustomStringConvertible {
+    let message: String
+    var description: String { message }
+}
 
 /// AppKit integration checks. Run separately in a logged-in graphical session.
 /// Reflection reads the actual shell and home callbacks without adding production test APIs.
@@ -22,6 +25,17 @@ struct WindowNavigationContractChecks {
         try await Task.sleep(nanoseconds: 150_000_000)
     }
 
+    /// Poll the observable result, rather than relying on one fixed rendering delay.
+    @MainActor static func eventually(_ message: String, _ condition: () throws -> Bool) async throws {
+        let deadline = ProcessInfo.processInfo.systemUptime + 5
+        while try !condition() {
+            guard ProcessInfo.processInfo.systemUptime < deadline else {
+                throw NavigationCheckFailure(message: "Timed out: \(message)")
+            }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+    }
+
     @MainActor static func accessibleText(in node: Any, depth: Int = 0) -> [String] {
         guard depth < 30, let element = node as? NSAccessibilityProtocol else { return [] }
         let own = [element.accessibilityLabel(), element.accessibilityValue() as? String].compactMap { $0 }
@@ -36,7 +50,13 @@ struct WindowNavigationContractChecks {
         let store = RelayStore(repository: repository, credentialStore: InMemoryCredentialStore(),
                                adapters: ProviderAdapterRegistry(adapters: []), automaticallyRefresh: false)
         let controller = RelayMenuBarController(store: store)
-        defer { controller.close() }
+        defer {
+            // Cleanup must not enqueue another home presentation, even on failure.
+            let owner: NSWindowController? = try? field("auxiliaryWindowController", in: controller)
+            owner?.window?.delegate = nil
+            owner?.close()
+            controller.close()
+        }
         let popover: NSPopover = try field("popover", in: controller)
         guard let host = popover.contentViewController as? NSHostingController<MainPopoverView> else {
             throw NavigationCheckFailure(message: "Missing dashboard host")
@@ -55,19 +75,42 @@ struct WindowNavigationContractChecks {
             ("detail", { detail(account) })
         ]
         controller.toggle()
-        try await settle()
-        try check(popover.isShown, "Graphical test prerequisite: menu-bar anchor can show home")
+        try await eventually("menu-bar anchor can show home") { popover.isShown }
         for (name, open) in routes {
             open()
-            try await settle()
+            try await eventually("opening \(name) displays its window") { try currentWindow()?.isVisible == true }
             guard let window = try currentWindow() else { throw NavigationCheckFailure(message: "No \(name) window") }
             try check(window.styleMask.contains(.borderless), "\(name) uses the shared borderless panel shell")
             try check(!window.styleMask.contains(.titled), "\(name) does not show a native title bar")
             try check(window.isOpaque == false, "\(name) keeps the panel surface transparent outside its rounded content")
             try check(!popover.isShown, "Opening \(name) hides home")
-            window.performClose(nil)
+            try check(window.canBecomeKey && window.canBecomeMain, "\(name) accepts keyboard focus")
+            try check(window.isReleasedWhenClosed == false && window.isRestorable == false,
+                      "\(name) keeps the existing transient panel lifecycle")
+
+            // Hiding is not closing: preserve each route's exact window and content.
+            let contentView = window.contentView
+            controller.close()
             try await settle()
-            try check(try currentWindow() == nil && popover.isShown, "Closing \(name) returns home")
+            try check(!window.isVisible && !popover.isShown, "Hiding \(name) does not return home")
+            try check(try currentWindow() === window, "Hiding \(name) retains the page")
+            controller.toggle()
+            try await eventually("reopening \(name) restores its window") { window.isVisible }
+            try check(try currentWindow() === window && window.contentView === contentView && !popover.isShown,
+                      "Reopening \(name) preserves the window and hosted content")
+
+            window.performClose(nil)
+            try await eventually("native close of \(name) returns home") { try currentWindow() == nil && popover.isShown }
+            try check(!window.isVisible, "Closed \(name) does not remain visible")
+
+            // SwiftUI close/cancel/done callbacks use NSWindowController.close().
+            // Exercise that path separately from performClose without button automation.
+            open()
+            try await eventually("reopening \(name) creates a new page") { try currentWindow()?.isVisible == true }
+            let reopenedOwner: NSWindowController? = try field("auxiliaryWindowController", in: controller)
+            try check(reopenedOwner?.window !== window, "Closed \(name) is not accidentally reused")
+            reopenedOwner?.close()
+            try await eventually("controller close of \(name) returns home") { try currentWindow() == nil && popover.isShown }
         }
         // Verify SwiftUI observes changes while the real detail window stays open.
         // This exercises the hosted container, not only the store projection.
@@ -182,10 +225,19 @@ struct WindowNavigationContractChecks {
     }
 
     @MainActor static func main() {
+        // Recheck before any AppKit initialization in case login changed during compilation.
+        if let reason = GUIVerificationSession.currentUnavailableReason() {
+            fputs("SKIPPED: GUI navigation unavailable: \(reason). No GUI tests ran.\n", stderr)
+            exit(GUIVerificationSession.skippedExitCode)
+        }
         NSApplication.shared.setActivationPolicy(.accessory)
         Task { @MainActor in
-            do { try await run(); exit(0) }
-            catch { print("FAILED: \(error)"); exit(1) }
+            do {
+                try await run()
+                print("PASSED: GUI navigation integration checks (synthetic data; no real doubleMac verification)")
+                exit(0)
+            }
+            catch { fputs("FAILED: GUI navigation: \(error)\n", stderr); exit(1) }
         }
         NSApplication.shared.run()
     }

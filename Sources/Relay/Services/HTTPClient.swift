@@ -18,6 +18,10 @@ public final class URLSessionHTTPClient: HTTPClient, @unchecked Sendable {
                 throw ProviderError.transport
             }
             return (data, httpResponse)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as URLError where error.code == .cancelled {
+            throw CancellationError()
         } catch let error as ProviderError {
             throw error
         } catch {
@@ -27,6 +31,15 @@ public final class URLSessionHTTPClient: HTTPClient, @unchecked Sendable {
 }
 
 public enum HTTPResponseValidator {
+    static func retryAfterInterval(_ raw: String, now: Date = Date()) -> TimeInterval? {
+        if let seconds = TimeInterval(raw.trimmingCharacters(in: .whitespacesAndNewlines)), seconds.isFinite { return max(0, seconds) }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        return formatter.date(from: raw).map { max(0, $0.timeIntervalSince(now)) }
+    }
+
     public static func validate(_ response: HTTPURLResponse) throws {
         switch response.statusCode {
         case 200..<300:
@@ -36,7 +49,7 @@ public enum HTTPResponseValidator {
         case 403:
             throw ProviderError.forbidden
         case 429:
-            let retryAfter = response.value(forHTTPHeaderField: "Retry-After").flatMap(TimeInterval.init)
+            let retryAfter = response.value(forHTTPHeaderField: "Retry-After").flatMap { retryAfterInterval($0) }
             throw ProviderError.rateLimited(retryAfter: retryAfter)
         case 500..<600:
             throw ProviderError.server(statusCode: response.statusCode)

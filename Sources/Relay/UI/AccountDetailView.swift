@@ -19,6 +19,7 @@ struct AccountDetailContainerView: View {
                 modelUsages: data.modelUsages,
                 deepSeekUsageReport: data.deepSeekUsageReport,
                 dataErrorMessage: state.errorMessage,
+                health: (data.account.parentAccountID ?? UUID(uuidString: data.account.id)).map { store.health(for: $0) },
                 onClose: onClose,
                 onSubAccountAction: onSubAccountAction
             )
@@ -45,6 +46,7 @@ public struct AccountDetailView: View {
     public let modelUsages: [ModelUsageItem]
     public let deepSeekUsageReport: DeepSeekUsageReport?
     public let dataErrorMessage: String?
+    public let health: AccountHealth?
     public var onClose: () -> Void
     public var onSubAccountAction: (ProviderSubAccountAction, UUID, String) async throws -> Void
     @State private var confirmingAction: ProviderSubAccountAction?
@@ -57,6 +59,7 @@ public struct AccountDetailView: View {
         modelUsages: [ModelUsageItem] = [],
         deepSeekUsageReport: DeepSeekUsageReport? = nil,
         dataErrorMessage: String? = nil,
+        health: AccountHealth? = nil,
         onClose: @escaping () -> Void = {},
         onSubAccountAction: @escaping (ProviderSubAccountAction, UUID, String) async throws -> Void = { _, _, _ in }
     ) {
@@ -65,6 +68,7 @@ public struct AccountDetailView: View {
         self.modelUsages = modelUsages
         self.deepSeekUsageReport = deepSeekUsageReport
         self.dataErrorMessage = dataErrorMessage
+        self.health = health
         self.onClose = onClose
         self.onSubAccountAction = onSubAccountAction
     }
@@ -99,10 +103,10 @@ public struct AccountDetailView: View {
 
             Divider().opacity(0.35)
             HStack {
-                Text(dataErrorMessage.map { "读取失败，保留上次数据：" + $0 } ?? lastUpdatedText)
+                Text(dataErrorMessage.map { "读取失败，保留上次数据：" + $0 } ?? healthFooterText)
                     .font(.system(size: 10))
                     .foregroundStyle(dataErrorMessage == nil ? Color.secondary : Color.red)
-                    .help(dataErrorMessage ?? lastUpdatedText)
+                    .help(dataErrorMessage ?? healthFooterText)
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: 6)
@@ -138,6 +142,11 @@ public struct AccountDetailView: View {
         } message: {
             Text("此操作会调用网关管理接口；网关必须启用 admin.enabled。启用仅解除手动停用，不会解除系统自动停用。")
         }
+    }
+
+    private var healthFooterText: String {
+        guard let health, account.isEnabled else { return lastUpdatedText }
+        return health.summary + " · " + lastUpdatedText
     }
 
     private var header: some View {

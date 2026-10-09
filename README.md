@@ -32,7 +32,7 @@ Relay 是一款面向 Apple Silicon 的 macOS 菜单栏应用，用于只读监�
 | 保存运行时认证信息 | 已实现。Pipio 管理 Token、Pipio 数值用户 ID、DeepSeek API Key、可选 DeepSeek 平台 `userToken` 和网关 API Key 写入本机私有凭据文件。 |
 | 读取站点状态、余额、累计/今日数据 | 已实现。不同供应商按其实际接口能力返回；缺失数据保持未知，不把未知伪装成 `0`。 |
 | 菜单栏摘要、首页账户列表、账户详情 | 已实现。菜单栏保留状态图标和可用的今日消费数字；首页显示账户投影、汇总和状态；详情页显示趋势及可用模型分析。 |
-| 手动刷新、定时刷新、失败保留旧数据、退避/错误隔离 | 已实现。默认刷新间隔为 5 分钟，可配置为 1/5/15/30 分钟；账户级失败保留旧快照并显示 stale/error/partial 状态。 |
+| 手动刷新、定时刷新、失败保留旧数据、退避/错误隔离 | 已实现。默认刷新间隔为 5 分钟，可配置为 1/5/15/30 分钟；默认全局最多 3 个账户、每站点原点 1 个，同账户请求合并。支持取消与共享限流冷却，失败保留旧快照。账户健康区分凭据、权限、限流、网络、接口/供应商与存储问题。 |
 | 本地历史和设置持久化 | 已实现。业务数据使用版本化本地 JSON；历史保留可配置为 1 个月、半年、1 年或永久。 |
 | iCloud Drive 同步非秘密数据 | 已实现。同步目录由系统目录选择器授权并保存 security-scoped bookmark；目录不可用时本地功能继续工作。 |
 
@@ -221,7 +221,19 @@ scripts/test-regressions.sh
 - 同步合并、删除 tombstone、损坏/未知版本保护；
 - 账户覆盖完整性、跨日/时区处理和设置保存失败；
 - Pipio 看板、模型 Token/缓存占比、今日消费和菜单栏展示；
-- workbuddy2api 统计解码、刷新去重和历史保留策略。
+- workbuddy2api 统计解码、刷新去重和历史保留策略；
+- 并发调度、取消时序、配置变更保护、共享冷却和健康分类；
+- 更新包完整性、下载来源/版本绑定、校验失败清理；
+- 历史索引与存储诊断、图表选择和稀疏标注。
+
+### 独立离线契约
+
+```bash
+SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk \
+scripts/test-contracts.sh
+```
+
+分别运行 DeepSeek 用量、全局快捷键、同步冲突契约，以及 GUI 会话判断 fixture。使用隔离的临时目录，不使用网络或真实凭据。
 
 ### 窗口导航检查
 
@@ -230,7 +242,7 @@ SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk \
 scripts/test-window-navigation.sh
 ```
 
-该检查需要已登录的 macOS 图形会话，使用模拟内存数据验证设置、添加、编辑、详情页面的关闭/隐藏/恢复/替换行为；不会调用供应商接口。
+可追加 `--build-only` 仅编译，或 `--check-session` 只检测会话；无有效图形会话明确跳过并返回 77，不算 GUI 通过。实际执行需要已登录的 macOS 图形会话，使用模拟内存数据验证设置、添加、编辑、详情页面的关闭/隐藏/恢复/替换行为；不会调用供应商接口。
 
 ### iCloud 同步基线
 
@@ -251,6 +263,7 @@ scripts/package-app.sh
 - `Relay-<version>-macos-arm64.zip`
 - `Relay-<version>-macos-arm64.dmg`
 - `Relay-<version>-metadata.txt`
+- `Relay-<version>-sha256.txt`
 
 打包脚本会构建 arm64 可执行文件、生成 `Relay.app`、复制 `Resources/AppIcon.icns`、写入 Bundle ID `cloud.dinghao.relay` 并进行 ad-hoc 签名。当前发布路线是 GitHub Releases，不使用 Developer ID 签名和公证；首次打开可能需要用户在“隐私与安全性”中手动放行。
 
@@ -261,20 +274,22 @@ scripts/package-app.sh
 - `CFBundleVersion` 始终使用完整 Git 历史计算的提交数；
 - 可用 `RELAY_VERSION` 覆盖营销版本。
 
-GitHub Actions 在 PR、`main` push、版本标签和手动运行时执行构建；`main` push 成功后按提交数创建 Release，上传 ZIP、DMG 和 metadata。CI 使用 `xcode-27` arm64 runner，并要求完整 Git 历史。
+GitHub Actions 在 PR、`main` push、版本标签和手动运行时执行构建；`main` push 成功后按提交数创建 Release，上传 ZIP、DMG、metadata 和 SHA-256 校验文件；打包后与上传产物下载后均复算校验值。CI 使用 `xcode-27` arm64 runner，并要求完整 Git 历史。
 
 ## 应用内更新
 
 Relay 从 `DavisDing/Relay` 的 GitHub Releases API 检查版本，仅接受包含 `macos-arm64.dmg` 或 `macos-arm64.zip` 的更高版本。用户确认后下载到当前用户的 `~/Downloads`，下载完成后由用户退出 Relay 并手动替换安装。
 
-当前没有静默更新、自动重启或签名校验安装流程；未来如采用 Developer ID + 公证，可再评估 Sparkle 等方案。
+下载前重新读取精确 Release tag，优先使用资产 digest，否则使用同 Release 的版本化 checksum；校验来源、版本、可用文件长度与 SHA-256 后才交付文件。缺少或不匹配的校验值会阻止应用内下载，手动安装仍可用。
+
+已明确不使用 Developer ID 或公证；继续 ad-hoc 签名和手动安装。哈希校验是同源未签名的完整性核对，不是独立的发布者身份认证。没有静默更新或自动重启。
 
 ## 已知限制与未完成验收
 
 1. 凭据文件不是 Keychain 或加密保险箱，属于已确认的安全降级。
 2. DeepSeek 历史用量依赖平台内部接口和手动 `userToken`，该接口可能变化；官方余额不受此影响。
 3. workbuddy2api 的统计来自网关进程累计值，Relay 只能统计已观察到的增量；容器重启前未被 Relay 刷新的区间无法恢复。
-4. iCloud 同步仍需真实第二台 Mac 做下载、冲突、权限和离线恢复验收；fixture 只能证明确定性数据契约。
+4. iCloud 同步的真实第二台 Mac 验收尚未完成；2026-10-09 按用户决定跳过本轮验收，fixture 只能证明确定性数据契约。
 5. 未实现自定义 OpenAI 兼容站点和配置导入/导出。
 6. 本项目当前不做充值、扣费、模型代理、税务分析或账单对账。
 

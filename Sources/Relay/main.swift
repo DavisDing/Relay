@@ -66,6 +66,7 @@ struct RelayApp: App {
         .commands {
             CommandGroup(replacing: .appTermination) {
                 Button("退出 Relay") {
+                    store.cancelRefreshes()
                     NSApplication.shared.terminate(nil)
                 }
                 .keyboardShortcut("q")

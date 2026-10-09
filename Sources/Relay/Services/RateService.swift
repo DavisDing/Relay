@@ -42,10 +42,13 @@ public actor RateService {
 
         do {
             let fresh = try await adapter.fetchAccountRate(for: account, credential: credential)
+            try Task.checkCancellation()
             guard fresh.accountID == account.id else { throw ProviderError.missingRate }
             cachedRates[account.id] = fresh
             return RateResolution(rate: fresh, isStale: false)
         } catch {
+            if Task.isCancelled || error is CancellationError { throw CancellationError() }
+            if let providerError = error as? ProviderError, case .rateLimited = providerError { throw providerError }
             if let candidate {
                 cachedRates[account.id] = candidate
                 return RateResolution(rate: candidate, isStale: true)

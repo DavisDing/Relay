@@ -72,8 +72,13 @@ public final class FileLocalRepository: LocalRepository {
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
     private var state: State
+    private var historyByAccount: [UUID: [DailyUsageRecord]] = [:]
+    /// Aggregate, process-local observations only; never encoded or synced.
+    public private(set) var performanceDiagnostics = RepositoryPerformanceDiagnostics()
 
     public init(fileURL: URL? = nil) throws {
+        let reloadStarted = RepositoryPerformanceClock.now()
+        var loadedBytes = 0
         let resolvedURL: URL
         if let fileURL {
             resolvedURL = fileURL
@@ -95,7 +100,9 @@ public final class FileLocalRepository: LocalRepository {
         if FileManager.default.fileExists(atPath: resolvedURL.path) {
             do {
                 try Self.applyOwnerOnlyPermissions(to: resolvedURL)
-                state = try decoder.decode(State.self, from: Data(contentsOf: resolvedURL))
+                let data = try Data(contentsOf: resolvedURL)
+                state = try decoder.decode(State.self, from: data)
+                loadedBytes = data.count
             } catch let error as LocalRepositoryError {
                 throw error
             } catch {
@@ -104,6 +111,9 @@ public final class FileLocalRepository: LocalRepository {
         } else {
             state = State()
         }
+        rebuildHistoryIndex()
+        updateCapacityDiagnostics(fileBytes: loadedBytes)
+        performanceDiagnostics.reloadMilliseconds = RepositoryPerformanceClock.elapsedMilliseconds(since: reloadStarted)
     }
 
     public func fetchAccounts() throws -> [AccountConfiguration] {
@@ -167,9 +177,7 @@ public final class FileLocalRepository: LocalRepository {
     }
 
     public func dailyUsage(accountID: UUID, limit: Int? = nil) throws -> [DailyUsageRecord] {
-        let records = state.dailyUsage
-            .filter { $0.accountID == accountID }
-            .sorted { $0.day < $1.day }
+        let records = historyByAccount[accountID] ?? []
         guard let limit, limit > 0 else { return records }
         return Array(records.suffix(limit))
     }
@@ -243,10 +251,36 @@ public final class FileLocalRepository: LocalRepository {
     }
 
     private func commit(_ candidate: State) throws {
+        let started = RepositoryPerformanceClock.now()
+        var succeeded = false
+        defer {
+            // Attempt timings may change on failure; committed capacity and cache do not.
+            performanceDiagnostics.commitMilliseconds = RepositoryPerformanceClock.elapsedMilliseconds(since: started)
+            performanceDiagnostics.lastCommitSucceeded = succeeded
+        }
+        let data: Data
         do {
-            try PrivateFileWriter.write(encoder.encode(candidate), to: fileURL)
+            data = try encoder.encode(candidate)
+            try PrivateFileWriter.write(data, to: fileURL)
         } catch { throw LocalRepositoryError.unavailable }
+        // All fallible work remains before the atomic commit point. The index is
+        // a derived projection, not a second persisted state or sync payload.
         state = candidate
+        rebuildHistoryIndex()
+        updateCapacityDiagnostics(fileBytes: data.count)
+        succeeded = true
+    }
+
+    private func rebuildHistoryIndex() {
+        historyByAccount = Dictionary(grouping: state.dailyUsage, by: \.accountID)
+            .mapValues { $0.sorted { $0.day < $1.day } }
+    }
+
+    private func updateCapacityDiagnostics(fileBytes: Int) {
+        performanceDiagnostics.accountCount = state.accounts.count
+        performanceDiagnostics.historyCount = state.dailyUsage.count
+        performanceDiagnostics.maximumHistoryCountPerAccount = historyByAccount.values.map(\.count).max() ?? 0
+        performanceDiagnostics.fileBytes = fileBytes
     }
 
     private static func applyOwnerOnlyPermissions(to fileURL: URL) throws {
