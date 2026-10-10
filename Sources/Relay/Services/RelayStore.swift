@@ -355,7 +355,8 @@ public final class RelayStore: ObservableObject {
         replacementCredential: ProviderCredential? = nil,
         replacementBaseURL: String? = nil,
         manualUSDToCNY: ManualExchangeRateUpdate = .unchanged,
-        deepSeekUserTokenUpdate: OptionalStringUpdate = .unchanged
+        deepSeekUserTokenUpdate: OptionalStringUpdate = .unchanged,
+        preferences: AccountPreferencesUpdate = .unchanged
     ) async throws {
         try requireStorage()
         activeAccountMutations += 1
@@ -369,7 +370,8 @@ public final class RelayStore: ObservableObject {
                 replacementCredential: replacementCredential,
                 replacementBaseURL: replacementBaseURL,
                 manualUSDToCNY: manualUSDToCNY,
-                deepSeekUserTokenUpdate: deepSeekUserTokenUpdate
+                deepSeekUserTokenUpdate: deepSeekUserTokenUpdate,
+                preferences: preferences
             )
             accountErrors.removeValue(forKey: accountID.uuidString)
             reloadFromRepository()

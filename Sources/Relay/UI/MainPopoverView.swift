@@ -239,7 +239,21 @@ public struct MainPopoverView: View {
                 HStack(spacing: 8) {
                     Text("已连接账号 (\(visibleDashboardAccounts.count))")
                         .font(.system(size: 13, weight: .semibold))
-                    Spacer()
+                    Spacer(minLength: 4)
+                    HStack(spacing: 7) {
+                        Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                        TextField("搜索账号", text: $accountSearch)
+                            .textFieldStyle(.plain)
+                            .accessibilityLabel("搜索账号、服务商或分组")
+                        if !accountSearch.isEmpty {
+                            Button { accountSearch = "" } label: { Image(systemName: "xmark.circle.fill") }
+                                .buttonStyle(.plain).foregroundStyle(.secondary)
+                        }
+                    }
+                    .font(.system(size: 11))
+                    .padding(.horizontal, 9).padding(.vertical, 7)
+                    .relayGlassTile(cornerRadius: 9)
+                    .frame(minWidth: 100, maxWidth: 165)
                     if !organizationGroups.isEmpty {
                         Menu {
                             Button("全部分组") { accountGroup = nil }
@@ -248,23 +262,13 @@ public struct MainPopoverView: View {
                                     if accountGroup == group { Label(group, systemImage: "checkmark") } else { Text(group) }
                                 }
                             }
-                        } label: { Label(accountGroup ?? "分组", systemImage: "line.3.horizontal.decrease.circle") }
+                        } label: { Image(systemName: "line.3.horizontal.decrease.circle") }
+                        .help(accountGroup.map { "当前分组：" + $0 } ?? "筛选分组")
+                        .accessibilityLabel(accountGroup.map { "筛选分组，当前：" + $0 } ?? "筛选分组")
                         .menuStyle(.borderlessButton)
                         .font(.system(size: 10))
                     }
                 }.padding(.top, 4)
-                HStack(spacing: 7) {
-                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                    TextField("搜索账号、服务商或分组", text: $accountSearch)
-                        .textFieldStyle(.plain)
-                    if !accountSearch.isEmpty {
-                        Button { accountSearch = "" } label: { Image(systemName: "xmark.circle.fill") }
-                            .buttonStyle(.plain).foregroundStyle(.secondary)
-                    }
-                }
-                .font(.system(size: 11))
-                .padding(.horizontal, 9).padding(.vertical, 7)
-                .relayGlassTile(cornerRadius: 9)
 
                 if visibleDashboardAccounts.isEmpty && (!accountSearch.isEmpty || accountGroup != nil) {
                     VStack(spacing: 6) {

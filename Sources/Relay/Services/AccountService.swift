@@ -6,19 +6,28 @@ public struct AccountDraft: Sendable {
     public let baseURL: String
     public let credential: ProviderCredential
     public let lowBalanceThreshold: Decimal?
+    public let monthlyBudget: MoneyValue?
+    public let groupName: String?
+    public let isPinned: Bool
 
     public init(
         displayName: String,
         providerKind: ProviderKind,
         baseURL: String,
         credential: ProviderCredential,
-        lowBalanceThreshold: Decimal? = Decimal(20)
+        lowBalanceThreshold: Decimal? = Decimal(20),
+        monthlyBudget: MoneyValue? = nil,
+        groupName: String? = nil,
+        isPinned: Bool = false
     ) {
         self.displayName = displayName
         self.providerKind = providerKind
         self.baseURL = baseURL
         self.credential = credential
         self.lowBalanceThreshold = lowBalanceThreshold
+        self.monthlyBudget = monthlyBudget
+        self.groupName = groupName
+        self.isPinned = isPinned
     }
 }
 
@@ -137,6 +146,7 @@ public final class AccountService {
 
     private func makeAccount(from draft: AccountDraft) throws -> AccountConfiguration {
         try draft.validateRequiredFields()
+        try AccountPreferencesValidation.validate(monthlyBudget: draft.monthlyBudget, groupName: draft.groupName, provider: draft.providerKind)
         let name = draft.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         let address = draft.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let inputURL = URL(string: address) else {
@@ -162,6 +172,9 @@ public final class AccountService {
             siteOrigin: origin,
             isEnabled: true,
             lowBalanceThreshold: draft.providerKind == .workbuddy2api ? nil : draft.lowBalanceThreshold,
+            monthlyBudget: draft.monthlyBudget,
+            groupName: AccountOrganizationService.normalizedGroup(draft.groupName),
+            isPinned: draft.isPinned,
             sortOrder: sortOrder
         )
     }
@@ -173,11 +186,18 @@ public final class AccountService {
         replacementCredential: ProviderCredential? = nil,
         replacementBaseURL: String? = nil,
         manualUSDToCNY: ManualExchangeRateUpdate = .unchanged,
-        deepSeekUserTokenUpdate: OptionalStringUpdate = .unchanged
+        deepSeekUserTokenUpdate: OptionalStringUpdate = .unchanged,
+        preferences: AccountPreferencesUpdate = .unchanged
     ) async throws {
         guard var account = try repository.account(id: accountID) else { return }
         let name = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { throw AccountServiceError.missingRequiredFields(["账号显示名称"]) }
+        if case let .set(monthlyBudget, groupName, isPinned) = preferences {
+            try AccountPreferencesValidation.validate(monthlyBudget: monthlyBudget, groupName: groupName, provider: account.providerKind)
+            account.monthlyBudget = monthlyBudget
+            account.groupName = AccountOrganizationService.normalizedGroup(groupName)
+            account.isPinned = isPinned
+        }
 
         if case let .set(value) = manualUSDToCNY {
             if let value, !USDToCNYRate.isValid(value) {

@@ -85,6 +85,95 @@ enum DataTransferChecks {
         catch DataTransferError.invalidAccounts {}
         let after = try await backups.list()
         try check(prior == after, "Invalid backup cannot prune good generations")
+        try await directorySelectionChecks(data: data, root: root, day: day)
         print("PASSED: nonsecret config validation/preview, bounded files, CSV filters and formula safety, unknown versus zero, owner-private backups, five-generation retention and preview path safety")
     }
+
+    private static func directorySelectionChecks(data: RelaySyncData, root: URL, day: Date) async throws {
+        let manager = FileManager.default
+        let canonicalRoot = root.resolvingSymlinksInPath()
+        let missingAliasRoot = URL(fileURLWithPath: "/tmp", isDirectory: true)
+            .appendingPathComponent("relay-absent-alias-\(UUID().uuidString)/nested/backups", isDirectory: true)
+        let aliasService = LocalBackupService(directoryURL: missingAliasRoot)
+        let normalizedAlias = try await aliasService.currentDirectoryURL()
+        defer { try? manager.removeItem(at: normalizedAlias.deletingLastPathComponent().deletingLastPathComponent()) }
+        let aliasEntry = try await aliasService.create(data, at: day)
+        try check(normalizedAlias.path.hasPrefix("/private/tmp/") && manager.fileExists(atPath: aliasEntry.fileURL.path),
+                  "Absent injected fallback resolves system temporary alias through existing ancestor")
+        let suite = "relay-backup-directory-check-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let fallback = canonicalRoot.appendingPathComponent("default")
+        let firstParent = canonicalRoot.appendingPathComponent("selected-one")
+        let secondParent = canonicalRoot.appendingPathComponent("selected-two")
+        let credentials = canonicalRoot.appendingPathComponent("credentials")
+        for directory in [firstParent, secondParent, credentials] {
+            try manager.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o755])
+        }
+        let fixtureCodec = BackupDirectoryBookmarkCodec(
+            encode: { Data($0.path.utf8) },
+            decode: { bytes in
+                guard let path = String(data: bytes, encoding: .utf8), path.hasPrefix("/") else { throw BackupDirectoryError.bookmarkUnavailable }
+                return URL(fileURLWithPath: path, isDirectory: true)
+            })
+        let service = LocalBackupService(directoryURL: fallback, preferences: defaults, codec: fixtureCodec, credentialDirectoryURL: credentials)
+        _ = try await service.create(data, at: day)
+        let initial = try await service.list()
+        try await service.selectDirectory(firstParent)
+        let chosen = try await service.currentDirectoryURL()
+        let empty = try await service.list()
+        try check(chosen == firstParent.appendingPathComponent("RelayBackups", isDirectory: true) && empty.count == initial.count,
+                  "Selected parent receives old backups in dedicated child")
+        try check(!manager.fileExists(atPath: initial[0].fileURL.path), "Default originals removed after verified move")
+        let parentAttributes = try manager.attributesOfItem(atPath: firstParent.path)
+        try check((parentAttributes[.posixPermissions] as? NSNumber)?.intValue == 0o755, "Selecting never chmods user parent")
+        let firstEntry = try await service.create(data, at: day)
+        let restarted = LocalBackupService(directoryURL: fallback, preferences: defaults, codec: fixtureCodec, credentialDirectoryURL: credentials)
+        let reloaded = try await restarted.currentDirectoryURL()
+        try check(reloaded == chosen, "Local bookmark restores chosen folder after restart")
+        try await service.selectDirectory(secondParent)
+        try check(!manager.fileExists(atPath: firstEntry.fileURL.path), "Switching removes verified old originals")
+        let newEntries = try await service.list()
+        try check(newEntries.count == 2, "New selected directory lists all moved backups")
+        do { _ = try await service.preview(firstEntry); throw DataTransferCheckFailure(description: "Old selected preview accepted after switch") }
+        catch DataTransferError.backupUnavailable {}
+        try await service.selectDirectory(firstParent)
+        let oldEntries = try await service.list()
+        try check(oldEntries.count == 2, "Moving back preserves both backups")
+        try await service.resetDirectory()
+        let reset = try await service.list()
+        try check(reset.count == 2 && defaults.object(forKey: LocalBackupService.bookmarkPreferenceKey) == nil,
+                  "Reset moves backups to default and clears local preference")
+        do { try await service.selectDirectory(credentials); throw DataTransferCheckFailure(description: "Credential directory accepted") }
+        catch BackupDirectoryError.credentialDirectory {}
+        do { try await service.selectDirectory(canonicalRoot); throw DataTransferCheckFailure(description: "Credential parent accepted") }
+        catch BackupDirectoryError.credentialDirectory {}
+        let alias = canonicalRoot.appendingPathComponent("credential-link")
+        try manager.createSymbolicLink(at: alias, withDestinationURL: credentials)
+        do { try await service.selectDirectory(alias); throw DataTransferCheckFailure(description: "Credential symlink accepted") }
+        catch BackupDirectoryError.invalidDirectory {}
+        let blockedParent = canonicalRoot.appendingPathComponent("blocked")
+        try manager.createDirectory(at: blockedParent, withIntermediateDirectories: true)
+        try Data("existing file".utf8).write(to: blockedParent.appendingPathComponent("RelayBackups"))
+        do { try await service.selectDirectory(blockedParent); throw DataTransferCheckFailure(description: "Invalid child accepted") }
+        catch BackupDirectoryError.invalidDirectory {}
+        try check(defaults.object(forKey: LocalBackupService.bookmarkPreferenceKey) == nil, "Invalid selection does not persist")
+        try await service.selectDirectory(firstParent)
+        defaults.set(Data("broken".utf8), forKey: LocalBackupService.bookmarkPreferenceKey)
+        do { _ = try await service.list(); throw DataTransferCheckFailure(description: "Broken bookmark fell back silently") }
+        catch BackupDirectoryError.bookmarkUnavailable {}
+        do { _ = try await service.resetDirectory(); throw DataTransferCheckFailure(description: "Broken source reset silently ignored migration") }
+        catch BackupDirectoryError.bookmarkUnavailable {}
+        try await service.selectDirectory(firstParent)
+        let renewed = try await service.list()
+        try check(renewed.count == 2, "Reselecting same parent renews lost authorization without losing backups")
+        let staleCodec = BackupDirectoryBookmarkCodec(encode: fixtureCodec.encode, decode: { _ in throw BackupDirectoryError.bookmarkUnavailable })
+        let staleService = LocalBackupService(directoryURL: fallback, preferences: defaults, codec: staleCodec, credentialDirectoryURL: credentials)
+        do { _ = try await staleService.create(data); throw DataTransferCheckFailure(description: "Stale bookmark wrote default backup") }
+        catch BackupDirectoryError.bookmarkUnavailable {}
+        try check(manager.fileExists(atPath: oldEntries[0].fileURL.path), "Bad bookmark preserves old backup bytes")
+        try await service.resetDirectory()
+        print("PASSED: backup directory selection/restart/reset, isolated local preference, dedicated child permissions, verified moved backups, fail-closed bookmark and credential/symlink protection")
+    }
+
 }

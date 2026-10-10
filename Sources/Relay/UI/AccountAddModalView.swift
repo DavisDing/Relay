@@ -12,6 +12,10 @@ public struct AccountAddModalView: View {
     @State private var deepseekUserToken = ""
     @State private var workbuddyBaseURL = "http://localhost:7863"
     @State private var workbuddyApiKey = ""
+    @State private var monthlyBudget = ""
+    @State private var budgetCurrency: Currency = .cny
+    @State private var groupName = ""
+    @State private var isPinned = false
     @State private var isTesting = false
     @State private var isSaving = false
     @State private var statusMessage: String?
@@ -87,6 +91,10 @@ public struct AccountAddModalView: View {
                         Text("自定义兼容端点属于后续扩展，当前版本未启用。")
                             .foregroundColor(.secondary)
                     }
+
+                    Divider().opacity(0.4)
+                    AccountPreferencesFields(monthlyBudget: $monthlyBudget, budgetCurrency: $budgetCurrency,
+                                             groupName: $groupName, isPinned: $isPinned, provider: selectedProvider)
 
                     if let statusMessage {
                         Label(statusMessage, systemImage: "checkmark.seal.fill")
@@ -246,12 +254,17 @@ public struct AccountAddModalView: View {
         case .custom:
             throw ProviderError.unsupportedProvider
         }
+        let parsedBudget = selectedProvider == .workbuddy2api ? nil : try BudgetService.parseBudget(monthlyBudget, currency: budgetCurrency)
+        try AccountPreferencesValidation.validate(monthlyBudget: parsedBudget, groupName: groupName, provider: selectedProvider)
         return AccountDraft(
             displayName: accountName,
             providerKind: selectedProvider,
             baseURL: baseURL,
             credential: credential,
-            lowBalanceThreshold: selectedProvider == .workbuddy2api ? nil : Decimal(20)
+            lowBalanceThreshold: selectedProvider == .workbuddy2api ? nil : Decimal(20),
+            monthlyBudget: parsedBudget,
+            groupName: AccountOrganizationService.normalizedGroup(groupName),
+            isPinned: isPinned
         )
     }
 

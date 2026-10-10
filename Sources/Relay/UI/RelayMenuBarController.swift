@@ -440,8 +440,9 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
         presentAuxiliaryWindow(title: "编辑账号", size: NSSize(width: RelayVisualStyle.panelWidth, height: 520)) {
             AccountEditModalView(
                 account: account,
+                accountConfiguration: UUID(uuidString: account.id).flatMap { self.store.accountConfiguration(id: $0) },
                 onDismiss: { [weak self] in self?.closeAuxiliaryWindow() },
-                onSave: { [weak self] name, threshold, credential, rateUpdate, baseURL, tokenUpdate in
+                onSave: { [weak self] name, threshold, credential, rateUpdate, baseURL, tokenUpdate, preferences in
                     guard let self, let id = UUID(uuidString: account.id) else { return }
                     try await self.store.updateAccount(
                         accountID: id,
@@ -450,7 +451,8 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
                         replacementCredential: credential,
                         replacementBaseURL: baseURL,
                         manualUSDToCNY: rateUpdate,
-                        deepSeekUserTokenUpdate: tokenUpdate
+                        deepSeekUserTokenUpdate: tokenUpdate,
+                        preferences: preferences
                     )
                 }
             )

@@ -11,6 +11,7 @@ struct DataTransferPanel: View {
     @State private var selectedAccountID: UUID?
     @State private var configurations: [AccountConfiguration] = []
     @State private var backupEntries: [LocalBackupEntry] = []
+    @State private var backupDirectoryPath: String?
     @State private var importPreview: ConfigurationImportPreview?
     @State private var backupPreview: LocalBackupPreview?
     @State private var expectedImportData: RelaySyncData?
@@ -58,6 +59,16 @@ struct DataTransferPanel: View {
             }
             Text("运行期间每日自动备份一次，可随时手动备份；保留最近 5 份，包括账号、设置和消费记录。恢复前会先备份当前数据，并保留本机凭据。")
                 .font(.system(size: 10)).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(backupDirectoryPath ?? "备份目录不可用，请重新选择或恢复默认目录")
+                    .font(.system(size: 10)).foregroundStyle(.secondary).textSelection(.enabled)
+                HStack {
+                    Button("选择备份目录…") { chooseBackupDirectory() }
+                    Button("恢复默认目录") { resetBackupDirectory() }
+                }
+                Text("目录设置仅保存在本机。切换时会搬移旧备份，校验成功后删除旧目录原文件。所选文件夹中使用 RelayBackups 子目录。")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+            }
             if backupEntries.isEmpty {
                 Text("尚无可用备份").font(.system(size: 11)).foregroundStyle(.secondary)
             }
@@ -220,10 +231,47 @@ struct DataTransferPanel: View {
         } catch { report(error) }
     }
 
+    private func chooseBackupDirectory() {
+        let panel = NSOpenPanel()
+        panel.title = "选择 Relay 备份文件夹"
+        panel.message = "Relay 将在此文件夹中建立 RelayBackups 子目录。现有备份将搬移到新目录，校验成功后清理原文件。"
+        panel.prompt = "选择"
+        panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let parent = panel.url else { return }
+        isBusy = true
+        Task {
+            do {
+                let warning = try await backups.selectDirectory(parent)
+                backupPreview = nil; expectedBackupData = nil
+                message = warning ?? "备份已搬移，目录已切换。"; isError = warning != nil
+                await loadBackups()
+            } catch { report(error) }
+            isBusy = false
+        }
+    }
+
+    private func resetBackupDirectory() {
+        isBusy = true
+        Task {
+            do {
+                let warning = try await backups.resetDirectory()
+                backupPreview = nil; expectedBackupData = nil
+                message = warning ?? "备份已搬移到默认目录。"; isError = warning != nil
+                await loadBackups()
+            } catch { report(error) }
+            isBusy = false
+        }
+    }
+
     private func reloadBackups() { Task { await loadBackups() } }
     private func loadBackups() async {
-        do { backupEntries = try await backups.list() }
-        catch { report(error) }
+        do {
+            backupDirectoryPath = try await backups.currentDirectoryURL().path
+            backupEntries = try await backups.list()
+        } catch {
+            backupEntries = []; backupDirectoryPath = nil
+            report(error)
+        }
     }
     private func refreshAccounts() {
         do { configurations = try actions.snapshot().accounts }

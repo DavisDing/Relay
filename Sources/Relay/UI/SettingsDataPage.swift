@@ -43,16 +43,23 @@ struct SettingsDataPage: View {
                     Text("永久").tag(HistoryRetention.forever)
                 }
                 .pickerStyle(.segmented)
-                Toggle("月预算达到 80% / 100% 时通知", isOn: $budgetNotificationsEnabled)
-                    .toggleStyle(.checkbox)
-                Text("预算按账户原币计算；未知、币种不同或过期的月消费不会触发通知。")
-                    .font(.system(size: 10))
-                    .foregroundColor(.secondary)
                 Text("仅保存每日聚合数据，不长期保存原始请求日志。")
                     .font(.system(size: 10))
                     .foregroundColor(.secondary)
             }
 
+            Divider().opacity(0.4)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("月预算通知")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.secondary)
+                Toggle("月预算达到 80% / 100% 时通知", isOn: $budgetNotificationsEnabled)
+                    .toggleStyle(.checkbox)
+                Text("预算按账户原币计算；未知、币种不同或过期的月消费不会触发通知。")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+            }
         }
     }
 

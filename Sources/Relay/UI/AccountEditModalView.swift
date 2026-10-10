@@ -5,8 +5,13 @@ import SwiftUI
 public struct AccountEditModalView: View {
     public let account: AccountModel
     public var onDismiss: () -> Void
-    public var onSave: (String, Decimal?, ProviderCredential?, ManualExchangeRateUpdate, String?, OptionalStringUpdate) async throws -> Void
+    public var onSave: (String, Decimal?, ProviderCredential?, ManualExchangeRateUpdate, String?, OptionalStringUpdate, AccountPreferencesUpdate) async throws -> Void
 
+    private let hasPreferencesConfiguration: Bool
+    @State private var monthlyBudget: String
+    @State private var budgetCurrency: Currency
+    @State private var groupName: String
+    @State private var isPinned: Bool
     @State private var displayName: String
     @State private var threshold: String
     @State private var manualRate: String
@@ -20,16 +25,35 @@ public struct AccountEditModalView: View {
 
     public init(
         account: AccountModel,
+        accountConfiguration: AccountConfiguration? = nil,
         onDismiss: @escaping () -> Void = {},
-        onSave: @escaping (String, Decimal?, ProviderCredential?, ManualExchangeRateUpdate, String?, OptionalStringUpdate) async throws -> Void = { _, _, _, _, _, _ in }
+        onSave: @escaping (String, Decimal?, ProviderCredential?, ManualExchangeRateUpdate, String?, OptionalStringUpdate, AccountPreferencesUpdate) async throws -> Void = { _, _, _, _, _, _, _ in }
     ) {
         self.account = account
+        let configuration = accountConfiguration.flatMap { $0.id.uuidString == account.id ? $0 : nil }
+        self.hasPreferencesConfiguration = configuration != nil
+        _monthlyBudget = State(initialValue: configuration?.monthlyBudget.map { NSDecimalNumber(decimal: $0.amount).stringValue } ?? "")
+        _budgetCurrency = State(initialValue: configuration?.monthlyBudget?.currency ?? account.currency)
+        _groupName = State(initialValue: configuration?.groupName ?? "")
+        _isPinned = State(initialValue: configuration?.isPinned ?? false)
         self.onDismiss = onDismiss
         self.onSave = onSave
         _manualRate = State(initialValue: account.manualUSDToCNY.map { NSDecimalNumber(decimal: $0).stringValue } ?? "")
         _displayName = State(initialValue: account.name)
         _gatewayURL = State(initialValue: account.baseURL)
         _threshold = State(initialValue: account.lowBalanceThreshold.map { NSDecimalNumber(decimal: $0).stringValue } ?? "20")
+    }
+
+    /// Existing six-argument callers edit unrelated metadata without clearing preferences.
+    public init(
+        account: AccountModel,
+        onDismiss: @escaping () -> Void = {},
+        onSave: @escaping (String, Decimal?, ProviderCredential?, ManualExchangeRateUpdate, String?, OptionalStringUpdate) async throws -> Void
+    ) {
+        self.init(account: account, accountConfiguration: nil, onDismiss: onDismiss,
+                  onSave: { name, threshold, credential, rate, baseURL, token, _ in
+                      try await onSave(name, threshold, credential, rate, baseURL, token)
+                  })
     }
 
     public var body: some View {
@@ -67,6 +91,12 @@ public struct AccountEditModalView: View {
                     if account.kind != .workbuddy2api && (account.kind == .pipio || account.currency == .usd) {
                         Divider()
                         exchangeRateFields
+                    }
+
+                    if hasPreferencesConfiguration {
+                        Divider()
+                        AccountPreferencesFields(monthlyBudget: $monthlyBudget, budgetCurrency: $budgetCurrency,
+                                                 groupName: $groupName, isPinned: $isPinned, provider: account.kind)
                     }
 
                     Divider()
@@ -160,6 +190,15 @@ public struct AccountEditModalView: View {
             return
         }
 
+        let preferences: AccountPreferencesUpdate
+        do {
+            if hasPreferencesConfiguration {
+                let budget = account.kind == .workbuddy2api ? nil : try BudgetService.parseBudget(monthlyBudget, currency: budgetCurrency)
+                try AccountPreferencesValidation.validate(monthlyBudget: budget, groupName: groupName, provider: account.kind)
+                preferences = .set(monthlyBudget: budget, groupName: AccountOrganizationService.normalizedGroup(groupName), isPinned: isPinned)
+            } else { preferences = .unchanged }
+        } catch { errorMessage = error.localizedDescription; return }
+
         let secret = replacementSecret.trimmingCharacters(in: .whitespacesAndNewlines)
         let userID = replacementUserID.trimmingCharacters(in: .whitespacesAndNewlines)
         let credential: ProviderCredential?
@@ -184,7 +223,7 @@ public struct AccountEditModalView: View {
             do {
                 try await onSave(name, account.kind == .workbuddy2api ? nil : parsedThreshold, credential, rateUpdate,
                     account.kind == .workbuddy2api && gatewayURL != account.baseURL ? gatewayURL : nil,
-                    tokenUpdate)
+                    tokenUpdate, preferences)
                 isSaving = false
                 onDismiss()
             } catch {
