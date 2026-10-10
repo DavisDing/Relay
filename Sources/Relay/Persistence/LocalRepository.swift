@@ -10,16 +10,75 @@ public protocol LocalRepository: AnyObject {
     /// Commit a refreshed snapshot and its history together, or leave both unchanged.
     @MainActor func commitRefresh(_ snapshot: ProviderSnapshot, dailyUsage: DailyUsageRecord?) throws
     @MainActor func dailyUsage(accountID: UUID, limit: Int?) throws -> [DailyUsageRecord]
+    @MainActor func commitDailyUsage(_ records: [DailyUsageRecord]) throws
     @MainActor func upsertDailyUsage(_ record: DailyUsageRecord) throws
     @MainActor func settings() throws -> RelaySettings
     @MainActor func updateSettings(_ settings: RelaySettings) throws
     @MainActor func syncData() throws -> RelaySyncData
     @MainActor func mergeSyncData(_ data: RelaySyncData) throws
+    /// Apply a premerged result only while its source local snapshot is still current.
+    @MainActor func replaceNonsecretData(_ data: RelaySyncData, expected: RelaySyncData) throws -> Bool
+    @MainActor func applyPreparedSyncData(_ data: RelaySyncData, expected: RelaySyncData) throws -> Bool
 }
 
-public enum LocalRepositoryError: Error, Sendable {
+extension LocalRepository {
+    @MainActor public func replaceNonsecretData(_ data: RelaySyncData, expected: RelaySyncData) throws -> Bool {
+        throw LocalRepositoryError.unavailable
+    }
+
+    @MainActor public func commitDailyUsage(_ records: [DailyUsageRecord]) throws {
+        let current = try syncData()
+        let ids = Set(records.map(\.id))
+        let candidate = RelaySyncData(accounts: current.accounts, snapshots: current.snapshots, dailyUsage: current.dailyUsage.filter { !ids.contains($0.id) } + records, settings: current.settings, settingsUpdatedAt: current.settingsUpdatedAt, deletedAccountIDs: current.deletedAccountIDs)
+        guard try applyPreparedSyncData(candidate, expected: current) else { throw LocalRepositoryError.unavailable }
+    }
+
+    @MainActor public func applyPreparedSyncData(_ data: RelaySyncData, expected: RelaySyncData) throws -> Bool {
+        guard try syncData().hasSameContent(as: expected) else { return false }
+        try mergeSyncData(data)
+        return true
+    }
+}
+
+extension RelaySyncData {
+    /// Portable UUID references must never replace a device's saved credential mapping.
+    func preservingLocalCredentialReferences(from local: RelaySyncData) -> RelaySyncData {
+        let existing = Dictionary(local.accounts.map { ($0.id, $0) }, uniquingKeysWith: { left, _ in left })
+        let mapped = accounts.map { incoming -> AccountConfiguration in
+            var account = incoming
+            if let previous = existing[account.id], previous.providerKind == account.providerKind, previous.siteOrigin == account.siteOrigin {
+                account.credentialReference = previous.credentialReference
+            } else {
+                account.credentialReference = UUID().uuidString
+            }
+            return account
+        }
+        return RelaySyncData(schemaVersion: schemaVersion, exportedAt: exportedAt, accounts: mapped,
+            snapshots: snapshots, dailyUsage: dailyUsage, settings: settings,
+            settingsUpdatedAt: settingsUpdatedAt, deletedAccountIDs: deletedAccountIDs)
+    }
+
+    func hasSameContent(as other: RelaySyncData) -> Bool {
+        schemaVersion == other.schemaVersion && accounts == other.accounts && snapshots == other.snapshots &&
+        dailyUsage == other.dailyUsage && settings == other.settings && settingsUpdatedAt == other.settingsUpdatedAt &&
+        deletedAccountIDs == other.deletedAccountIDs
+    }
+}
+
+public enum LocalRepositoryError: LocalizedError, Equatable, Sendable {
     case unavailable
+    case unreadable
     case corruptData
+    case unsupportedVersion
+
+    public var errorDescription: String? {
+        switch self {
+        case .unavailable: return "本地存储暂时不可用，未保存更改。"
+        case .unreadable: return "本地数据未能载入，请检查文件权限或是否可读取。"
+        case .corruptData: return "本地数据未能载入，文件内容无法解析。原文件已保留。"
+        case .unsupportedVersion: return "本地数据版本不受支持，请使用兼容的 Relay 版本。原文件已保留。"
+        }
+    }
 }
 
 /// Versioned local store for non-secret business data. Credentials are never
@@ -58,13 +117,14 @@ public final class FileLocalRepository: LocalRepository {
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             schemaVersion = try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
+            guard schemaVersion <= 2 else { throw LocalRepositoryError.unsupportedVersion }
             accounts = try c.decodeIfPresent([AccountConfiguration].self, forKey: .accounts) ?? []
             snapshots = try c.decodeIfPresent([ProviderSnapshot].self, forKey: .snapshots) ?? []
             dailyUsage = try c.decodeIfPresent([DailyUsageRecord].self, forKey: .dailyUsage) ?? []
             settingsUpdatedAt = try c.decodeIfPresent(Date.self, forKey: .settingsUpdatedAt)
             settings = try c.decodeIfPresent(RelaySettings.self, forKey: .settings) ?? RelaySettings()
             deletedAccountIDs = try c.decodeIfPresent([UUID: Date].self, forKey: .deletedAccountIDs) ?? [:]
-            guard schemaVersion <= 2 else { throw LocalRepositoryError.corruptData }
+            guard settings.schemaVersion <= RelaySettings.currentSchemaVersion else { throw LocalRepositoryError.unsupportedVersion }
         }
     }
 
@@ -97,17 +157,19 @@ public final class FileLocalRepository: LocalRepository {
         decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
 
-        if FileManager.default.fileExists(atPath: resolvedURL.path) {
+        let data: Data?
+        do { data = try Data(contentsOf: resolvedURL) }
+        catch let error as CocoaError where error.code == .fileReadNoSuchFile { data = nil }
+        catch { throw LocalRepositoryError.unreadable }
+        if let data {
+            do { try Self.applyOwnerOnlyPermissions(to: resolvedURL) }
+            catch { throw LocalRepositoryError.unreadable }
             do {
-                try Self.applyOwnerOnlyPermissions(to: resolvedURL)
-                let data = try Data(contentsOf: resolvedURL)
                 state = try decoder.decode(State.self, from: data)
                 loadedBytes = data.count
             } catch let error as LocalRepositoryError {
                 throw error
-            } catch {
-                throw LocalRepositoryError.corruptData
-            }
+            } catch { throw LocalRepositoryError.corruptData }
         } else {
             state = State()
         }
@@ -182,6 +244,15 @@ public final class FileLocalRepository: LocalRepository {
         return Array(records.suffix(limit))
     }
 
+    public func commitDailyUsage(_ records: [DailyUsageRecord]) throws {
+        var candidate = state
+        let ids = Set(records.map(\.id))
+        candidate.dailyUsage.removeAll { ids.contains($0.id) }
+        candidate.dailyUsage.append(contentsOf: records)
+        pruneHistoryIfNeeded(&candidate)
+        try commit(candidate)
+    }
+
     public func upsertDailyUsage(_ record: DailyUsageRecord) throws {
         var candidate = state
         if let index = candidate.dailyUsage.firstIndex(where: { $0.id == record.id }) {
@@ -223,6 +294,25 @@ public final class FileLocalRepository: LocalRepository {
 
     public func mergeSyncData(_ data: RelaySyncData) throws {
         let merged = try SyncMerge.merge(syncData(), data)
+        try commitSyncedData(merged)
+    }
+
+    public func replaceNonsecretData(_ data: RelaySyncData, expected: RelaySyncData) throws -> Bool {
+        guard try syncData().hasSameContent(as: expected) else { return false }
+        try commitSyncedData(data, preserveCredentials: false)
+        return true
+    }
+
+    public func applyPreparedSyncData(_ data: RelaySyncData, expected: RelaySyncData) throws -> Bool {
+        guard try syncData().hasSameContent(as: expected) else { return false }
+        try commitSyncedData(data)
+        return true
+    }
+
+    private func commitSyncedData(_ incoming: RelaySyncData, preserveCredentials: Bool = true) throws {
+        let merged = preserveCredentials ? incoming.preservingLocalCredentialReferences(from: try syncData()) : incoming
+        guard merged.schemaVersion == RelaySyncData.currentSchemaVersion,
+              merged.settings.schemaVersion == RelaySettings.currentSchemaVersion else { throw LocalRepositoryError.unsupportedVersion }
         var candidate = state
         candidate.accounts = merged.accounts
         candidate.snapshots = merged.snapshots
@@ -326,6 +416,10 @@ public final class InMemoryLocalRepository: LocalRepository {
         guard let limit, limit > 0 else { return all }
         return Array(all.suffix(limit))
     }
+    public func commitDailyUsage(_ records: [DailyUsageRecord]) throws {
+        for record in records { usage[record.id] = record }
+        pruneHistoryIfNeeded()
+    }
     public func upsertDailyUsage(_ record: DailyUsageRecord) throws {
         usage[record.id] = record
         pruneHistoryIfNeeded()
@@ -347,7 +441,8 @@ public final class InMemoryLocalRepository: LocalRepository {
         RelaySyncData(accounts: Array(accounts.values), snapshots: Array(snapshots.values), dailyUsage: Array(usage.values), settings: storedSettings, settingsUpdatedAt: settingsUpdatedAt, deletedAccountIDs: deletedAccountIDs)
     }
     public func mergeSyncData(_ data: RelaySyncData) throws {
-        let merged = try SyncMerge.merge(syncData(), data)
+        let local = try syncData()
+        let merged = try SyncMerge.merge(local, data).preservingLocalCredentialReferences(from: local)
         accounts = Dictionary(uniqueKeysWithValues: merged.accounts.map { ($0.id, $0) })
         snapshots = Dictionary(uniqueKeysWithValues: merged.snapshots.map { ($0.accountID, $0) })
         usage = Dictionary(uniqueKeysWithValues: merged.dailyUsage.map { ($0.id, $0) })
@@ -355,6 +450,20 @@ public final class InMemoryLocalRepository: LocalRepository {
         settingsUpdatedAt = merged.settingsUpdatedAt
         deletedAccountIDs = merged.deletedAccountIDs
         pruneHistoryIfNeeded()
+    }
+
+    public func replaceNonsecretData(_ data: RelaySyncData, expected: RelaySyncData) throws -> Bool {
+        guard try syncData().hasSameContent(as: expected) else { return false }
+        guard data.schemaVersion == RelaySyncData.currentSchemaVersion,
+              data.settings.schemaVersion == RelaySettings.currentSchemaVersion else { throw LocalRepositoryError.unsupportedVersion }
+        accounts = Dictionary(uniqueKeysWithValues: data.accounts.map { ($0.id, $0) })
+        snapshots = Dictionary(uniqueKeysWithValues: data.snapshots.map { ($0.accountID, $0) })
+        usage = Dictionary(uniqueKeysWithValues: data.dailyUsage.map { ($0.id, $0) })
+        storedSettings = data.settings
+        settingsUpdatedAt = data.settingsUpdatedAt
+        deletedAccountIDs = data.deletedAccountIDs
+        pruneHistoryIfNeeded()
+        return true
     }
 
     private func pruneHistoryIfNeeded() {

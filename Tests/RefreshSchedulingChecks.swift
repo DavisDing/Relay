@@ -53,6 +53,7 @@ private final class ManualRefreshTime {
     var clock: RefreshClock {
         RefreshClock(now: { self.now }, sleep: { duration in
             try Task.checkCancellation()
+            if duration <= 0 { return }
             try await withCheckedThrowingContinuation { self.sleepers.append((self.now.addingTimeInterval(duration), $0)) }
             try Task.checkCancellation()
         })
@@ -70,6 +71,8 @@ private final class ControlledSchedulingAdapter: ProviderAdapter {
     nonisolated let kind: ProviderKind = .pipio
     var starts = 0
     var failWith: ProviderError?
+    var errorsByID: [UUID: ProviderError] = [:]
+    var startsByID: [UUID: Int] = [:]
     var blocked = false
     var beforeReturn: (() -> Void)?
     var continuation: CheckedContinuation<Void, Never>?
@@ -79,6 +82,8 @@ private final class ControlledSchedulingAdapter: ProviderAdapter {
     func validateAccount(_ account: AccountConfiguration, credential: ProviderCredential) async throws {}
     func fetchSnapshot(for account: AccountConfiguration, credential: ProviderCredential, rate: AccountRate, now: Date, calendar: Calendar) async throws -> ProviderSnapshot {
         starts += 1
+        startsByID[account.id, default: 0] += 1
+        if let error = errorsByID[account.id] { throw error }
         if let failWith { throw failWith }
         if blocked { await withCheckedContinuation { continuation = $0 } }
         beforeReturn?()
@@ -104,6 +109,8 @@ public enum RefreshSchedulingChecks {
         try await normalizedHTTPOrigin()
         try await sharedCooldown()
         try await credentialStorageClassification()
+        try await longBackoffIsolationAndScheduledProgress()
+        try await retryFailureAndCancellation()
         try healthAndHeaders()
         print("PASSED: bounded origin concurrency, request coalescing, subscriber cancellation, deleted/edited-account guards, cooldown and health categories")
     }
@@ -245,6 +252,76 @@ public enum RefreshSchedulingChecks {
         time.advance(1)
         let recovered = await queued.value
         try schedulingCheck(recovered.isSuccess && adapter.starts == 2, "Cooldown expiry resumes queue")
+    }
+
+    private static func longBackoffIsolationAndScheduledProgress() async throws {
+        let repo = InMemoryLocalRepository(), credentials = InMemoryCredentialStore()
+        let adapter = ControlledSchedulingAdapter(), time = ManualRefreshTime()
+        let limited = (0..<3).map { schedulingAccount("limited-\($0)") }
+        let healthy = schedulingAccount("healthy")
+        for account in limited + [healthy] {
+            try repo.upsertAccount(account)
+            try await credentials.save(ProviderCredential(secret: "fixture-only"), reference: account.credentialReference)
+        }
+        for account in limited { adapter.errorsByID[account.id] = .rateLimited(retryAfter: 3_600) }
+        let coordinator = RefreshCoordinator(repository: repo, credentialStore: credentials,
+            adapters: ProviderAdapterRegistry(adapters: [adapter]), clock: time.clock)
+        var results: [UUID: Int] = [:]
+        coordinator.onResult = { result in results[result.accountID, default: 0] += 1 }
+        // Fill all three execution slots before introducing the healthy origin.
+        let tasks = limited.map { account in Task { await coordinator.refresh(accountID: account.id) } }
+        try await eventually("three retries queued") {
+            limited.allSatisfy { coordinator.health[$0.id]?.retryAt == time.now.addingTimeInterval(3_600) }
+        }
+        coordinator.enqueueScheduledRefreshes(interval: 60)
+        try await eventually("fourth origin completes while all others cool down") { results[healthy.id] == 1 }
+        for _ in 0..<30 { coordinator.enqueueScheduledRefreshes(interval: 60); await Task.yield() }
+        try schedulingCheck(adapter.startsByID[healthy.id] == 1, "Repeated triggers must not duplicate an account within its period")
+        for cycle in 2...3 {
+            time.advance(60)
+            coordinator.enqueueScheduledRefreshes(interval: 60)
+            try await eventually("healthy account completes next scheduled period") {
+                coordinator.enqueueScheduledRefreshes(interval: 60)
+                return results[healthy.id] == cycle
+            }
+        }
+        try schedulingCheck(limited.allSatisfy { adapter.startsByID[$0.id] == 1 }, "Scheduled and manual subscribers cannot bypass origin cooldown")
+        for account in limited { adapter.errorsByID.removeValue(forKey: account.id) }
+        time.advance(3_480)
+        for task in tasks {
+            let result = await task.value
+            try schedulingCheck(result.isSuccess, "Limited account resumes after its full hour")
+        }
+        try schedulingCheck(limited.allSatisfy { adapter.startsByID[$0.id] == 2 }, "Coalesced waiters perform exactly one retry per account")
+        coordinator.cancelAll()
+        time.advance(86_400)
+    }
+
+    private static func retryFailureAndCancellation() async throws {
+        let repo = InMemoryLocalRepository(), credentials = InMemoryCredentialStore()
+        let adapter = ControlledSchedulingAdapter(), time = ManualRefreshTime()
+        let account = schedulingAccount("retry")
+        try repo.upsertAccount(account)
+        try await credentials.save(ProviderCredential(secret: "fixture-only"), reference: account.credentialReference)
+        adapter.failWith = .transport
+        let coordinator = RefreshCoordinator(repository: repo, credentialStore: credentials,
+            adapters: ProviderAdapterRegistry(adapters: [adapter]), maxRetryCount: 1, clock: time.clock)
+        let task = Task { await coordinator.refresh(accountID: account.id) }
+        try await eventually("network backoff") { coordinator.health[account.id]?.retryAt != nil && !time.sleepers.isEmpty }
+        try schedulingCheck(coordinator.health[account.id]?.issue == .network, "Network backoff must not be mislabeled as rate limit")
+        time.advance(2)
+        let result = await task.value
+        try schedulingCheck(result.error == .transport && adapter.starts == 2, "Retry budget is retained across queued attempts")
+        try schedulingCheck(coordinator.health[account.id]?.consecutiveFailures == 1, "One refresh failure is counted once across attempts")
+        let cancelled = Task { await coordinator.refresh(accountID: account.id) }
+        try await eventually("second network backoff") { adapter.starts == 3 && coordinator.health[account.id]?.retryAt != nil }
+        coordinator.cancel(accountID: account.id)
+        let cancelledResult = await cancelled.value
+        try schedulingCheck(cancelledResult.isCancelled && coordinator.health[account.id]?.consecutiveFailures == 1,
+                            "Cancelling delayed work preserves previous failure count")
+        time.advance(3_600)
+        for _ in 0..<30 { await Task.yield() }
+        try schedulingCheck(adapter.starts == 3, "Cancelled delayed work cannot resume")
     }
 
     private static func credentialStorageClassification() async throws {

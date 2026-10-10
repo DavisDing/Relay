@@ -24,7 +24,7 @@ COMPILE=(-swift-version 5 -D DEBUG -parse-as-library -sdk "$SDK"
 # Explicit production dependencies: do not link the application/store, UI, update
 # client, production provider registry or refresh scheduler into offline contracts.
 COMMON_SOURCES=("$ROOT"/Sources/Relay/Models/*.swift "$ROOT"/Sources/Relay/Persistence/*.swift)
-for source in AccountService CredentialStore ProviderAdapter ProviderError RateService SyncMerge SyncConflictService FileSyncService HTTPClient DeepSeekUsageService; do
+for source in AccountService CredentialStore ProviderAdapter ProviderError RateService SyncMerge SyncConflictService FileSyncService SyncFileWorker HTTPClient DeepSeekUsageService; do
   COMMON_SOURCES+=("$ROOT/Sources/Relay/Services/$source.swift")
 done
 SUITES=(DeepSeekUsageContractTests GlobalShortcutContractTests SyncConflictContractTests)

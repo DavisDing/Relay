@@ -25,13 +25,14 @@ public struct SettingsWindowView: View {
     @State private var showDownloadCompleteAlert = false
     @State private var selectedTab: SettingsTab = .general
     @ObservedObject private var store: RelayStore
+    private let storageWasAvailableOnOpen: Bool
     @ObservedObject private var updateState: RelayUpdateState
     @State private var accountPendingDeletion: AccountModel?
 
     private let schemaVersion: Int
     private let syncStatus: SyncStatus
     private let syncConflictReport: SyncConflictReport?
-    private let onResolveSyncConflict: ((SyncConflictDecision) -> String?)?
+    private let onResolveSyncConflict: ((SyncConflictDecision) async -> String?)?
     private let initialGlobalShortcutConfiguration: GlobalShortcutConfiguration
     private let onApplyGlobalShortcut: ((GlobalShortcutConfiguration) -> GlobalShortcutRegistrationOutcome)?
     private let onEditAccount: ((AccountModel) -> Void)?
@@ -46,7 +47,7 @@ public struct SettingsWindowView: View {
         onApplyGlobalShortcut: ((GlobalShortcutConfiguration) -> GlobalShortcutRegistrationOutcome)? = nil,
         syncStatus: SyncStatus = .idle,
         syncConflictReport: SyncConflictReport? = nil,
-        onResolveSyncConflict: ((SyncConflictDecision) -> String?)? = nil,
+        onResolveSyncConflict: ((SyncConflictDecision) async -> String?)? = nil,
         onEditAccount: ((AccountModel) -> Void)? = nil,
         updateState: RelayUpdateState = RelayUpdateState(),
         store: RelayStore,
@@ -61,6 +62,7 @@ public struct SettingsWindowView: View {
         self.onResolveSyncConflict = onResolveSyncConflict
         self.onEditAccount = onEditAccount
         self.store = store
+        self.storageWasAvailableOnOpen = store.storageAvailability.isAvailable
         self._updateState = ObservedObject(wrappedValue: updateState)
         self.onClose = onClose
         self.onSave = onSave
@@ -109,6 +111,7 @@ public struct SettingsWindowView: View {
             Divider().opacity(0.3)
 
             selectedSettingsPage
+                .disabled(!store.storageAvailability.isAvailable)
                 .frame(maxHeight: .infinity)
                 .relayGlassTile(cornerRadius: 14)
                 .padding(.horizontal, 16)
@@ -116,7 +119,7 @@ public struct SettingsWindowView: View {
             Divider().opacity(0.3)
 
             HStack {
-                Text("设置会在关闭窗口时自动保存")
+                Text(store.storageAvailability.isAvailable && storageWasAvailableOnOpen ? "设置会在关闭窗口时自动保存" : "本地数据未载入，本窗口不保存设置")
                     .font(.system(size: 10))
                     .foregroundStyle(.tertiary)
                 Spacer()
@@ -144,7 +147,17 @@ public struct SettingsWindowView: View {
         } message: {
             Text("将删除本机账户数据和凭据。已启用同步时，删除标记也会同步到其他设备；WordBuddy2Api 网关及其内部账号会一并从本机移除。")
         }
+        .onChange(of: store.transferRevision) { _, _ in
+            let settings = store.settings
+            showTodayInMenuBar = settings.showTodayInMenuBar
+            baseCurrency = settings.baseCurrency
+            lowBalanceThreshold = NSDecimalNumber(decimal: settings.defaultLowBalanceThreshold).stringValue
+            refreshIntervalMinutes = String(max(1, settings.refreshIntervalSeconds / 60))
+            historyRetention = settings.historyRetention
+            enableICloudFileSync = settings.iCloudFileSyncEnabled
+        }
         .onDisappear {
+            guard store.storageAvailability.isAvailable && storageWasAvailableOnOpen else { return }
             let parsedThreshold = Decimal(string: lowBalanceThreshold, locale: Locale(identifier: "en_US_POSIX")) ?? 20
             onSave(RelaySettings(
                 schemaVersion: schemaVersion,
@@ -192,9 +205,15 @@ public struct SettingsWindowView: View {
                 iCloudDirectoryError: $iCloudDirectoryError,
                 showSyncConflict: $showSyncConflict,
                 syncConflictActionError: $syncConflictActionError,
-                syncStatus: syncStatus,
-                syncConflictReport: syncConflictReport,
-                onResolveSyncConflict: onResolveSyncConflict
+                syncStatus: store.syncStatus,
+                syncConflictReport: store.syncConflictReport,
+                onResolveSyncConflict: onResolveSyncConflict,
+                transferActions: DataTransferActions(
+                    snapshot: { try store.transferSnapshot() },
+                    importConfiguration: { preview, expected in try await store.importConfiguration(preview, expectedLocal: expected) },
+                    restoreBackup: { preview, expected in try await store.restoreBackup(preview, expectedLocal: expected) }
+                ),
+                backupErrorMessage: store.backupErrorMessage
             )
         case .accountManagement:
             SettingsAccountsPage(

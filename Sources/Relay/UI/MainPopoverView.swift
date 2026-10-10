@@ -8,6 +8,9 @@ public struct MainPopoverView: View {
     @AppStorage("homeAmountsHidden") private var homeAmountsHidden = false
     @State private var accountPendingDeletion: AccountModel?
     @State private var expandedProviders = Set<ProviderKind>()
+    @State private var accountSearch = ""
+    @State private var accountGroup: String?
+
     private let initialGlobalShortcutConfiguration: GlobalShortcutConfiguration
     private let onApplyGlobalShortcut: ((GlobalShortcutConfiguration) -> GlobalShortcutRegistrationOutcome)?
     private let onPresentAddAccount: () -> Void
@@ -38,7 +41,22 @@ public struct MainPopoverView: View {
     }
 
     private var visibleDashboardAccounts: [AccountModel] {
-        store.dashboardAccounts
+        AccountOrganizationService.filtered(store.dashboardAccounts,
+                                            configurations: store.accountConfigurations,
+                                            query: accountSearch,
+                                            group: accountGroup)
+    }
+
+    private var organizationGroups: [String] {
+        AccountOrganizationService.groups(in: store.accountConfigurations)
+    }
+
+    private var organizationProviderOrder: [ProviderKind] {
+        ProviderKind.supportedCases.enumerated().sorted { lhs, rhs in
+            let left = store.accountConfigurations.contains { $0.providerKind == lhs.element && $0.isPinned && !$0.isHidden }
+            let right = store.accountConfigurations.contains { $0.providerKind == rhs.element && $0.isPinned && !$0.isHidden }
+            return left == right ? lhs.offset < rhs.offset : left
+        }.map(\.element)
     }
 
     private var totalBalance: Decimal? { store.balanceTotalCNY.value?.amount }
@@ -70,7 +88,9 @@ public struct MainPopoverView: View {
         VStack(spacing: 0) {
             header
 
-            if store.accounts.isEmpty {
+            if !store.storageAvailability.isAvailable {
+                storageUnavailableView
+            } else if store.accounts.isEmpty {
                 emptyStateView
             } else if visibleTopLevelAccounts.isEmpty {
                 hiddenAccountsStateView
@@ -148,11 +168,27 @@ public struct MainPopoverView: View {
                 .frame(width: 18, height: 18)
             }
             .buttonStyle(.plain)
+            .disabled(!store.storageAvailability.isAvailable)
             .help("立即同步并刷新账户级汇率")
         }
         .padding(.horizontal, 20)
         .padding(.top, 17)
         .padding(.bottom, 12)
+    }
+
+    private var storageUnavailableView: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 28))
+                .foregroundStyle(.orange)
+            Text("本地数据未能载入").font(.headline)
+            Text(store.storageAvailability.message ?? "请稍后重新读取。")
+                .font(.caption).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Button("重新读取") { store.retryOpeningStorage() }
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var dashboard: some View {
@@ -200,14 +236,45 @@ public struct MainPopoverView: View {
                     Label(notice, systemImage: "info.circle")
                         .font(.system(size: 10)).foregroundStyle(.secondary)
                 }
-                HStack {
+                HStack(spacing: 8) {
                     Text("已连接账号 (\(visibleDashboardAccounts.count))")
                         .font(.system(size: 13, weight: .semibold))
                     Spacer()
+                    if !organizationGroups.isEmpty {
+                        Menu {
+                            Button("全部分组") { accountGroup = nil }
+                            ForEach(organizationGroups, id: \.self) { group in
+                                Button { accountGroup = group } label: {
+                                    if accountGroup == group { Label(group, systemImage: "checkmark") } else { Text(group) }
+                                }
+                            }
+                        } label: { Label(accountGroup ?? "分组", systemImage: "line.3.horizontal.decrease.circle") }
+                        .menuStyle(.borderlessButton)
+                        .font(.system(size: 10))
+                    }
                 }.padding(.top, 4)
+                HStack(spacing: 7) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    TextField("搜索账号、服务商或分组", text: $accountSearch)
+                        .textFieldStyle(.plain)
+                    if !accountSearch.isEmpty {
+                        Button { accountSearch = "" } label: { Image(systemName: "xmark.circle.fill") }
+                            .buttonStyle(.plain).foregroundStyle(.secondary)
+                    }
+                }
+                .font(.system(size: 11))
+                .padding(.horizontal, 9).padding(.vertical, 7)
+                .relayGlassTile(cornerRadius: 9)
 
+                if visibleDashboardAccounts.isEmpty && (!accountSearch.isEmpty || accountGroup != nil) {
+                    VStack(spacing: 6) {
+                        Text("没有匹配的账号").font(.caption).foregroundStyle(.secondary)
+                        Button("清除筛选") { accountSearch = ""; accountGroup = nil }
+                            .buttonStyle(.plain).font(.caption)
+                    }.frame(maxWidth: .infinity).padding(12)
+                }
                 LazyVStack(spacing: 7) {
-                    ForEach(ProviderKind.supportedCases, id: \.self) { kind in
+                    ForEach(organizationProviderOrder, id: \.self) { kind in
                         let grouped = visibleDashboardAccounts.filter { $0.kind == kind }
                         if !grouped.isEmpty {
                             providerGroup(kind, accounts: grouped)
@@ -229,6 +296,7 @@ public struct MainPopoverView: View {
             Button(action: onPresentAddAccount) {
                 Label("添加", systemImage: "plus")
             }
+            .disabled(!store.storageAvailability.isAvailable)
             .buttonStyle(.bordered)
             .controlSize(.small)
             Button(action: onPresentSettings) {
@@ -308,7 +376,7 @@ public struct MainPopoverView: View {
             }.buttonStyle(.plain)
                 .padding(11).relayGlassTile(cornerRadius: 11)
                 .accessibilityLabel("\(kind.displayName) 分组，\(accounts.count) 个账号")
-            if expandedProviders.contains(kind) {
+            if expandedProviders.contains(kind) || !accountSearch.isEmpty || accountGroup != nil {
                 ForEach(accounts) { account in accountRow(account).padding(.leading, 12) }
             }
         }
@@ -325,10 +393,15 @@ public struct MainPopoverView: View {
                         .frame(width: 8, height: 8)
 
                     VStack(alignment: .leading, spacing: 5) {
-                        Text(account.name)
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
+                        HStack(spacing: 4) {
+                            Text(account.name)
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                            if AccountOrganizationService.configuration(for: account, in: store.accountConfigurations)?.isPinned == true {
+                                Image(systemName: "pin.fill").font(.system(size: 9)).foregroundStyle(.secondary)
+                            }
+                        }
                         HStack(spacing: 5) {
                             Text(account.kind.displayName)
                                 .font(.system(size: 9))
@@ -371,6 +444,12 @@ public struct MainPopoverView: View {
             Menu {
                 Button("查看详情与走势折线图") { onPresentDetail(account) }
                 if account.parentAccountID == nil { Button("编辑账号") { onPresentEdit(account) } }
+                if let configuration = AccountOrganizationService.configuration(for: account, in: store.accountConfigurations) {
+                    Button(configuration.isPinned ? "取消置顶" : "置顶账号") {
+                        store.updateAccountPreferences(id: configuration.id, monthlyBudget: configuration.monthlyBudget,
+                                                       groupName: configuration.groupName, isPinned: !configuration.isPinned)
+                    }
+                }
                 Button("立即手动同步") {
                     guard let id = account.parentAccountID ?? UUID(uuidString: account.id) else { return }
                     Task { await store.refresh(accountID: id, forceRateRefresh: true) }

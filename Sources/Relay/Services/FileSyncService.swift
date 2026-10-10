@@ -8,6 +8,140 @@ public enum FileSyncService {
     public static let fileName = "relay-sync-v1.json"
     @MainActor public private(set) static var lastSyncStatus: SyncStatus = .idle
     @MainActor public private(set) static var lastConflictReport: SyncConflictReport?
+    /// Injection is internal and explicit; production always uses NSFileCoordinator.
+    typealias Coordination = (URL, Bool, (URL) -> Void) throws -> Void
+    static let uncoordinatedFixture: Coordination = { url, _, accessor in accessor(url) }
+    @MainActor public private(set) static var performanceDiagnostics = SyncPerformanceDiagnostics()
+
+    @MainActor private static func coordinate(_ url: URL, writing: Bool, using fixture: Coordination?, accessor: @escaping (URL) -> Void) throws {
+        let start = RepositoryPerformanceClock.now()
+        var accessorStart: UInt64?
+        var accessorEnd: UInt64?
+        defer {
+            let total = RepositoryPerformanceClock.elapsedMilliseconds(since: start)
+            let work = accessorStart.flatMap { beginning in accessorEnd.map { Double($0 - beginning) / 1_000_000 } } ?? 0
+            performanceDiagnostics.coordinationMilliseconds += max(0, total - work)
+        }
+        var didRun = false
+        let measured: (URL) -> Void = { coordinatedURL in
+            didRun = true
+            accessorStart = RepositoryPerformanceClock.now()
+            accessor(coordinatedURL)
+            accessorEnd = RepositoryPerformanceClock.now()
+        }
+        if let fixture { try fixture(url, writing, measured) }
+        else {
+            var error: NSError?
+            let coordinator = NSFileCoordinator(filePresenter: nil)
+            if writing {
+                if FileManager.default.fileExists(atPath: url.path) {
+                    coordinator.coordinate(writingItemAt: url, options: [], error: &error, byAccessor: measured)
+                } else {
+                    coordinator.coordinate(writingItemAt: url.deletingLastPathComponent(), options: [], error: &error) { directory in
+                        measured(directory.appendingPathComponent(url.lastPathComponent))
+                    }
+                }
+            }
+            else { coordinator.coordinate(readingItemAt: url, options: [], error: &error, byAccessor: measured) }
+            if error != nil { throw FileSyncError.coordinationFailed }
+        }
+        guard didRun else { throw FileSyncError.coordinationFailed }
+    }
+
+    private static let worker = SyncFileWorker()
+
+    /// UI synchronization awaits serial file work. Before committing its result,
+    /// compare the full non-secret source snapshot with current local content.
+    @MainActor
+    static func exchangeAsync(repository: any LocalRepository, directory: URL,
+                              isEnabled: () -> Bool = { true },
+                              coordination: Coordination? = nil,
+                              write: ((Data, URL) throws -> Void)? = nil,
+                              beforeCommit: (() -> Void)? = nil,
+                              beforeWrite: (() -> Void)? = nil) async throws -> SyncStatus {
+        let start = RepositoryPerformanceClock.now()
+        performanceDiagnostics = SyncPerformanceDiagnostics()
+        lastSyncStatus = .uploading
+        defer { performanceDiagnostics.totalMilliseconds = RepositoryPerformanceClock.elapsedMilliseconds(since: start) }
+        do {
+            // Bound churn retries so sustained edits cannot spin forever.
+            for _ in 0..<3 {
+                try Task.checkCancellation()
+                guard isEnabled() else { lastSyncStatus = .idle; return .idle }
+                let local = try repository.syncData()
+                var prepared = try await worker.prepare(local: local, directory: directory, coordination: coordination)
+                try Task.checkCancellation()
+                guard isEnabled() else { lastSyncStatus = .idle; return .idle }
+                beforeCommit?()
+                guard try repository.syncData().hasSameContent(as: local) else { continue }
+                if let conflict = prepared.conflict {
+                    lastConflictReport = conflict
+                    lastSyncStatus = .conflicted
+                    performanceDiagnostics = prepared.diagnostics
+                    return .conflicted
+                }
+                let commitStarted = RepositoryPerformanceClock.now()
+                guard try repository.applyPreparedSyncData(prepared.data, expected: local) else { continue }
+                prepared.diagnostics.localCommitMilliseconds = RepositoryPerformanceClock.elapsedMilliseconds(since: commitStarted)
+                performanceDiagnostics = prepared.diagnostics
+                let committed = try repository.syncData()
+                beforeWrite?()
+                guard isEnabled() else { lastSyncStatus = .idle; return .idle }
+                let written = try await worker.write(local: committed, prepared: prepared, directory: directory,
+                                                     coordination: coordination, write: write)
+                performanceDiagnostics = written.diagnostics
+                try Task.checkCancellation()
+                if written.remoteChanged { continue }
+                guard try repository.syncData().hasSameContent(as: committed) else { continue }
+                lastConflictReport = nil
+                lastSyncStatus = .merged
+                performanceDiagnostics.succeeded = true
+                return .merged
+            }
+            throw FileSyncError.dataChanged
+        } catch {
+            lastSyncStatus = .failed
+            performanceDiagnostics.succeeded = false
+            throw error
+        }
+    }
+
+    @MainActor
+    static func resolveAsync(repository: any LocalRepository, report: SyncConflictReport,
+                             decision: SyncConflictDecision, isEnabled: () -> Bool = { true },
+                             coordination: Coordination? = nil,
+                             write: ((Data, URL) throws -> Void)? = nil) async throws {
+        guard let directory = report.remoteCandidates.first(where: { $0.source == .remote })?.fileURL.deletingLastPathComponent()
+        else { throw SyncConflictError.remoteCandidateUnavailable }
+        let start = RepositoryPerformanceClock.now()
+        lastConflictReport = report
+        lastSyncStatus = .uploading
+        performanceDiagnostics = SyncPerformanceDiagnostics()
+        defer { performanceDiagnostics.totalMilliseconds = RepositoryPerformanceClock.elapsedMilliseconds(since: start) }
+        do {
+            let local = try repository.syncData()
+            var prepared = try await worker.prepare(local: local, directory: directory, coordination: coordination)
+            let resolved = try await worker.resolve(report: report, decision: decision, current: local, prepared: prepared)
+            try Task.checkCancellation()
+            guard isEnabled() else { throw CancellationError() }
+            let commitStart = RepositoryPerformanceClock.now()
+            guard try repository.applyPreparedSyncData(resolved, expected: local) else { throw FileSyncError.dataChanged }
+            prepared.diagnostics.localCommitMilliseconds = RepositoryPerformanceClock.elapsedMilliseconds(since: commitStart)
+            performanceDiagnostics = prepared.diagnostics
+            let written = try await worker.write(local: repository.syncData(), prepared: prepared, directory: directory,
+                                                 coordination: coordination, write: write)
+            performanceDiagnostics = written.diagnostics
+            guard !written.remoteChanged else { throw FileSyncError.dataChanged }
+            lastConflictReport = nil
+            lastSyncStatus = .merged
+            performanceDiagnostics.succeeded = true
+        } catch {
+            lastSyncStatus = .failed
+            performanceDiagnostics.succeeded = false
+            throw error
+        }
+    }
+
     private static let bookmarkDefaultsKey = "relay.iCloudSyncDirectoryBookmark"
 
     /// Stores the directory confirmed by the user in the system directory picker.
@@ -66,7 +200,13 @@ public enum FileSyncService {
     /// Read, merge and replace under ONE coordination scope. This is also the
     /// test seam for two independent repositories sharing an ordinary folder.
     @MainActor
-    static func exchange(repository: any LocalRepository, directory: URL, writeBack: Bool) throws {
+    static func exchange(repository: any LocalRepository, directory: URL, writeBack: Bool, coordination: Coordination? = nil, write: ((Data, URL) throws -> Void)? = nil) throws {
+        let started = RepositoryPerformanceClock.now()
+        performanceDiagnostics = SyncPerformanceDiagnostics()
+        defer {
+            performanceDiagnostics.totalMilliseconds = RepositoryPerformanceClock.elapsedMilliseconds(since: started)
+            performanceDiagnostics.succeeded = lastSyncStatus == .merged
+        }
         lastSyncStatus = writeBack ? .uploading : .downloading
         lastConflictReport = nil
         defer {
@@ -80,21 +220,10 @@ public enum FileSyncService {
                 throw FileSyncError.invalidDirectory
             }
             let fileURL = directory.appendingPathComponent(fileName, isDirectory: false)
-            // NSFileCoordinator's writing accessor expects an existing item on
-            // some macOS/CLI combinations. Create an empty placeholder only for
-            // the first write; an empty payload is treated as "no remote data".
-            if writeBack, !FileManager.default.fileExists(atPath: fileURL.path) {
-                guard FileManager.default.createFile(atPath: fileURL.path, contents: Data()) else {
-                    throw FileSyncError.invalidDirectory
-                }
-            }
-            var coordinationError: NSError?
             var operationError: Error?
-            var didRunOperation = false
-            let coordinator = NSFileCoordinator(filePresenter: nil)
             let operation: (URL) -> Void = { coordinatedURL in
-                didRunOperation = true
                 do {
+                    let readStart = RepositoryPerformanceClock.now()
                     let versions = NSFileVersion.unresolvedConflictVersionsOfItem(at: coordinatedURL) ?? []
                     let localData = try repository.syncData()
                     var merged = localData
@@ -143,35 +272,25 @@ public enum FileSyncService {
                             return
                         }
                     }
-                    try repository.mergeSyncData(merged)
+                    performanceDiagnostics.readMergeMilliseconds = RepositoryPerformanceClock.elapsedMilliseconds(since: readStart)
+                    try measureCommit { try repository.mergeSyncData(merged) }
                     if writeBack {
+                        let encodeStart = RepositoryPerformanceClock.now()
                         let encoder = JSONEncoder()
                         encoder.outputFormatting = [.sortedKeys]
                         encoder.dateEncodingStrategy = .iso8601
                         let data = try encoder.encode(repository.syncData())
-                        try writeAtomically(data, to: coordinatedURL)
+                        performanceDiagnostics.encodeMilliseconds = RepositoryPerformanceClock.elapsedMilliseconds(since: encodeStart)
+                        performanceDiagnostics.payloadBytes = data.count
+                        try measureWrite { try (write ?? { try writeAtomically($0, to: $1) })(data, coordinatedURL) }
                         // A read-only import never resolves conflicts. The shared
                         // merged replacement must be durable before resolution.
                         for version in versions { version.isResolved = true }
                     }
                 } catch { operationError = error }
             }
-            if writeBack {
-                coordinator.coordinate(writingItemAt: fileURL, options: [], error: &coordinationError, byAccessor: operation)
-            } else {
-                coordinator.coordinate(readingItemAt: fileURL, options: [], error: &coordinationError, byAccessor: operation)
-            }
-            // Command-line regression fixtures are ordinary local files, not
-            // ubiquitous items. Some macOS SDK/runtime combinations reject a
-            // coordinator accessor for such a newly-created path before the
-            // accessor is invoked. Preserve the coordinated path for iCloud,
-            // but safely retry the same operation directly when it never ran.
-            if coordinationError != nil, !didRunOperation {
-                coordinationError = nil
-                operation(fileURL)
-            }
+            try coordinate(fileURL, writing: writeBack, using: coordination, accessor: operation)
             if let operationError { throw operationError }
-            if let coordinationError { throw coordinationError }
             }
         } catch {
             lastSyncStatus = .failed
@@ -183,11 +302,27 @@ public enum FileSyncService {
     /// files are intentionally never deleted; only the primary sync file is
     /// replaced with the selected, credential-free projection.
     @MainActor
-    public static func resolve(
+    public static func resolve(repository: any LocalRepository, report: SyncConflictReport,
+                               decision: SyncConflictDecision) throws -> SyncResolutionResult {
+        try resolve(repository: repository, report: report, decision: decision, coordination: nil)
+    }
+
+    @MainActor
+    static func resolve(
         repository: any LocalRepository,
         report: SyncConflictReport,
-        decision: SyncConflictDecision
+        decision: SyncConflictDecision,
+        coordination: Coordination?,
+        write: ((Data, URL) throws -> Void)? = nil
     ) throws -> SyncResolutionResult {
+        let started = RepositoryPerformanceClock.now()
+        performanceDiagnostics = SyncPerformanceDiagnostics()
+        lastConflictReport = report
+        lastSyncStatus = .failed
+        defer {
+            performanceDiagnostics.totalMilliseconds = RepositoryPerformanceClock.elapsedMilliseconds(since: started)
+            performanceDiagnostics.succeeded = lastSyncStatus == .merged
+        }
         let resolution = try SyncConflictService().resolve(report: report, decision: decision)
         guard let primary = report.remoteCandidates.first(where: { candidate in
             if case .remote = candidate.source { return true }
@@ -196,36 +331,41 @@ public enum FileSyncService {
             throw SyncConflictError.remoteCandidateUnavailable
         }
 
-        try repository.mergeSyncData(resolution.data)
-
+        let encodeStart = RepositoryPerformanceClock.now()
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         let data = try encoder.encode(resolution.data)
+        performanceDiagnostics.encodeMilliseconds = RepositoryPerformanceClock.elapsedMilliseconds(since: encodeStart)
+        performanceDiagnostics.payloadBytes = data.count
         try withSecurityScopedAccess(primary.deletingLastPathComponent()) {
-            var coordinationError: NSError?
             var operationError: Error?
-            var didRunOperation = false
             let operation: (URL) -> Void = { coordinatedURL in
-                didRunOperation = true
                 do {
-                    try writeAtomically(data, to: coordinatedURL)
+                    try measureCommit { try repository.mergeSyncData(resolution.data) }
+                    try measureWrite { try (write ?? { try writeAtomically($0, to: $1) })(data, coordinatedURL) }
                 } catch {
                     operationError = error
                 }
             }
-            let coordinator = NSFileCoordinator(filePresenter: nil)
-            coordinator.coordinate(writingItemAt: primary, options: [], error: &coordinationError, byAccessor: operation)
-            if coordinationError != nil, !didRunOperation {
-                coordinationError = nil
-                operation(primary)
-            }
+            try coordinate(primary, writing: true, using: coordination, accessor: operation)
             if let operationError { throw operationError }
-            if let coordinationError { throw coordinationError }
         }
         lastConflictReport = nil
         lastSyncStatus = .merged
         return resolution
+    }
+
+    @MainActor private static func measureCommit(_ body: () throws -> Void) rethrows {
+        let start = RepositoryPerformanceClock.now()
+        defer { performanceDiagnostics.localCommitMilliseconds += RepositoryPerformanceClock.elapsedMilliseconds(since: start) }
+        try body()
+    }
+
+    @MainActor private static func measureWrite(_ body: () throws -> Void) rethrows {
+        let start = RepositoryPerformanceClock.now()
+        defer { performanceDiagnostics.writeMilliseconds += RepositoryPerformanceClock.elapsedMilliseconds(since: start) }
+        try body()
     }
 
     private static func repositoryURL(_ repository: any LocalRepository) -> URL {
@@ -235,7 +375,7 @@ public enum FileSyncService {
         URL(fileURLWithPath: "relay-local-repository")
     }
 
-    private static func writeAtomically(_ data: Data, to destination: URL) throws {
+    static func writeAtomically(_ data: Data, to destination: URL) throws {
         let temporary = destination.deletingLastPathComponent()
             .appendingPathComponent(".relay-sync-\(UUID().uuidString).tmp")
         defer { try? FileManager.default.removeItem(at: temporary) }
@@ -247,7 +387,7 @@ public enum FileSyncService {
         }
     }
 
-    private static func readPayloadIfPresent(at url: URL) throws -> RelaySyncData? {
+    static func readPayloadIfPresent(at url: URL) throws -> RelaySyncData? {
         let values: URLResourceValues
         do {
             values = try url.resourceValues(forKeys: [.ubiquitousItemDownloadingStatusKey])
@@ -275,7 +415,7 @@ public enum FileSyncService {
         return payload
     }
 
-    private static func withSecurityScopedAccess<T>(_ directory: URL, _ body: () throws -> T) rethrows -> T {
+    static func withSecurityScopedAccess<T>(_ directory: URL, _ body: () throws -> T) rethrows -> T {
         let didStart = directory.startAccessingSecurityScopedResource()
         defer {
             if didStart { directory.stopAccessingSecurityScopedResource() }
@@ -293,12 +433,16 @@ public enum FileSyncService {
 
 public enum FileSyncError: LocalizedError, Sendable {
     case invalidDirectory
+    case coordinationFailed
+    case dataChanged
     case unreadableConflict
     case unsupportedVersion
     case downloadPending
 
     public var errorDescription: String? {
         switch self {
+        case .dataChanged: return "同步期间数据持续变化，请稍后重试。已保留本机数据和远端版本。"
+        case .coordinationFailed: return "文件协调失败，请稍后重试。本机数据仍然可用。"
         case .invalidDirectory:
             return "同步目录不可用，请重新选择文件夹。本机数据仍然可用。"
         case .unreadableConflict:
@@ -309,4 +453,17 @@ public enum FileSyncError: LocalizedError, Sendable {
             return "正在等待 iCloud 下载同步文件，本机数据仍然可用。"
         }
     }
+}
+
+/// Last attempt only; never persisted, synced or exported automatically.
+public struct SyncPerformanceDiagnostics: Sendable, Equatable {
+    public internal(set) var totalMilliseconds: Double = 0
+    public internal(set) var coordinationMilliseconds: Double = 0
+    public internal(set) var readMergeMilliseconds: Double = 0
+    public internal(set) var localCommitMilliseconds: Double = 0
+    public internal(set) var encodeMilliseconds: Double = 0
+    public internal(set) var writeMilliseconds: Double = 0
+    public internal(set) var payloadBytes = 0
+    public internal(set) var succeeded = false
+    public init() {}
 }

@@ -18,13 +18,17 @@ public final class RelayStore: ObservableObject {
     @Published public private(set) var syncStatus: SyncStatus = .idle
     @Published public private(set) var syncConflictReport: SyncConflictReport?
     @Published public private(set) var presentationDate = Date()
+    @Published public private(set) var transferRevision = 0
+    @Published public private(set) var historyBackfillStates: [UUID: HistoryBackfillState] = [:]
     @Published public private(set) var accountHealthStates: [UUID: AccountHealth] = [:]
     @Published public private(set) var accountErrors: [String: String] = [:]
     @Published public private(set) var settings: RelaySettings
 
+    @Published public private(set) var storageAvailability: StorageAvailability = .available
     @Published public private(set) var repositoryErrorMessage: String?
     // Retain a complete, last-successful read for detail pages independently of
     // enabled/hidden dashboard filtering and transient repository failures.
+    public private(set) var projectionReloadMilliseconds: Double = 0
     private var detailConfigurations: [AccountConfiguration] = []
     private var detailSnapshots: [ProviderSnapshot] = []
     private var detailHistory: [UUID: [DailyUsageRecord]] = [:]
@@ -35,11 +39,21 @@ public final class RelayStore: ObservableObject {
     private let rateService: RateService
     private let calendar: Calendar
     private let automaticallyRefresh: Bool
+    private let backupService: LocalBackupService
+    private var activeAccountMutations = 0
     private var expectedAccountIDs: Set<UUID> = []
     private var presentationTask: Task<Void, Never>?
     private var clockObservers: Set<AnyCancellable> = []
     private var refreshLoopTask: Task<Void, Never>?
+    private var isApplyingTransferredData = false
+    private var syncResolutionInProgress = false
+    private var syncReloadPending = false
+    private var syncReloadTask: Task<Void, Never>?
     private var pendingLowBalanceNotificationIDs: Set<UUID> = []
+    private var pendingBudgetNotificationIDs: Set<UUID> = []
+    private var budgetAlertState = BudgetAlertState()
+    private var backupTask: Task<Void, Never>?
+    @Published public private(set) var backupErrorMessage: String?
 
     public init(
         repository: any LocalRepository,
@@ -47,9 +61,14 @@ public final class RelayStore: ObservableObject {
         adapters: ProviderAdapterRegistry,
         rateService: RateService = RateService(),
         calendar: Calendar = .autoupdatingCurrent,
-        automaticallyRefresh: Bool = true
+        automaticallyRefresh: Bool = true,
+        backupService: LocalBackupService = .shared
     ) {
+        if let recoverable = repository as? RecoverableLocalRepository {
+            storageAvailability = recoverable.availability
+        }
         let initialSettings = (try? repository.settings()) ?? RelaySettings()
+        self.backupService = backupService
         self.automaticallyRefresh = automaticallyRefresh
         self.repository = repository
         self.rateService = rateService
@@ -68,13 +87,21 @@ public final class RelayStore: ObservableObject {
             rateService: rateService,
             calendar: calendar
         )
+        if let data = UserDefaults.standard.data(forKey: "relay-budget-alert-state"),
+           let state = try? JSONDecoder().decode(BudgetAlertState.self, from: data) { budgetAlertState = state }
         self.settings = initialSettings
         refreshCoordinator.onHealthChange = { [weak self] id, state in
             guard let self else { return }
             self.accountHealthStates[id] = state
             self.isRefreshing = self.accountHealthStates.values.contains { $0.phase.isActive }
             self.rebuildHealthProjection()
+            if state.phase == .idle {
+                self.notifyLowBalanceAccountsIfNeeded()
+                self.notifyBudgetAccountsIfNeeded()
+            }
         }
+        refreshCoordinator.onHistoryBackfillChange = { [weak self] id, state in self?.historyBackfillStates[id] = state }
+        refreshCoordinator.onHistoryBackfillCommit = { [weak self] _ in self?.reloadFromRepository() }
         refreshCoordinator.onResult = { [weak self] result in self?.applyRefreshResult(result) }
         refreshCoordinator.onRepositoryError = { [weak self] message in self?.globalErrorMessage = message }
         reloadFromRepository()
@@ -84,14 +111,14 @@ public final class RelayStore: ObservableObject {
                 self?.presentationTask?.cancel()
                 self?.cancelRefreshes()
             }.store(in: &clockObservers)
-        if automaticallyRefresh {
+        if automaticallyRefresh && storageAvailability.isAvailable {
             startAutomaticRefresh(refreshImmediately: true)
             startPresentationUpdates()
         }
     }
 
     public static func production() throws -> RelayStore {
-        let repository = try FileLocalRepository()
+        let repository = RecoverableLocalRepository { try FileLocalRepository() }
         let credentialStore = FileCredentialStore()
         let rateService = RateService()
         return RelayStore(
@@ -102,21 +129,38 @@ public final class RelayStore: ObservableObject {
         )
     }
 
-    /// Creates a usable store when the local database cannot be opened. The UI
-    /// remains available and reports the initialization problem instead of
-    /// silently displaying fake account data.
+    /// The same service identity can reopen storage after a startup failure.
     public static func unavailable(_ error: Error) -> RelayStore {
-        let repository = InMemoryLocalRepository()
-        let store = RelayStore(
-            repository: repository,
-            credentialStore: UnavailableCredentialStore(),
-            adapters: .production()
-        )
-        store.globalErrorMessage = Self.userFacingMessage(for: error)
-        return store
+        RelayStore(repository: RecoverableLocalRepository(error: error, open: { try FileLocalRepository() }),
+                   credentialStore: FileCredentialStore(), adapters: .production())
+    }
+
+    public func retryOpeningStorage() {
+        guard let recoverable = repository as? RecoverableLocalRepository, !storageAvailability.isAvailable else { return }
+        do {
+            try recoverable.retryOpening()
+            storageAvailability = recoverable.availability
+            reloadFromRepository(synchronize: false)
+            guard repositoryErrorMessage == nil else { return }
+            startAutomaticRefresh(refreshImmediately: true)
+            if automaticallyRefresh { startPresentationUpdates() }
+            scheduleSyncReload()
+        } catch {
+            storageAvailability = recoverable.availability
+            repositoryErrorMessage = storageAvailability.message
+            globalErrorMessage = storageAvailability.message
+        }
+    }
+
+    private func requireStorage() throws {
+        guard !isApplyingTransferredData else { throw LocalRepositoryError.unavailable }
+        if case .unavailable(let error) = storageAvailability { throw error }
     }
 
     public func addAccount(_ draft: AccountDraft) async throws {
+        try requireStorage()
+        activeAccountMutations += 1
+        defer { activeAccountMutations -= 1 }
         globalErrorMessage = nil
         let account = try await accountService.addAccount(draft)
         accountErrors.removeValue(forKey: account.id.uuidString)
@@ -125,23 +169,30 @@ public final class RelayStore: ObservableObject {
     }
 
     public func probe(_ draft: AccountDraft) async throws -> ProviderSnapshot {
-        try await accountService.probe(draft)
+        try requireStorage()
+        return try await accountService.probe(draft)
     }
 
     public func refreshAll(forceRateRefresh: Bool = false, source: RefreshSource = .manualAll) async {
+        guard storageAvailability.isAvailable, !isApplyingTransferredData else { return }
         globalErrorMessage = nil
         _ = await refreshCoordinator.refreshAll(forceRateRefresh: forceRateRefresh, source: source)
         if !Task.isCancelled { reloadFromRepository() }
     }
 
     public func refresh(accountID: UUID, forceRateRefresh: Bool = false) async {
+        guard storageAvailability.isAvailable, !isApplyingTransferredData else { return }
         let result = await refreshCoordinator.refresh(accountID: accountID, forceRateRefresh: forceRateRefresh)
         // Read failures happen before the coordinator operation/health callback.
         if result.error == .storageUnavailable { applyRefreshResult(result) }
         if !Task.isCancelled && !result.isCancelled { reloadFromRepository() }
     }
 
-    public func cancelRefreshes() { refreshCoordinator.cancelAll() }
+    public func cancelRefreshes() {
+        refreshCoordinator.cancelAll()
+        syncReloadTask?.cancel()
+        syncReloadTask = nil
+    }
 
     public func health(for accountID: UUID) -> AccountHealth {
         var state = accountHealthStates[accountID] ?? AccountHealth()
@@ -164,6 +215,56 @@ public final class RelayStore: ObservableObject {
             lastSyncedAt = max(lastSyncedAt ?? .distantPast, snapshot.fetchedAt)
         }
         reloadFromRepository(synchronize: false)
+        if result.isSuccess {
+            notifyLowBalanceAccountsIfNeeded()
+            scheduleSyncReload()
+        }
+    }
+
+    private func scheduleSyncReload() {
+        guard storageAvailability.isAvailable, !isApplyingTransferredData else { return }
+        if syncReloadTask != nil || syncResolutionInProgress { syncReloadPending = true; return }
+        syncReloadTask = Task { @MainActor [weak self] in
+            await Task.yield()
+            guard !Task.isCancelled, let self else { return }
+            repeat {
+                self.syncReloadPending = false
+                await self.synchronizeFiles()
+            } while self.syncReloadPending && !Task.isCancelled
+            self.syncReloadTask = nil
+        }
+    }
+
+    private func synchronizeFiles() async {
+        guard storageAvailability.isAvailable, !isApplyingTransferredData else { return }
+        guard settings.iCloudFileSyncEnabled else {
+            syncStatus = .idle; syncConflictReport = nil; syncErrorMessage = nil
+            return
+        }
+        guard let directory = FileSyncService.configuredDirectoryURL() else {
+            syncStatus = .unavailable
+            syncErrorMessage = "尚未选择 iCloud 同步文件夹；本机数据仍然可用。"
+            return
+        }
+        syncStatus = .uploading
+        do {
+            let status = try await FileSyncService.exchangeAsync(repository: repository, directory: directory, isEnabled: { [weak self] in
+                guard let self else { return false }
+                return self.storageAvailability.isAvailable && self.settings.iCloudFileSyncEnabled &&
+                    FileSyncService.configuredDirectoryURL() == directory
+            })
+            guard !Task.isCancelled else { return }
+            syncStatus = status
+            syncConflictReport = FileSyncService.lastConflictReport
+            syncErrorMessage = status == .conflicted ? "存在待用户处理的同步冲突。" : nil
+        } catch {
+            guard !Task.isCancelled else { return }
+            syncStatus = .failed
+            syncConflictReport = FileSyncService.lastConflictReport
+            syncErrorMessage = "文件同步失败：" + Self.userFacingMessage(for: error)
+        }
+        reloadFromRepository(synchronize: false)
+        notifyLowBalanceAccountsIfNeeded()
     }
 
     private func rebuildHealthProjection() {
@@ -177,14 +278,26 @@ public final class RelayStore: ObservableObject {
     /// Applies a user's explicit conflict decision. A failed decision leaves
     /// the report visible and keeps local data available for another attempt.
     @discardableResult
-    public func resolveSyncConflict(_ decision: SyncConflictDecision) -> String? {
+    public func resolveSyncConflict(_ decision: SyncConflictDecision) async -> String? {
+        guard storageAvailability.isAvailable, !isApplyingTransferredData else { return storageAvailability.message ?? "正在应用导入数据，请稍后。" }
         guard let report = syncConflictReport else {
             let message = SyncConflictError.noPendingConflict.localizedDescription
             syncErrorMessage = message
             return message
         }
+        guard !syncResolutionInProgress else { return "正在处理同步冲突，请稍候。" }
+        syncResolutionInProgress = true
+        let previousSync = syncReloadTask
+        previousSync?.cancel()
+        await previousSync?.value
+        syncReloadTask = nil
+        defer {
+            syncResolutionInProgress = false
+            if syncReloadPending { scheduleSyncReload() }
+        }
         do {
-            _ = try FileSyncService.resolve(repository: repository, report: report, decision: decision)
+            try await FileSyncService.resolveAsync(repository: repository, report: report, decision: decision,
+                                                   isEnabled: { [weak self] in self?.storageAvailability.isAvailable == true })
             syncStatus = .merged
             syncConflictReport = nil
             syncErrorMessage = nil
@@ -199,6 +312,7 @@ public final class RelayStore: ObservableObject {
     }
 
     public func deleteAccount(id: UUID) async {
+        guard storageAvailability.isAvailable, !isApplyingTransferredData else { return }
         refreshCoordinator.cancel(accountID: id)
         do {
             try await accountService.deleteAccount(id: id)
@@ -212,6 +326,7 @@ public final class RelayStore: ObservableObject {
     }
 
     public func setEnabled(accountID: UUID, enabled: Bool) {
+        guard storageAvailability.isAvailable, !isApplyingTransferredData else { return }
         do {
             try accountService.setEnabled(accountID: accountID, enabled: enabled)
             if !enabled { refreshCoordinator.cancel(accountID: accountID) }
@@ -223,6 +338,7 @@ public final class RelayStore: ObservableObject {
     }
 
     public func setHidden(accountID: UUID, hidden: Bool) {
+        guard storageAvailability.isAvailable, !isApplyingTransferredData else { return }
         do {
             try accountService.setHidden(accountID: accountID, hidden: hidden)
             globalErrorMessage = nil
@@ -241,6 +357,9 @@ public final class RelayStore: ObservableObject {
         manualUSDToCNY: ManualExchangeRateUpdate = .unchanged,
         deepSeekUserTokenUpdate: OptionalStringUpdate = .unchanged
     ) async throws {
+        try requireStorage()
+        activeAccountMutations += 1
+        defer { activeAccountMutations -= 1 }
         refreshCoordinator.cancel(accountID: accountID)
         do {
             try await accountService.updateAccount(
@@ -261,6 +380,7 @@ public final class RelayStore: ObservableObject {
     }
 
     public func updateSettings(_ newSettings: RelaySettings) {
+        guard storageAvailability.isAvailable, !isApplyingTransferredData else { return }
         do {
             try repository.updateSettings(newSettings)
             globalErrorMessage = nil
@@ -268,6 +388,128 @@ public final class RelayStore: ObservableObject {
         } catch {
             globalErrorMessage = Self.userFacingMessage(for: error)
         }
+    }
+
+    public func startHistoryBackfill(accountID: UUID, days: Int) {
+        guard storageAvailability.isAvailable, !isApplyingTransferredData else { return }
+        refreshCoordinator.startHistoryBackfill(accountID: accountID, days: days)
+    }
+
+    public func cancelHistoryBackfill(accountID: UUID) {
+        refreshCoordinator.cancelHistoryBackfill(accountID: accountID)
+    }
+
+    public func transferSnapshot() throws -> RelaySyncData {
+        guard storageAvailability.isAvailable, !isApplyingTransferredData else { throw LocalRepositoryError.unavailable }
+        return try repository.syncData()
+    }
+
+    public func importConfiguration(_ preview: ConfigurationImportPreview, expectedLocal: RelaySyncData) async throws {
+        let bytes = try DataTransferService.exportConfiguration(RelaySyncData(accounts: preview.archive.accounts, snapshots: [], dailyUsage: [], settings: preview.archive.settings))
+        let validated = try DataTransferService.previewConfiguration(bytes, existingAccountIDs: Set(expectedLocal.accounts.map(\.id)))
+        var accounts = expectedLocal.accounts
+        for imported in validated.archive.accounts {
+            if let index = accounts.firstIndex(where: { $0.id == imported.id }) { accounts[index] = imported }
+            else { accounts.append(imported) }
+        }
+        var tombstones = expectedLocal.deletedAccountIDs
+        for account in validated.archive.accounts { tombstones.removeValue(forKey: account.id) }
+        let changedDestinations = Set(validated.archive.accounts.filter { imported in
+            expectedLocal.accounts.contains { $0.id == imported.id && ($0.providerKind != imported.providerKind || $0.siteOrigin != imported.siteOrigin) }
+        }.map(\.id))
+        let candidate = RelaySyncData(accounts: accounts, snapshots: expectedLocal.snapshots.filter { !changedDestinations.contains($0.accountID) },
+            dailyUsage: expectedLocal.dailyUsage.filter { !changedDestinations.contains($0.accountID) }, settings: validated.archive.settings,
+            settingsUpdatedAt: Date(), deletedAccountIDs: tombstones)
+        try await applyTransferredData(candidate, expected: expectedLocal, configurationIDs: Set(validated.archive.accounts.map(\.id)))
+    }
+
+    public func restoreBackup(_ preview: LocalBackupPreview, expectedLocal: RelaySyncData) async throws {
+        let validated = try DataTransferService.decodeBackup(DataTransferService.exportBackup(preview.data))
+        try await applyTransferredData(validated, expected: expectedLocal, configurationIDs: Set(validated.accounts.map(\.id)))
+    }
+
+    private func applyTransferredData(_ source: RelaySyncData, expected: RelaySyncData, configurationIDs: Set<UUID>) async throws {
+        try requireStorage()
+        guard activeAccountMutations == 0, !syncResolutionInProgress else { throw DataTransferError.operationInProgress }
+        guard try repository.syncData().hasSameContent(as: expected) else { throw DataTransferError.stalePreview }
+        isApplyingTransferredData = true
+        refreshLoopTask?.cancel()
+        refreshLoopTask = nil
+        refreshCoordinator.cancelAll()
+        let pendingSync = syncReloadTask
+        pendingSync?.cancel()
+        syncReloadTask = nil
+        syncReloadPending = false
+        defer {
+            isApplyingTransferredData = false
+            startAutomaticRefresh()
+        }
+        await pendingSync?.value
+        guard try repository.syncData().hasSameContent(as: expected) else { throw DataTransferError.stalePreview }
+        // Saving a recovery point must succeed before any existing data is replaced.
+        _ = try await backupService.create(expected)
+        guard try repository.syncData().hasSameContent(as: expected) else { throw DataTransferError.stalePreview }
+        let existing = Dictionary(uniqueKeysWithValues: expected.accounts.map { ($0.id, $0) })
+        let now = Date()
+        let configurations = source.accounts.map { original -> AccountConfiguration in
+            var account = original
+            if let local = existing[account.id], local.providerKind == account.providerKind, local.siteOrigin == account.siteOrigin {
+                account.credentialReference = local.credentialReference
+            } else {
+                // A changed destination must never receive a credential saved for another origin.
+                account.credentialReference = UUID().uuidString
+            }
+            if configurationIDs.contains(account.id) {
+                account.updatedAt = Date(timeIntervalSince1970: max(floor(now.timeIntervalSince1970),
+                    (existing[account.id]?.updatedAt.timeIntervalSince1970 ?? 0) + 1,
+                    (expected.deletedAccountIDs[account.id]?.timeIntervalSince1970 ?? 0) + 1,
+                    account.updatedAt.timeIntervalSince1970 + 1))
+            }
+            return account
+        }
+        var preferences = source.settings
+        preferences.iCloudFileSyncEnabled = expected.settings.iCloudFileSyncEnabled
+        let validIDs = Set(configurations.map(\.id))
+        var tombstones = expected.deletedAccountIDs.merging(source.deletedAccountIDs, uniquingKeysWith: max)
+        for removed in expected.accounts where !validIDs.contains(removed.id) {
+            tombstones[removed.id] = Date(timeIntervalSince1970: max(floor(now.timeIntervalSince1970), removed.updatedAt.timeIntervalSince1970 + 1))
+        }
+        for restored in configurations { tombstones.removeValue(forKey: restored.id) }
+        let candidate = RelaySyncData(accounts: configurations,
+            snapshots: source.snapshots.filter { validIDs.contains($0.accountID) },
+            dailyUsage: source.dailyUsage.filter { validIDs.contains($0.accountID) },
+            settings: preferences, settingsUpdatedAt: Date(timeIntervalSince1970: max(floor(now.timeIntervalSince1970), (expected.settingsUpdatedAt?.timeIntervalSince1970 ?? 0) + 1)),
+            deletedAccountIDs: tombstones)
+        guard try repository.replaceNonsecretData(candidate, expected: expected) else { throw DataTransferError.stalePreview }
+        reloadFromRepository(synchronize: false)
+        transferRevision += 1
+        // Restoration is local. The next normal synchronization still uses conflict protection.
+    }
+
+    public var accountConfigurations: [AccountConfiguration] { detailConfigurations }
+
+    public func accountConfiguration(id: UUID) -> AccountConfiguration? {
+        detailConfigurations.first { $0.id == id }
+    }
+
+    @discardableResult
+    public func updateAccountPreferences(id: UUID, monthlyBudget: MoneyValue?, groupName: String?, isPinned: Bool) -> String? {
+        guard storageAvailability.isAvailable, !isApplyingTransferredData else { return storageAvailability.message ?? "正在应用导入数据，请稍后。" }
+        if let monthlyBudget, monthlyBudget.amount.isNaN || monthlyBudget.amount <= 0 {
+            return "月预算必须是大于 0 的金额。"
+        }
+        do {
+            guard var account = try repository.account(id: id) else { return "账户已移除。" }
+            let group = groupName?.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard (group?.count ?? 0) <= 40 else { return "分组名称最多 40 个字符。" }
+            account.monthlyBudget = monthlyBudget
+            account.groupName = group?.isEmpty == false ? group : nil
+            account.isPinned = isPinned
+            account.updatedAt = Date(timeIntervalSince1970: max(floor(Date().timeIntervalSince1970), account.updatedAt.timeIntervalSince1970 + 1))
+            try repository.upsertAccount(account)
+            reloadFromRepository()
+            return nil
+        } catch { return Self.userFacingMessage(for: error) }
     }
 
     public func dailyUsage(accountID: UUID, limit: Int? = 30) -> [DailyUsageRecord] {
@@ -426,6 +668,7 @@ public final class RelayStore: ObservableObject {
     }
 
     public func performSubAccountAction(_ action: ProviderSubAccountAction, parentID: UUID, externalID: String) async throws {
+        try requireStorage()
         try await accountService.performSubAccountAction(parentID: parentID, externalID: externalID, action: action)
         await refresh(accountID: parentID)
     }
@@ -454,7 +697,7 @@ public final class RelayStore: ObservableObject {
 
     public var hasLowBalance: Bool {
         accounts.contains { account in
-            guard !account.isHidden else { return false }
+            guard account.isEnabled, !account.isHidden else { return false }
             if case .warning(let message) = account.status { return message == "余额低于阈值" }
             return false
         }
@@ -471,17 +714,22 @@ public final class RelayStore: ObservableObject {
     }
 
     private func startAutomaticRefresh(refreshImmediately: Bool = false) {
-        guard automaticallyRefresh else { return }
+        guard automaticallyRefresh && storageAvailability.isAvailable && !isApplyingTransferredData else { return }
         refreshLoopTask?.cancel()
         let interval = UInt64(max(60, settings.refreshIntervalSeconds)) * 1_000_000_000
         refreshLoopTask = Task { @MainActor [weak self] in
-            if refreshImmediately { await self?.refreshAll(source: .scheduled) }
+            if refreshImmediately { self?.enqueueAutomaticRefreshes() }
             while !Task.isCancelled {
                 do { try await Task.sleep(nanoseconds: interval) } catch { return }
                 guard !Task.isCancelled, self != nil else { return }
-                await self?.refreshAll(source: .scheduled)
+                self?.enqueueAutomaticRefreshes()
             }
         }
+    }
+
+    private func enqueueAutomaticRefreshes() {
+        guard automaticallyRefresh && storageAvailability.isAvailable && !isApplyingTransferredData else { return }
+        refreshCoordinator.enqueueScheduledRefreshes(interval: Double(max(60, settings.refreshIntervalSeconds)))
     }
 
     /// Invalidate day-scoped values even when offline or provider refresh fails.
@@ -500,6 +748,7 @@ public final class RelayStore: ObservableObject {
                 do { try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) } catch { return }
                 guard !Task.isCancelled else { return }
                 self?.updateTemporalPresentation(at: Date())
+                self?.enqueueAutomaticRefreshes()
             }
         }
         // Re-evaluate immediately after sleep, activation, or timezone changes.
@@ -511,6 +760,7 @@ public final class RelayStore: ObservableObject {
         for publisher in notifications {
             publisher.receive(on: RunLoop.main).sink { [weak self] _ in
                 self?.updateTemporalPresentation(at: Date())
+                self?.enqueueAutomaticRefreshes()
             }.store(in: &clockObservers)
         }
     }
@@ -518,34 +768,20 @@ public final class RelayStore: ObservableObject {
     deinit {
         refreshLoopTask?.cancel()
         presentationTask?.cancel()
+        syncReloadTask?.cancel()
     }
 
     private func reloadFromRepository(synchronize: Bool = true, now: Date = Date()) {
+        let started = RepositoryPerformanceClock.now()
+        defer { projectionReloadMilliseconds = RepositoryPerformanceClock.elapsedMilliseconds(since: started) }
+        guard storageAvailability.isAvailable else {
+            repositoryErrorMessage = storageAvailability.message
+            globalErrorMessage = storageAvailability.message
+            syncStatus = .unavailable
+            return
+        }
         do {
-            if synchronize {
-                let syncSettings = try repository.settings()
-                if !syncSettings.iCloudFileSyncEnabled {
-                    syncStatus = .idle
-                    syncConflictReport = nil
-                    syncErrorMessage = nil
-                } else if !FileSyncService.hasConfiguredDirectory() {
-                    syncStatus = .unavailable
-                    syncConflictReport = nil
-                    syncErrorMessage = "尚未选择 iCloud 同步文件夹；本机数据仍然可用。"
-                } else {
-                    do {
-                        try FileSyncService.exportIfEnabled(repository: repository, settings: syncSettings)
-                        syncStatus = FileSyncService.lastSyncStatus
-                        syncConflictReport = FileSyncService.lastConflictReport
-                        syncErrorMessage = syncStatus == .conflicted ? "存在待用户处理的同步冲突。" : nil
-                    } catch {
-                        syncStatus = .failed
-                        syncConflictReport = FileSyncService.lastConflictReport
-                        syncErrorMessage = "文件同步失败：" + Self.userFacingMessage(for: error)
-                    }
-                }
-            }
-            // Read AFTER the exchange so remote changes appear in this update.
+            // Publish the local projection immediately; file exchange runs serially off-actor.
             let previousInterval = settings.refreshIntervalSeconds
             let loadedSettings = try repository.settings()
             let configurations = try repository.fetchAccounts()
@@ -579,7 +815,12 @@ public final class RelayStore: ObservableObject {
             snapshots = loadedSnapshots.filter { enabledIDs.contains($0.accountID) }
             repositoryErrorMessage = nil
             if previousInterval != settings.refreshIntervalSeconds { startAutomaticRefresh() }
-            if synchronize { notifyLowBalanceAccountsIfNeeded() }
+            scheduleAutomaticBackup()
+            if synchronize {
+                notifyBudgetAccountsIfNeeded()
+                notifyLowBalanceAccountsIfNeeded()
+                scheduleSyncReload()
+            }
         } catch {
             // The last complete read remains authoritative, but clock-scoped
             // values must still expire while storage is unavailable.
@@ -598,11 +839,66 @@ public final class RelayStore: ObservableObject {
         }
     }
 
+    private func scheduleAutomaticBackup() {
+        guard automaticallyRefresh, storageAvailability.isAvailable, !isApplyingTransferredData,
+              backupTask == nil, let data = try? repository.syncData(), !data.accounts.isEmpty else { return }
+        backupTask = Task { @MainActor [weak self] in
+            defer { self?.backupTask = nil }
+            do {
+                _ = try await self?.backupService.createIfNeeded(data)
+                self?.backupErrorMessage = nil
+            } catch { self?.backupErrorMessage = "本机备份未能保存：" + error.localizedDescription }
+        }
+    }
+
+    private func nextBudgetEvent(for id: UUID, at now: Date) -> BudgetAlertEvent? {
+        guard let account = detailConfigurations.first(where: { $0.id == id }), account.isEnabled, !account.isHidden,
+              let snapshot = detailSnapshots.first(where: { $0.accountID == id }),
+              now.timeIntervalSince(snapshot.fetchedAt) <= Double(max(120, settings.refreshIntervalSeconds * 2)),
+              snapshot.fetchedAt <= now.addingTimeInterval(60) else { return nil }
+        return BudgetService.nextAlert(accountID: id, accountName: account.displayName,
+            isEnabled: account.isEnabled, budget: account.monthlyBudget, snapshot: snapshot,
+            state: budgetAlertState, now: now, calendar: BudgetService.calendar(for: account.providerKind, fallback: calendar))
+    }
+
+    private func notifyBudgetAccountsIfNeeded() {
+        guard automaticallyRefresh, storageAvailability.isAvailable, !isApplyingTransferredData,
+              UserDefaults.standard.bool(forKey: "budgetNotificationsEnabled") else { return }
+        let events = detailConfigurations.compactMap { account -> BudgetAlertEvent? in
+            guard !pendingBudgetNotificationIDs.contains(account.id) else { return nil }
+            return nextBudgetEvent(for: account.id, at: Date())
+        }
+        for event in events {
+            pendingBudgetNotificationIDs.insert(event.key.accountID)
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                defer { self.pendingBudgetNotificationIDs.remove(event.key.accountID) }
+                let center = UNUserNotificationCenter.current()
+                guard (try? await center.requestAuthorization(options: [.alert, .sound])) == true,
+                      UserDefaults.standard.bool(forKey: "budgetNotificationsEnabled"),
+                      !self.isApplyingTransferredData,
+                      let current = self.nextBudgetEvent(for: event.key.accountID, at: Date()), current.key == event.key else { return }
+                let content = UNMutableNotificationContent()
+                content.title = current.title
+                content.body = current.message
+                content.sound = .default
+                do {
+                    try await center.add(UNNotificationRequest(identifier: current.notificationIdentifier, content: content, trigger: nil))
+                    self.budgetAlertState.markDelivered(current)
+                    let provider = self.accountConfiguration(id: current.key.accountID)?.providerKind ?? .pipio
+                    self.budgetAlertState.retain(month: BudgetService.monthKey(at: Date(), calendar: BudgetService.calendar(for: provider, fallback: self.calendar)), accountID: current.key.accountID)
+                    if let bytes = try? JSONEncoder().encode(self.budgetAlertState) { UserDefaults.standard.set(bytes, forKey: "relay-budget-alert-state") }
+                } catch { /* Keep the threshold eligible for a later successful refresh. */ }
+            }
+        }
+    }
+
     private func notifyLowBalanceAccountsIfNeeded() {
+        guard storageAvailability.isAvailable, !isApplyingTransferredData else { return }
         guard UserDefaults.standard.bool(forKey: "lowBalanceNotificationsEnabled") else { return }
         let today = calendar.startOfDay(for: Date())
         let lowBalanceAccounts = accounts.filter { account in
-            guard !account.isHidden else { return false }
+            guard account.isEnabled, !account.isHidden else { return false }
             if case .warning(let message) = account.status { return message == "余额低于阈值" }
             return false
         }
@@ -622,7 +918,15 @@ public final class RelayStore: ObservableObject {
                 self.pendingLowBalanceNotificationIDs.subtract(pending.map(\.1))
                 return
             }
-            for (account, id) in pending {
+            for (_, id) in pending {
+                guard self.storageAvailability.isAvailable,
+                      UserDefaults.standard.bool(forKey: "lowBalanceNotificationsEnabled"),
+                      self.calendar.isDate(Date(), inSameDayAs: today),
+                      self.storedLowBalanceNotificationDate(for: id) != today,
+                      let account = self.accounts.first(where: { $0.id == id.uuidString }),
+                      account.isEnabled, !account.isHidden,
+                      let threshold = account.lowBalanceThreshold, let balance = account.balance,
+                      balance < threshold else { continue }
                 let content = UNMutableNotificationContent()
                 content.title = "Relay 低余额提醒"
                 content.body = "账号“\(account.name)”已低于余额阈值。"
@@ -710,19 +1014,4 @@ public final class RelayStore: ObservableObject {
         }
         return "本地数据暂时不可用。"
     }
-}
-
-/// The normal production path uses FileCredentialStore. This tiny fallback keeps
-/// the app launchable if only the non-secret local repository failed to open.
-/// It is intentionally file-free and contains no real credential persistence.
-private actor UnavailableCredentialStore: CredentialStore {
-    func save(_ credential: ProviderCredential, reference: String) async throws {
-        throw CredentialStoreError.writeFailed
-    }
-
-    func read(reference: String) async throws -> ProviderCredential {
-        throw CredentialStoreError.notFound
-    }
-
-    func delete(reference: String) async throws {}
 }

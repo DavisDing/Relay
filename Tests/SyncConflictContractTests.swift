@@ -135,7 +135,7 @@ struct SyncConflictContractTests {
 
         let repository = InMemoryLocalRepository()
         try repository.mergeSyncData(localData)
-        let result = try FileSyncService.resolve(repository: repository, report: report, decision: .keepLocal)
+        let result = try FileSyncService.resolve(repository: repository, report: report, decision: .keepLocal, coordination: FileSyncService.uncoordinatedFixture)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let persisted = try decoder.decode(RelaySyncData.self, from: Data(contentsOf: primaryURL))

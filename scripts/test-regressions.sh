@@ -18,7 +18,14 @@ swiftc -swift-version 5 -D DEBUG -parse-as-library \
   "$ROOT/Tests/WorkBuddy2APIContractChecks.swift" \
   "$ROOT/Tests/RefreshSchedulingChecks.swift" \
   "$ROOT/Tests/UpdateIntegrityChecks.swift" \
+  "$ROOT/Tests/StorageRecoveryChecks.swift" \
+  "$ROOT/Tests/SyncSafetyChecks.swift" \
   "$ROOT/Tests/RepositoryPerformanceChecks.swift" \
+  "$ROOT/Tests/TransferIntegrationChecks.swift" \
+  "$ROOT/Tests/FeaturePersistenceChecks.swift" \
+  "$ROOT/Tests/DataTransferChecks.swift" \
+  "$ROOT/Tests/HistoryBackfillChecks.swift" \
+  "$ROOT/Tests/ProductFeatureChecks.swift" \
   "$ROOT/Tests/RegressionChecks.swift" -o "$WORK/relay-regressions"
 "$WORK/relay-regressions"
 

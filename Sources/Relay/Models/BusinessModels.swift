@@ -12,13 +12,17 @@ public struct AccountConfiguration: Identifiable, Codable, Sendable, Equatable {
     public var lowBalanceThreshold: Decimal?
     /// User override for USD → CNY only; never used to normalize provider quota.
     public var manualUSDToCNY: Decimal?
+    /// Optional monthly spending ceiling in an explicit currency.
+    public var monthlyBudget: MoneyValue?
+    public var groupName: String?
+    public var isPinned: Bool
     public var sortOrder: Int
     public var createdAt: Date
     public var updatedAt: Date
 
     private enum CodingKeys: String, CodingKey {
         case id, displayName, providerKind, siteOrigin, credentialReference, isEnabled, isHidden
-        case lowBalanceThreshold, manualUSDToCNY, sortOrder, createdAt, updatedAt
+        case lowBalanceThreshold, manualUSDToCNY, monthlyBudget, groupName, isPinned, sortOrder, createdAt, updatedAt
     }
 
     public init(from decoder: Decoder) throws {
@@ -32,6 +36,9 @@ public struct AccountConfiguration: Identifiable, Codable, Sendable, Equatable {
         isHidden = try container.decodeIfPresent(Bool.self, forKey: .isHidden) ?? false
         lowBalanceThreshold = try container.decodeIfPresent(Decimal.self, forKey: .lowBalanceThreshold)
         manualUSDToCNY = try container.decodeIfPresent(Decimal.self, forKey: .manualUSDToCNY)
+        monthlyBudget = try container.decodeIfPresent(MoneyValue.self, forKey: .monthlyBudget)
+        groupName = try container.decodeIfPresent(String.self, forKey: .groupName)
+        isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
         sortOrder = try container.decodeIfPresent(Int.self, forKey: .sortOrder) ?? 0
         createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
         updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? createdAt
@@ -47,6 +54,9 @@ public struct AccountConfiguration: Identifiable, Codable, Sendable, Equatable {
         isHidden: Bool = false,
         lowBalanceThreshold: Decimal? = Decimal(20),
         manualUSDToCNY: Decimal? = nil,
+        monthlyBudget: MoneyValue? = nil,
+        groupName: String? = nil,
+        isPinned: Bool = false,
         sortOrder: Int = 0,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
@@ -60,6 +70,9 @@ public struct AccountConfiguration: Identifiable, Codable, Sendable, Equatable {
         self.isHidden = isHidden
         self.lowBalanceThreshold = lowBalanceThreshold
         self.manualUSDToCNY = manualUSDToCNY
+        self.monthlyBudget = monthlyBudget
+        self.groupName = groupName
+        self.isPinned = isPinned
         self.sortOrder = sortOrder
         self.createdAt = createdAt
         self.updatedAt = updatedAt

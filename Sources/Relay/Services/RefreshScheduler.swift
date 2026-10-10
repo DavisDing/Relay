@@ -19,6 +19,11 @@ public struct RefreshClock {
 @MainActor
 public final class RefreshScheduler {
     public typealias Operation = (AccountConfiguration, Bool) async -> AccountRefreshResult
+    public enum AttemptResult {
+        case completed(AccountRefreshResult)
+        case retry(at: Date)
+    }
+    public typealias AttemptOperation = (AccountConfiguration, Bool, Int) async -> AttemptResult
     /// Cancellation handlers run off-actor: record interest loss synchronously.
     private final class CancellationTicket: @unchecked Sendable {
         private let lock = NSLock()
@@ -39,6 +44,8 @@ public final class RefreshScheduler {
         var waiters: [UUID: Subscriber] = [:]
         var task: Task<Void, Never>?
         var cancelled = false
+        var attempt = 0
+        var notBefore: Date?
         init(account: AccountConfiguration, force: Bool, source: RefreshSource) {
             self.account = account
             self.origin = RefreshScheduler.originKey(account.siteOrigin)
@@ -49,18 +56,25 @@ public final class RefreshScheduler {
 
     private let concurrency: Int
     private let clock: RefreshClock
-    private let operation: Operation
+    private let operation: AttemptOperation
     private var jobs: [UUID: Job] = [:]
     private var accountJobs: [UUID: UUID] = [:]
     private var queue: [UUID] = []
     private var cooldowns: [String: Date] = [:]
     private var wakeTask: Task<Void, Never>?
     public var onPhaseChange: ((UUID, AccountRefreshPhase) -> Void)?
+    public var onCancellation: ((UUID) -> Void)?
 
-    public init(maxConcurrentAccounts: Int = 3, clock: RefreshClock? = nil, operation: @escaping Operation) {
+    public convenience init(maxConcurrentAccounts: Int = 3, clock: RefreshClock? = nil, operation: @escaping Operation) {
+        self.init(maxConcurrentAccounts: maxConcurrentAccounts, clock: clock, attemptOperation: { account, force, _ in
+            .completed(await operation(account, force))
+        })
+    }
+
+    public init(maxConcurrentAccounts: Int = 3, clock: RefreshClock? = nil, attemptOperation: @escaping AttemptOperation) {
         concurrency = max(1, maxConcurrentAccounts)
         self.clock = clock ?? RefreshClock()
-        self.operation = operation
+        self.operation = attemptOperation
     }
 
     public func refresh(account: AccountConfiguration, forceRateRefresh: Bool, source: RefreshSource) async -> AccountRefreshResult {
@@ -139,7 +153,10 @@ public final class RefreshScheduler {
 
     private func cancel(_ job: Job) {
         job.cancelled = true
-        if accountJobs[job.account.id] == job.id { accountJobs.removeValue(forKey: job.account.id) }
+        if accountJobs[job.account.id] == job.id {
+            onCancellation?(job.account.id)
+            accountJobs.removeValue(forKey: job.account.id)
+        }
         job.task?.cancel()
         // A running adapter can be noncooperative. Don't free its origin prematurely.
         if job.task == nil { finish(job, result: .cancelled(job.account.id)) }
@@ -157,7 +174,8 @@ public final class RefreshScheduler {
             guard running.count < concurrency else { break }
             guard let job = jobs[id], !job.cancelled,
                   !running.contains(where: { $0.origin == job.origin || $0.account.id == job.account.id }) else { continue }
-            if let until = cooldowns[job.origin], until > now {
+            let until = max(cooldowns[job.origin] ?? .distantPast, job.notBefore ?? .distantPast)
+            if until > now {
                 onPhaseChange?(job.account.id, .backingOff(until: until))
                 continue
             }
@@ -165,13 +183,31 @@ public final class RefreshScheduler {
             onPhaseChange?(job.account.id, .refreshing)
             job.task = Task { @MainActor [weak self, weak job] in
                 guard let self, let job else { return }
-                let result = await self.operation(job.account, job.forceRateRefresh)
-                self.finish(job, result: job.cancelled ? .cancelled(job.account.id) : result)
+                let result = await self.operation(job.account, job.forceRateRefresh, job.attempt)
+                // The actual request has returned. Waiting retries can now release
+                // the global slot; cancelled noncooperative requests reach here too.
+                job.task = nil
+                if job.cancelled {
+                    self.finish(job, result: .cancelled(job.account.id))
+                } else {
+                    switch result {
+                    case .completed(let result): self.finish(job, result: result)
+                    case .retry(let until):
+                        job.attempt += 1
+                        job.notBefore = until
+                        self.queue.append(job.id)
+                        self.onPhaseChange?(job.account.id, .backingOff(until: until))
+                    }
+                }
                 self.pump()
             }
             running.append(job)
         }
-        let blockedUntil = queue.compactMap { jobs[$0].flatMap { cooldowns[$0.origin] } }.min()
+        let blockedUntil = queue.compactMap { id -> Date? in
+            guard let job = jobs[id] else { return nil }
+            let until = max(cooldowns[job.origin] ?? .distantPast, job.notBefore ?? .distantPast)
+            return until > now ? until : nil
+        }.min()
         if let until = blockedUntil {
             wakeTask = Task { @MainActor [weak self] in
                 guard let self else { return }

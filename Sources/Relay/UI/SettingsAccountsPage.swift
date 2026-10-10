@@ -37,6 +37,13 @@ struct SettingsAccountsPage: View {
                 } else {
                     ForEach(managedAccounts) { account in
                         accountManagementRow(account)
+                        if let id = UUID(uuidString: account.id) {
+                            DisclosureGroup("预算、分组与置顶") {
+                                AccountPreferencesPanel(store: store, accountID: id)
+                                    .padding(.vertical, 6)
+                            }
+                            .font(.system(size: 11))
+                        }
                     }
                 }
             }

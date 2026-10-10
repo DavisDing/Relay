@@ -36,7 +36,7 @@ enum SyncMerge {
         )
     }
 
-    private static func records<T: Encodable>(_ values: [T], id: (T) -> String, date: (T) -> Date) throws -> [T] {
+    private static func records<T: Encodable & Equatable>(_ values: [T], id: (T) -> String, date: (T) -> Date) throws -> [T] {
         var result: [String: T] = [:]
         for value in values {
             let key = id(value)
@@ -56,7 +56,8 @@ enum SyncMerge {
         floor(date.timeIntervalSince1970)
     }
 
-    private static func winner<T: Encodable>(_ left: T, _ right: T, leftDate: Date, rightDate: Date) throws -> T {
+    private static func winner<T: Encodable & Equatable>(_ left: T, _ right: T, leftDate: Date, rightDate: Date) throws -> T {
+        if left == right { return left }
         if second(leftDate) != second(rightDate) { return second(leftDate) > second(rightDate) ? left : right }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]

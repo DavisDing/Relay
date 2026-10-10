@@ -3,6 +3,7 @@ import AppKit
 
 @MainActor
 struct SettingsSyncPage: View {
+    @State private var isResolving = false
     @Binding var enableICloudFileSync: Bool
     @Binding var iCloudDirectoryURL: URL?
     @Binding var iCloudDirectoryError: String?
@@ -10,7 +11,9 @@ struct SettingsSyncPage: View {
     @Binding var syncConflictActionError: String?
     let syncStatus: SyncStatus
     let syncConflictReport: SyncConflictReport?
-    let onResolveSyncConflict: ((SyncConflictDecision) -> String?)?
+    let onResolveSyncConflict: ((SyncConflictDecision) async -> String?)?
+    var transferActions: DataTransferActions? = nil
+    var backupErrorMessage: String? = nil
 
     var body: some View {
         SettingsPageScroll {
@@ -43,15 +46,19 @@ struct SettingsSyncPage: View {
                             localDataAvailable: true
                         ),
                         onDecision: { decision in
-                            if let error = onResolveSyncConflict?(decision) {
-                                syncConflictActionError = error
-                            } else {
-                                syncConflictActionError = nil
-                                showSyncConflict = false
+                            guard !isResolving else { return }
+                            isResolving = true
+                            Task { @MainActor in
+                                let error = await onResolveSyncConflict?(decision)
+                                isResolving = false
+                                if let error { syncConflictActionError = error }
+                                else { syncConflictActionError = nil; showSyncConflict = false }
                             }
                         },
                         onDismiss: { showSyncConflict = false }
                     )
+                    .disabled(isResolving)
+                    if isResolving { ProgressView("正在处理同步冲突…").padding(.horizontal, 20) }
                     if let syncConflictActionError {
                         Text(syncConflictActionError)
                             .font(.footnote)
@@ -107,6 +114,13 @@ struct SettingsSyncPage: View {
                 .padding(8)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .relayInsetSurface(cornerRadius: 8)
+            }
+
+            if let backupErrorMessage {
+                Text(backupErrorMessage).font(.footnote).foregroundStyle(.red)
+            }
+            if let transferActions {
+                DataTransferPanel(actions: transferActions)
             }
         }
     }

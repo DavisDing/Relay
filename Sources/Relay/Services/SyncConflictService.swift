@@ -392,6 +392,9 @@ public enum RelaySyncDataSafety {
                 isHidden: account.isHidden,
                 lowBalanceThreshold: account.lowBalanceThreshold,
                 manualUSDToCNY: account.manualUSDToCNY,
+                monthlyBudget: account.monthlyBudget,
+                groupName: account.groupName,
+                isPinned: account.isPinned,
                 sortOrder: account.sortOrder,
                 createdAt: account.createdAt,
                 updatedAt: account.updatedAt

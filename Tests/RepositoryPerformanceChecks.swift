@@ -153,12 +153,14 @@ enum RepositoryPerformanceChecks {
         try Data("{}".utf8).write(to: url)
         let legacy = try FileLocalRepository(fileURL: url)
         try check(try legacy.fetchAccounts().isEmpty && legacy.dailyUsage(accountID: a.id, limit: nil).isEmpty, "Legacy JSON defaults remain compatible")
-        for invalid in ["{", "{\"schemaVersion\":3}"] {
+        for (invalid, expected) in [("{", LocalRepositoryError.corruptData), ("{\"schemaVersion\":3}", .unsupportedVersion)] {
             try Data(invalid.utf8).write(to: url)
             do {
                 _ = try FileLocalRepository(fileURL: url)
                 throw RepositoryPerformanceCheckFailure(description: "Corrupt or future-schema JSON was accepted")
-            } catch LocalRepositoryError.corruptData {}
+            } catch let error as LocalRepositoryError {
+                try check(error == expected, "Corruption and unsupported schema must be distinguished")
+            }
         }
     }
 

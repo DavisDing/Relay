@@ -13,13 +13,27 @@ struct AccountDetailContainerView: View {
     var body: some View {
         let state = store.accountDetailState(for: accountID)
         if let data = state.data {
+            let historyID = data.account.parentAccountID ?? UUID(uuidString: data.account.id)
+            let configuration = historyID.flatMap { store.accountConfiguration(id: $0) }
             AccountDetailView(
                 account: data.account,
                 spendPoints: data.spendPoints,
                 modelUsages: data.modelUsages,
                 deepSeekUsageReport: data.deepSeekUsageReport,
                 dataErrorMessage: state.errorMessage,
-                health: (data.account.parentAccountID ?? UUID(uuidString: data.account.id)).map { store.health(for: $0) },
+                health: historyID.map { store.health(for: $0) },
+                historyRecords: historyID.map { store.dailyUsage(accountID: $0, limit: nil) },
+                historyBackfillState: historyID.flatMap { store.historyBackfillStates[$0] },
+                monthlyBudget: configuration?.monthlyBudget,
+                budgetSnapshot: historyID.flatMap { id in store.snapshots.first { $0.accountID == id } },
+                onHistoryBackfill: { days in
+                    guard let historyID else { return }
+                    store.startHistoryBackfill(accountID: historyID, days: days)
+                },
+                onCancelHistoryBackfill: {
+                    guard let historyID else { return }
+                    store.cancelHistoryBackfill(accountID: historyID)
+                },
                 onClose: onClose,
                 onSubAccountAction: onSubAccountAction
             )
@@ -47,6 +61,13 @@ public struct AccountDetailView: View {
     public let deepSeekUsageReport: DeepSeekUsageReport?
     public let dataErrorMessage: String?
     public let health: AccountHealth?
+    public let historyRecords: [DailyUsageRecord]?
+    public let historyBackfillState: HistoryBackfillState?
+    public let monthlyBudget: MoneyValue?
+    public let budgetSnapshot: ProviderSnapshot?
+    public var onHistoryBackfill: (Int) -> Void
+    public var onCancelHistoryBackfill: () -> Void
+    @State private var selectedHistoryDays = 7
     public var onClose: () -> Void
     public var onSubAccountAction: (ProviderSubAccountAction, UUID, String) async throws -> Void
     @State private var confirmingAction: ProviderSubAccountAction?
@@ -60,6 +81,12 @@ public struct AccountDetailView: View {
         deepSeekUsageReport: DeepSeekUsageReport? = nil,
         dataErrorMessage: String? = nil,
         health: AccountHealth? = nil,
+        historyRecords: [DailyUsageRecord]? = nil,
+        historyBackfillState: HistoryBackfillState? = nil,
+        monthlyBudget: MoneyValue? = nil,
+        budgetSnapshot: ProviderSnapshot? = nil,
+        onHistoryBackfill: @escaping (Int) -> Void = { _ in },
+        onCancelHistoryBackfill: @escaping () -> Void = {},
         onClose: @escaping () -> Void = {},
         onSubAccountAction: @escaping (ProviderSubAccountAction, UUID, String) async throws -> Void = { _, _, _ in }
     ) {
@@ -69,6 +96,12 @@ public struct AccountDetailView: View {
         self.deepSeekUsageReport = deepSeekUsageReport
         self.dataErrorMessage = dataErrorMessage
         self.health = health
+        self.historyRecords = historyRecords
+        self.historyBackfillState = historyBackfillState
+        self.monthlyBudget = monthlyBudget
+        self.budgetSnapshot = budgetSnapshot
+        self.onHistoryBackfill = onHistoryBackfill
+        self.onCancelHistoryBackfill = onCancelHistoryBackfill
         self.onClose = onClose
         self.onSubAccountAction = onSubAccountAction
     }
@@ -84,6 +117,10 @@ public struct AccountDetailView: View {
                         trendSection
                     } else {
                         metrics
+                        if let id = UUID(uuidString: account.id) {
+                            BudgetAccountPanel(budget: monthlyBudget, snapshot: budgetSnapshot,
+                                               accountID: id, provider: account.kind)
+                        }
                         trendSection
                     }
 
@@ -92,8 +129,10 @@ public struct AccountDetailView: View {
                             report: deepSeekUsageReport ?? UUID(uuidString: account.id).map { DeepSeekUsageReport.unsupported(accountID: $0) }
                         )
                     } else {
-                        modelUsageSection
+                        if modelUsages.isEmpty { modelUsageSection }
+                        else { ModelAnalysisPanel(items: modelUsages) }
                     }
+                    if account.kind == .deepseek { ModelAnalysisPanel(items: modelUsages) }
                 }
                 .padding(.horizontal, 18)
                 .padding(.bottom, 14)
@@ -238,9 +277,9 @@ public struct AccountDetailView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("近 7 日消耗趋势")
+                    Text("近 \(selectedHistoryDays) 日消耗趋势")
                         .font(.system(size: 13, weight: .semibold))
-                    Text(account.kind == .pipio ? "Pipio 会从公开统计接口回填可用的近 7 日；后续刷新持续更新当天累计。" : account.kind == .workbuddy2api ? "根据 /v1/stats 的进程累计积分计算刷新增量；容器重启后开启新的累计周期。" : "官方接口未提供历史时，仅显示 Relay 已保存的每日累计。")
+                    Text(account.kind == .pipio ? "历史按已完成日期查询，今天由正常刷新更新。" : account.kind == .workbuddy2api ? "根据 /v1/stats 的进程累计积分计算刷新增量；无法恢复未采集日期。" : "平台历史使用手动填写的 userToken，按北京时间统计；缺失日期为未知。")
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
                 }
@@ -250,7 +289,8 @@ public struct AccountDetailView: View {
                     .foregroundStyle(.secondary)
             }
 
-            if spendPoints.isEmpty {
+            historyCoverageControls
+            if displayedHistoryPoints.isEmpty {
                 ContentUnavailableView(
                     "暂未积累趋势数据",
                     systemImage: "chart.line.uptrend.xyaxis",
@@ -259,10 +299,78 @@ public struct AccountDetailView: View {
                 .frame(height: 155)
                 .background(.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
             } else {
-                AdaptiveLineChart(dataPoints: spendPoints, unit: account.kind == .workbuddy2api ? "积分" : account.currency.symbol)
+                AdaptiveLineChart(dataPoints: displayedHistoryPoints, unit: account.kind == .workbuddy2api ? "积分" : account.currency.symbol)
                     .frame(height: 165)
                     .padding(8)
                     .background(.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+            }
+        }
+    }
+
+    private var historyCalendar: Calendar {
+        account.kind == .deepseek ? DeepSeekUsageService.historyCalendar : .current
+    }
+
+    private var historyAccountID: UUID? { account.parentAccountID ?? UUID(uuidString: account.id) }
+
+    private var displayedHistoryPoints: [DailySpendPoint] {
+        guard let historyRecords, let id = historyAccountID else { return spendPoints }
+        let calendar = historyCalendar
+        let today = calendar.startOfDay(for: Date())
+        guard let firstDay = calendar.date(byAdding: .day, value: -(selectedHistoryDays - 1), to: today),
+              let afterToday = calendar.date(byAdding: .day, value: 1, to: today) else { return [] }
+        let formatter = DateFormatter(); formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone; formatter.dateFormat = "MM/dd"
+        return historyRecords.filter {
+            $0.accountID == id && $0.day >= firstDay && $0.day < afterToday && $0.spend?.currency == account.currency
+        }.sorted { $0.day < $1.day }.compactMap { record in
+            guard let spend = record.spend else { return nil }
+            return DailySpendPoint(id: record.id, dateString: formatter.string(from: record.day), amount: spend.amount)
+        }
+    }
+
+    @ViewBuilder
+    private var historyCoverageControls: some View {
+        if let historyRecords, let id = historyAccountID {
+            let coverage = HistoryCoverage.calculate(records: historyRecords, accountID: id,
+                days: selectedHistoryDays, calendar: historyCalendar, currency: account.currency)
+            VStack(alignment: .leading, spacing: 7) {
+                HStack {
+                    Picker("历史范围", selection: $selectedHistoryDays) {
+                        Text("7 日").tag(7)
+                        Text("30 日").tag(30)
+                    }.pickerStyle(.segmented).frame(width: 135)
+                    Spacer()
+                    Text("有效金额 \(coverage.knownDays)/\(coverage.days) 天")
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                }
+                if !coverage.isComplete {
+                    Text("尚有 \(coverage.missingDays.count) 天金额未知；图表只绘制已有记录，不能据此判断完整区间总额。")
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                }
+                if account.kind != .workbuddy2api {
+                    HStack(spacing: 8) {
+                        Button("回填近 7 日") { onHistoryBackfill(7) }
+                        Button("回填近 30 日") { onHistoryBackfill(30) }
+                    }.buttonStyle(.bordered).controlSize(.small)
+                        .disabled(!account.isEnabled || historyBackfillState?.isActive == true)
+                    if !account.isEnabled {
+                        Text("账户已停用，启用后可回填历史。")
+                            .font(.system(size: 10)).foregroundStyle(.secondary)
+                    }
+                }
+                if let state = historyBackfillState {
+                    if state.isActive {
+                        HStack {
+                            if account.kind == .deepseek { ProgressView().controlSize(.small) }
+                            else { ProgressView(value: state.progress).frame(maxWidth: .infinity) }
+                            Button("取消", action: onCancelHistoryBackfill).controlSize(.small)
+                                .disabled(state.phase == .cancelling)
+                        }
+                    }
+                    Text(state.message).font(.system(size: 10))
+                        .foregroundStyle(state.phase == .failed ? Color.red : Color.secondary)
+                }
             }
         }
     }

@@ -409,7 +409,7 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
                 syncStatus: self.store.syncStatus,
                 syncConflictReport: self.store.syncConflictReport,
                 onResolveSyncConflict: { [weak self] decision in
-                    self?.store.resolveSyncConflict(decision)
+                    await self?.store.resolveSyncConflict(decision)
                 },
                 onEditAccount: { [weak self] account in
                     self?.showAccountEditWindow(account: account)
