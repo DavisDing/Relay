@@ -75,8 +75,9 @@ struct DataTransferPanel: View {
             ForEach(backupEntries) { entry in
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(entry.createdAt.formatted(date: .abbreviated, time: .shortened)).font(.system(size: 11))
-                        Text("\(entry.accountCount) 个账号 · \(entry.historyCount) 条记录").font(.system(size: 10)).foregroundStyle(.secondary)
+                        Text(backupDateText(entry.createdAt, format: "yyyyMMdd")).font(.system(size: 11))
+                        Text("\(backupDateText(entry.createdAt, format: "HH:mm:ss")) · \(entry.accountCount) 个账号 · \(entry.historyCount) 条记录")
+                            .font(.system(size: 10)).foregroundStyle(.secondary)
                     }
                     Spacer()
                     Button("预览恢复…") { previewBackup(entry) }
@@ -123,10 +124,23 @@ struct DataTransferPanel: View {
         }.padding(20).frame(width: 420)
     }
 
+    private func backupDateText(_ date: Date, format: String) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = .autoupdatingCurrent
+        formatter.dateFormat = format
+        return formatter.string(from: date)
+    }
+
     private func backupSheet(_ preview: LocalBackupPreview) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("确认恢复备份").font(.headline)
-            Text(preview.entry.createdAt.formatted(date: .complete, time: .shortened))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(backupDateText(preview.entry.createdAt, format: "yyyyMMdd"))
+                Text(backupDateText(preview.entry.createdAt, format: "HH:mm:ss"))
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
             Text("备份包含 \(preview.data.accounts.count) 个账号、\(preview.data.snapshots.count) 份快照和 \(preview.data.dailyUsage.count) 条历史记录。")
             Text("恢复将替换本机非敏感数据，并先保存当前数据备份。Token 不在备份中；本机已有凭据保留，其余账号需重新填写。")
                 .font(.footnote).foregroundStyle(.secondary)
