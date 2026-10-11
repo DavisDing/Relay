@@ -36,6 +36,7 @@ public struct DeepSeekDailyUsage: Sendable, Equatable, Identifiable {
     public let spend: MoneyValue?
     public let tokenCount: Int64?
     public let requestCount: Int64?
+    public let modelUsages: [ModelUsageSummary]?
 
     public var id: Date { day }
 
@@ -43,12 +44,14 @@ public struct DeepSeekDailyUsage: Sendable, Equatable, Identifiable {
         day: Date,
         spend: MoneyValue? = nil,
         tokenCount: Int64? = nil,
-        requestCount: Int64? = nil
+        requestCount: Int64? = nil,
+        modelUsages: [ModelUsageSummary]? = nil
     ) {
         self.day = day
         self.spend = spend
         self.tokenCount = tokenCount
         self.requestCount = requestCount
+        self.modelUsages = modelUsages
     }
 }
 

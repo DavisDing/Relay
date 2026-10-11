@@ -42,7 +42,9 @@ private final class HistoryFixtureAdapter: ProviderAdapter {
         beforeReturn?()
         if omitEverySecondDay && calls.isMultiple(of: 2) { return [] }
         let day = kind == .pipio ? calendar.date(byAdding: .day, value: -1, to: endingAt)! : endingAt
-        var records = [DailyUsageRecord(accountID: account.id, day: day, spend: MoneyValue(amount: 2, currency: .cny))]
+        let model = ModelUsageSummary(modelName: "history-day", tokenCount: 100, requestCount: 1,
+                                      cacheHitRate: Decimal(string: "0.5"), spend: MoneyValue(amount: 2, currency: .cny))
+        var records = [DailyUsageRecord(accountID: account.id, day: day, spend: MoneyValue(amount: 2, currency: .cny), modelUsages: [model])]
         if includeToday { records.append(DailyUsageRecord(accountID: account.id, day: endingAt, spend: MoneyValue(amount: 999, currency: .cny))) }
         return records
     }
@@ -88,6 +90,8 @@ public enum HistoryBackfillChecks {
         try historyCheck(coordinator.historyBackfillStates[account.id]?.availableDays == 3,
                          "Empty provider dates remain missing, completion reports observed days")
         try historyCheck(adapter.requestedRanges.allSatisfy { $0.1 == 2 }, "Pipio requests one completed day per call")
+        try historyCheck(records.filter { $0.day < today }.allSatisfy { $0.modelUsages?.first?.modelName == "history-day" },
+                         "History normalization and atomic commit preserve each day's model breakdown")
 
         adapter.omitEverySecondDay = false; adapter.blocked = true
         coordinator.startHistoryBackfill(accountID: account.id, days: 7)

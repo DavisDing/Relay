@@ -147,10 +147,17 @@ public struct PipioAdapter: ProviderAdapter {
                 credential: credential,
                 range: DateInterval(start: day, end: end)
             ), let quota = stat.quota else { continue }
+            // Model buckets use the dashboard endpoint for the same completed day.
+            // Failure of optional metrics must not discard a valid historical amount.
+            let dashboard = try? await fetchDashboardUsage(urls: urls, credential: credential,
+                range: DateInterval(start: day, end: end.addingTimeInterval(-1)),
+                quotaPerUnit: quotaPerUnit, currency: rate.nativeCurrency)
+            try Task.checkCancellation()
             records.append(DailyUsageRecord(
                 accountID: account.id,
                 day: day,
                 spend: MoneyValue(amount: quota / quotaPerUnit, currency: rate.nativeCurrency),
+                modelUsages: dashboard?.models,
                 updatedAt: now
             ))
         }

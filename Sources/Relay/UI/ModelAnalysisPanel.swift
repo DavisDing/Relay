@@ -1,61 +1,98 @@
 import SwiftUI
 
-/// Retains the model name, full token count, cache-read ratio, and native cost
-/// while adding filtering and insights for the fetched model breakdown.
+/// One aligned row per model, using the selected provider day's aggregates.
 public struct ModelAnalysisPanel: View {
-    public let items: [ModelUsageItem]
+    public let items: [ModelUsageItem]?
+    public let dateLabel: String
+    public let unavailableMessage: String
     @State private var sort: ModelAnalysisSort = .spend
     @State private var topFive = false
 
-    public init(items: [ModelUsageItem]) { self.items = items }
+    public init(items: [ModelUsageItem]?, dateLabel: String = "今日",
+                unavailableMessage: String = "该日期暂无可用模型明细。") {
+        self.items = items
+        self.dateLabel = dateLabel
+        self.unavailableMessage = unavailableMessage
+    }
 
     public var body: some View {
-        if !items.isEmpty {
-            let analysis = ModelAnalysisService.analyze(items, sort: sort, topFive: topFive)
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("模型消耗分析").font(.system(size: 13, weight: .semibold))
-                    Spacer()
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Text("模型消耗分析").font(.system(size: 13, weight: .semibold))
+                Text(dateLabel).font(.system(size: 10)).foregroundStyle(.secondary)
+                Spacer(minLength: 2)
+                if let items, !items.isEmpty {
                     Picker("排序", selection: $sort) {
                         ForEach(ModelAnalysisSort.allCases) { Text($0.rawValue).tag($0) }
-                    }.labelsHidden().frame(width: 100)
-                    Toggle("Top 5", isOn: $topFive).toggleStyle(.checkbox).font(.caption)
-                }
-                if analysis.hasUnknownSpend {
-                    Text("部分模型消费未知，完整占比暂不可计算。")
-                        .font(.system(size: 10)).foregroundStyle(.secondary)
-                }
-                if analysis.hasMixedCurrencies {
-                    Text("按原始币种分别排序，金额未跨币种换算；不显示整体占比。")
-                        .font(.system(size: 10)).foregroundStyle(.secondary)
-                }
-                Text("单位成本为已获取消费 ÷ 总 Token × 100 万，仅描述当前明细，包含服务商返还的缓存等影响。")
-                    .font(.system(size: 10)).foregroundStyle(.secondary)
-                ForEach(analysis.rows) { row in
-                    HStack(alignment: .top, spacing: 8) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(row.item.modelName).font(.system(size: 11, weight: .medium)).lineLimit(1)
-                                .truncationMode(.middle).help(row.item.modelName)
-                            Text(row.item.tokenCount.map { RelayNumberFormatter.tokens($0) + " Token" } ?? "Token 未知")
-                                .font(.system(size: 10)).foregroundStyle(.secondary)
-                                .help("\(row.item.tokens) Token")
-                                .accessibilityLabel("总 Token：\(row.item.tokens)")
-                            Text(row.item.cacheHitRate.map { "缓存读取 " + RelayNumberFormatter.percent($0) } ?? "缓存读取 --")
-                                .font(.system(size: 10)).foregroundStyle(.secondary)
-                                .accessibilityLabel("缓存读取比例：" + (row.item.cacheHitRate.map(RelayNumberFormatter.percent) ?? "未知"))
-                        }
-                        Spacer(minLength: 8)
-                        VStack(alignment: .trailing, spacing: 3) {
-                            Text(row.item.cost.map { RelayNumberFormatter.money($0, currency: row.item.currency) } ?? "消费未知")
-                                .font(.system(size: 11)).monospacedDigit()
-                            Text(row.spendShare.map { "占比 " + RelayNumberFormatter.percent($0) } ?? "占比 --")
-                                .font(.system(size: 10)).foregroundStyle(.secondary)
-                            Text(row.costPerMillionTokens.map { RelayNumberFormatter.money($0.amount, currency: $0.currency) + " / 百万 Token" } ?? "单位成本 --")
-                                .font(.system(size: 10)).foregroundStyle(.secondary)
-                        }
-                    }.padding(9).relayGlassTile(cornerRadius: 8)
+                    }.labelsHidden().frame(width: 65).controlSize(.mini)
+                    Toggle("Top 5", isOn: $topFive).toggleStyle(.checkbox).font(.system(size: 10))
                 }
             }
+            if let items, !items.isEmpty {
+                let analysis = ModelAnalysisService.analyze(items, sort: sort, topFive: topFive)
+                ModelUsageColumns {
+                    Text("模型").frame(maxWidth: .infinity, alignment: .leading)
+                    column("总 Token")
+                    column("缓存占比")
+                    column("费用/百万")
+                    column("当日消费")
+                }
+                .font(.system(size: 9, weight: .medium)).foregroundStyle(.secondary)
+                .padding(.horizontal, 7)
+                .help("费用/百万：当日消费 ÷ 当日总 Token × 100 万；未知值显示 --。")
+                ForEach(analysis.rows) { row in
+                    ModelUsageColumns {
+                        Text(row.item.modelName).font(.system(size: 11, weight: .medium))
+                            .lineLimit(1).truncationMode(.middle)
+                            .frame(maxWidth: .infinity, alignment: .leading).help(row.item.modelName)
+                        column(row.item.tokenCount.map(RelayNumberFormatter.tokens) ?? "--")
+                            .help("总 Token：\(row.item.tokens)")
+                            .accessibilityLabel("总 Token：\(row.item.tokens)")
+                        column(row.item.cacheHitRate.map(RelayNumberFormatter.percent) ?? "--")
+                            .accessibilityLabel("缓存占比：" + (row.item.cacheHitRate.map(RelayNumberFormatter.percent) ?? "未知"))
+                        column(row.costPerMillionTokens.map { RelayNumberFormatter.money($0.amount, currency: $0.currency) } ?? "--")
+                            .help("百万 Token 平均费用：" + (row.costPerMillionTokens.map { RelayNumberFormatter.money($0.amount, currency: $0.currency) } ?? "未知"))
+                        column(row.item.cost.map { RelayNumberFormatter.money($0, currency: row.item.currency) } ?? "--")
+                            .help("当日消费：" + (row.item.cost.map { RelayNumberFormatter.money($0, currency: row.item.currency) } ?? "未知")
+                                + "；" + (row.spendShare.map { "已获取模型消费占比：" + RelayNumberFormatter.percent($0) } ?? "已获取模型消费占比未知"))
+                    }
+                    .font(.system(size: 10)).monospacedDigit()
+                    .padding(.horizontal, 7).padding(.vertical, 7)
+                    .background(.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 7))
+                }
+            } else {
+                Text(items == nil ? unavailableMessage : "该日期没有模型消耗记录。")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func column(_ text: String) -> some View {
+        Text(text).lineLimit(1).minimumScaleFactor(0.8)
+            .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+}
+
+private struct ModelUsageColumns: Layout {
+    private let spacing: CGFloat = 4
+    private let weights: [CGFloat] = [2.1, 1, 0.85, 1.4, 1.3]
+    private func widths(_ width: CGFloat) -> [CGFloat] {
+        let available = max(0, width - spacing * 4)
+        return weights.map { available * $0 / weights.reduce(0, +) }
+    }
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? 310
+        let height = zip(subviews, widths(width)).map { view, width in
+            view.sizeThatFits(ProposedViewSize(width: width, height: nil)).height
+        }.max() ?? 0
+        return CGSize(width: width, height: height)
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX
+        for (view, width) in zip(subviews, widths(bounds.width)) {
+            view.place(at: CGPoint(x: x, y: bounds.midY), anchor: .leading,
+                       proposal: ProposedViewSize(width: width, height: bounds.height))
+            x += width + spacing
         }
     }
 }

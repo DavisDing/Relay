@@ -81,6 +81,7 @@ public struct DeepSeekUsageService: DeepSeekUsageProviding, Sendable {
                 accountID: accountID,
                 day: historyCalendar.startOfDay(for: $0.day),
                 spend: $0.spend,
+                modelUsages: $0.modelUsages,
                 updatedAt: report.fetchedAt
             )
         }
@@ -378,6 +379,8 @@ private struct UsageAccumulator {
     var dailyTokens: [String: Int64] = [:]
     var dailyRequests: [String: Int64] = [:]
     var dailyCosts: [String: Decimal] = [:]
+    var dailyModelAmounts: [String: [String: [String: Int64]]] = [:]
+    var dailyModelCosts: [String: [String: Decimal]] = [:]
     var totalTokens: Int64 = 0
     var totalRequests: Int64 = 0
     var totalCost: Decimal = 0
@@ -424,6 +427,7 @@ private struct UsageAccumulator {
             for model in day.data {
                 for item in model.usage {
                     let value = integerValue(item.amount)
+                    dailyModelAmounts[key, default: [:]][model.model ?? "(unknown)", default: [:]][item.type ?? "(unknown)", default: 0] += value
                     if item.type == "REQUEST" { dailyRequests[key, default: 0] += value }
                     else { dailyTokens[key, default: 0] += value }
                 }
@@ -435,6 +439,7 @@ private struct UsageAccumulator {
             for model in day.data {
                 for item in model.usage where item.type != "REQUEST" {
                     dailyCosts[key, default: 0] += item.amount
+                    dailyModelCosts[key, default: [:]][model.model ?? "(unknown)", default: 0] += item.amount
                 }
             }
         }
@@ -477,9 +482,28 @@ private struct UsageAccumulator {
                 day: date,
                 spend: dailyCosts[key].map { MoneyValue(amount: $0, currency: currency) },
                 tokenCount: dailyTokens[key],
-                requestCount: dailyRequests[key]
+                requestCount: dailyRequests[key],
+                modelUsages: dailyModels(for: key)
             )
         }.sorted { $0.day < $1.day }
+    }
+
+    private func dailyModels(for key: String) -> [ModelUsageSummary] {
+        let amounts = dailyModelAmounts[key] ?? [:]
+        let costs = dailyModelCosts[key] ?? [:]
+        return Set(amounts.keys).union(costs.keys).map { name in
+            let categories = amounts[name]
+            let tokens = categories.map { $0.filter { $0.key != "REQUEST" }.values.reduce(Int64(0), +) }
+            let hit = categories?["PROMPT_CACHE_HIT_TOKEN"]
+            let miss = categories?["PROMPT_CACHE_MISS_TOKEN"]
+            let cacheRate: Decimal? = hit.flatMap { hit in
+                guard let miss, hit >= 0, miss >= 0, Decimal(hit) + Decimal(miss) > 0 else { return nil }
+                return Decimal(hit) / (Decimal(hit) + Decimal(miss))
+            }
+            return ModelUsageSummary(modelName: name, tokenCount: tokens,
+                requestCount: categories?["REQUEST"], cacheHitRate: cacheRate,
+                spend: costs[name].map { MoneyValue(amount: $0, currency: currency) })
+        }.sorted(by: ModelUsageSummary.spendDescending)
     }
 
     private var modelRows: [ModelUsageSummary] {

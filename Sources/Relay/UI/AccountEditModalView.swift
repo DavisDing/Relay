@@ -1,5 +1,28 @@
 import SwiftUI
 
+@MainActor
+struct AccountEditContainerView: View {
+    @ObservedObject var store: RelayStore
+    let account: AccountModel
+    let onDismiss: () -> Void
+    let onSave: (String, Decimal?, ProviderCredential?, ManualExchangeRateUpdate, String?, OptionalStringUpdate, AccountPreferencesUpdate) async throws -> Void
+    var body: some View {
+        let id = UUID(uuidString: account.id)
+        AccountEditModalView(account: account,
+            accountConfiguration: id.flatMap { store.accountConfiguration(id: $0) },
+            historyBackfillState: id.flatMap { store.historyBackfillStates[$0] },
+            onHistoryBackfill: { days in
+                guard let id else { return }
+                store.startHistoryBackfill(accountID: id, days: days)
+            },
+            onCancelHistoryBackfill: {
+                guard let id else { return }
+                store.cancelHistoryBackfill(accountID: id)
+            }, onDismiss: onDismiss, onSave: onSave)
+    }
+}
+
+
 /// Edits non-secret account metadata and optionally replaces the provider credential.
 /// Existing secrets are never read into or displayed by the UI.
 public struct AccountEditModalView: View {
@@ -7,6 +30,9 @@ public struct AccountEditModalView: View {
     public var onDismiss: () -> Void
     public var onSave: (String, Decimal?, ProviderCredential?, ManualExchangeRateUpdate, String?, OptionalStringUpdate, AccountPreferencesUpdate) async throws -> Void
 
+    public let historyBackfillState: HistoryBackfillState?
+    public var onHistoryBackfill: (Int) -> Void
+    public var onCancelHistoryBackfill: () -> Void
     private let hasPreferencesConfiguration: Bool
     @State private var monthlyBudget: String
     @State private var budgetCurrency: Currency
@@ -26,10 +52,16 @@ public struct AccountEditModalView: View {
     public init(
         account: AccountModel,
         accountConfiguration: AccountConfiguration? = nil,
+        historyBackfillState: HistoryBackfillState? = nil,
+        onHistoryBackfill: @escaping (Int) -> Void = { _ in },
+        onCancelHistoryBackfill: @escaping () -> Void = {},
         onDismiss: @escaping () -> Void = {},
         onSave: @escaping (String, Decimal?, ProviderCredential?, ManualExchangeRateUpdate, String?, OptionalStringUpdate, AccountPreferencesUpdate) async throws -> Void = { _, _, _, _, _, _, _ in }
     ) {
         self.account = account
+        self.historyBackfillState = historyBackfillState
+        self.onHistoryBackfill = onHistoryBackfill
+        self.onCancelHistoryBackfill = onCancelHistoryBackfill
         let configuration = accountConfiguration.flatMap { $0.id.uuidString == account.id ? $0 : nil }
         self.hasPreferencesConfiguration = configuration != nil
         _monthlyBudget = State(initialValue: configuration?.monthlyBudget.map { NSDecimalNumber(decimal: $0.amount).stringValue } ?? "")
@@ -99,6 +131,10 @@ public struct AccountEditModalView: View {
                                                  groupName: $groupName, isPinned: $isPinned, provider: account.kind)
                     }
 
+                    if hasPreferencesConfiguration && account.kind != .workbuddy2api {
+                        Divider()
+                        historyBackfillControls
+                    }
                     Divider()
                     Text("替换凭据（可选，留空保持不变）")
                         .font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
@@ -142,6 +178,39 @@ public struct AccountEditModalView: View {
         .frame(width: RelayVisualStyle.panelWidth)
         .frame(maxHeight: .infinity)
         .relayPanelSurface(cornerRadius: RelayVisualStyle.panelCornerRadius)
+    }
+
+    private var hasUnsavedHistoryConfiguration: Bool {
+        !replacementSecret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !replacementUserID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !replacementDeepSeekUserToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || clearDeepSeekUserToken
+    }
+
+    private var historyBackfillControls: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text("历史回填").font(.system(size: 12, weight: .semibold))
+            HStack(spacing: 8) {
+                Button("回填近 7 日") { onHistoryBackfill(7) }
+                Button("回填近 30 日") { onHistoryBackfill(30) }
+            }.buttonStyle(.bordered).controlSize(.small)
+                .disabled(!account.isEnabled || historyBackfillState?.isActive == true || hasUnsavedHistoryConfiguration)
+            Text(hasUnsavedHistoryConfiguration ? "请先保存凭据变更，再打开编辑账户进行回填。" : account.isEnabled
+                ? "仅补齐今天以前的记录；使用已保存的凭据，今天由正常刷新更新。"
+                : "账户已停用，启用后可回填历史。")
+                .font(.system(size: 10)).foregroundStyle(.secondary)
+            if let state = historyBackfillState {
+                if state.isActive {
+                    HStack {
+                        ProgressView(value: state.progress).frame(maxWidth: .infinity)
+                        Button("取消回填", action: onCancelHistoryBackfill).controlSize(.small)
+                            .disabled(state.phase == .cancelling)
+                    }
+                }
+                Text(state.message).font(.system(size: 10))
+                    .foregroundStyle(state.phase == .failed ? Color.red : Color.secondary)
+            }
+        }
     }
 
     private var exchangeRateFields: some View {

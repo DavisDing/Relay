@@ -100,7 +100,8 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
                 onPresentDetail: { [weak self] account in
                     self?.showAccountDetailWindow(accountID: account.id)
                 },
-                onPresentEdit: { [weak self] account in self?.showAccountEditWindow(account: account) }
+                onPresentEdit: { [weak self] account in self?.showAccountEditWindow(account: account) },
+                onPresentConsumptionOverview: { [weak self] in self?.showConsumptionOverviewWindow() }
             )
         )
 
@@ -139,6 +140,7 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
                 NSApp.activate(ignoringOtherApps: true)
                 window.deminiaturize(nil)
                 window.makeKeyAndOrderFront(nil)
+                window.makeFirstResponder(window.initialFirstResponder)
             }
             return
         }
@@ -148,6 +150,9 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
             NSApp.activate(ignoringOtherApps: true)
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             popover.contentViewController?.view.window?.makeKey()
+            if let window = popover.contentViewController?.view.window {
+                window.makeFirstResponder(window.initialFirstResponder)
+            }
         }
     }
 
@@ -377,6 +382,7 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
         NSApp.activate(ignoringOtherApps: true)
         controller.showWindow(nil)
         window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(window.initialFirstResponder)
     }
 
     private func closeAuxiliaryWindow() {
@@ -397,6 +403,12 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
                     return try await self.store.probe(draft)
                 }
             )
+        }
+    }
+
+    private func showConsumptionOverviewWindow() {
+        presentAuxiliaryWindow(title: "消费总览", size: NSSize(width: RelayVisualStyle.panelWidth, height: 480)) {
+            ConsumptionOverviewView(store: self.store, onClose: { [weak self] in self?.closeAuxiliaryWindow() })
         }
     }
 
@@ -438,9 +450,9 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
 
     private func showAccountEditWindow(account: AccountModel) {
         presentAuxiliaryWindow(title: "编辑账号", size: NSSize(width: RelayVisualStyle.panelWidth, height: 520)) {
-            AccountEditModalView(
+            AccountEditContainerView(
+                store: self.store,
                 account: account,
-                accountConfiguration: UUID(uuidString: account.id).flatMap { self.store.accountConfiguration(id: $0) },
                 onDismiss: { [weak self] in self?.closeAuxiliaryWindow() },
                 onSave: { [weak self] name, threshold, credential, rateUpdate, baseURL, tokenUpdate, preferences in
                     guard let self, let id = UUID(uuidString: account.id) else { return }
@@ -475,6 +487,9 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
             NSApp.activate(ignoringOtherApps: true)
             self.popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             self.popover.contentViewController?.view.window?.makeKey()
+            if let window = self.popover.contentViewController?.view.window {
+                window.makeFirstResponder(window.initialFirstResponder)
+            }
         }
     }
 

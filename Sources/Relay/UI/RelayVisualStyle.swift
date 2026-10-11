@@ -76,7 +76,7 @@ private struct RelayInsetSurfaceModifier: ViewModifier {
 public extension View {
     /// Native material container used by the main dashboard and auxiliary pages.
     func relayPanelSurface(cornerRadius: CGFloat = RelayVisualStyle.panelCornerRadius) -> some View {
-        modifier(RelayPanelSurfaceModifier(cornerRadius: cornerRadius))
+        modifier(RelayPanelSurfaceModifier(cornerRadius: cornerRadius)).relayInitialFocus()
     }
 
     /// Native material card used for summary, metric and account tiles.

@@ -300,6 +300,24 @@ enum PipioDashboardContractChecks {
         try verify(dashboardCalls == 1 && statCalls == 1, "one shared today dashboard request, only month uses stat")
         let history = try await mismatchAdapter.fetchDailyUsage(for: account, credential: credential, rate: rate, endingAt: now, days: 7, calendar: calendar)
         try verify(history.count == 6 && history.allSatisfy { $0.day < start }, "history backfill cannot overwrite today's dashboard snapshot")
+        let dashboardHistoryCalls = await mismatchClient.count("/api/data/self")
+        try verify(dashboardHistoryCalls == 7 && history.allSatisfy { $0.modelUsages == [] },
+                   "historical dashboard requests exclude today's buckets, retaining known empty days")
+        let historicalDay = calendar.date(byAdding: .day, value: -1, to: start)!
+        var historicalBucket = row("yesterday-model", quota: 500000, tokens: 1200)
+        historicalBucket["created_at"] = Int64(historicalDay.timeIntervalSince1970) + 3600
+        let historicalClient = DashboardFixtureClient(dashboard: try envelope([historicalBucket]))
+        let historicalAdapter = PipioAdapter(client: historicalClient)
+        let historicalRows = try await historicalAdapter.fetchDailyUsage(for: account, credential: credential,
+            rate: rate, endingAt: now, days: 2, calendar: calendar)
+        try verify(historicalRows.first?.modelUsages?.first?.modelName == "yesterday-model"
+                    && historicalRows.first?.modelUsages?.first?.tokenCount == 1200,
+                   "completed-day model buckets survive provider history output")
+        let unavailableHistoricalClient = DashboardFixtureClient(dashboard: data, rejectDashboard: true)
+        let unavailableHistorical = try await PipioAdapter(client: unavailableHistoricalClient).fetchDailyUsage(
+            for: account, credential: credential, rate: rate, endingAt: now, days: 2, calendar: calendar)
+        try verify(unavailableHistorical.first?.spend != nil && unavailableHistorical.first?.modelUsages == nil,
+                   "optional historical model failure cannot discard valid daily consumption")
         let oneDay = try await mismatchAdapter.fetchDailyUsage(for: account, credential: credential, rate: rate, endingAt: now, days: 1, calendar: calendar)
         try verify(oneDay.isEmpty, "one-day history already covered by snapshot")
         let creationRepository = InMemoryLocalRepository()

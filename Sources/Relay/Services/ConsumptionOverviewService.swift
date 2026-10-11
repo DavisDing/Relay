@@ -12,6 +12,7 @@ public struct ConsumptionOverviewRow: Identifiable, Sendable {
     public let id: UUID
     public let name: String
     public let group: String
+    public let today: ConsumptionPeriod
     public let month: ConsumptionPeriod
     public let previousMonth: ConsumptionPeriod
     public let comparableCurrentPeriod: ConsumptionPeriod
@@ -47,6 +48,7 @@ public enum ConsumptionOverviewService {
             let matchedEnd = calendar.date(byAdding: .day, value: min(completedDays, previousDays), to: previous.start) ?? previous.end
             let records = history.filter { $0.accountID == account.id }
             return ConsumptionOverviewRow(id: account.id, name: account.displayName, group: account.groupName ?? "未分组",
+                today: period(records, from: calendar.startOfDay(for: now), to: tomorrow, calendar: calendar),
                 month: period(records, from: month.start, to: tomorrow, calendar: calendar),
                 previousMonth: period(records, from: previous.start, to: previous.end, calendar: calendar),
                 comparableCurrentPeriod: period(records, from: month.start, to: calendar.startOfDay(for: now), calendar: calendar),
@@ -54,11 +56,12 @@ public enum ConsumptionOverviewService {
         }
     }
 
-    public static func groups(_ rows: [ConsumptionOverviewRow]) -> [ConsumptionGroup] {
+    public static func groups(_ rows: [ConsumptionOverviewRow], daily: Bool = false) -> [ConsumptionGroup] {
         Dictionary(grouping: rows, by: \.group).map { name, rows in
-            let amounts = sums(rows.flatMap { $0.month.amounts })
-            return ConsumptionGroup(name: name, amounts: amounts, knownDays: rows.reduce(0) { $0 + $1.month.knownDays },
-                expectedDays: rows.reduce(0) { $0 + $1.month.expectedDays })
+            let periods = rows.map { daily ? $0.today : $0.month }
+            let amounts = sums(periods.flatMap(\.amounts))
+            return ConsumptionGroup(name: name, amounts: amounts, knownDays: periods.reduce(0) { $0 + $1.knownDays },
+                expectedDays: periods.reduce(0) { $0 + $1.expectedDays })
         }.sorted { $0.name < $1.name }
     }
 

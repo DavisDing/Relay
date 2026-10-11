@@ -65,6 +65,7 @@ struct WindowNavigationContractChecks {
         let add: () -> Void = try field("onPresentAddAccount", in: host.rootView)
         let edit: (AccountModel) -> Void = try field("onPresentEdit", in: host.rootView)
         let detail: (AccountModel) -> Void = try field("onPresentDetail", in: host.rootView)
+        let consumption: (() -> Void)? = try field("onPresentConsumptionOverview", in: host.rootView)
         let account = store.accounts[0]
         func currentWindow() throws -> NSWindow? {
             let windowController: NSWindowController? = try field("auxiliaryWindowController", in: controller)
@@ -72,7 +73,7 @@ struct WindowNavigationContractChecks {
         }
         let routes: [(String, () -> Void)] = [
             ("settings", settings), ("add", add), ("edit", { edit(account) }),
-            ("detail", { detail(account) })
+            ("detail", { detail(account) }), ("consumption", { consumption?() })
         ]
         controller.toggle()
         try await eventually("menu-bar anchor can show home") { popover.isShown }
@@ -85,6 +86,9 @@ struct WindowNavigationContractChecks {
             try check(window.isOpaque == false, "\(name) keeps the panel surface transparent outside its rounded content")
             try check(!popover.isShown, "Opening \(name) hides home")
             try check(window.canBecomeKey && window.canBecomeMain, "\(name) accepts keyboard focus")
+            try await eventually("\(name) initially focuses a neutral responder") {
+                window.firstResponder is RelayInitialFocusView
+            }
             try check(window.isReleasedWhenClosed == false && window.isRestorable == false,
                       "\(name) keeps the existing transient panel lifecycle")
 

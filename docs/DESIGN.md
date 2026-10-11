@@ -24,7 +24,7 @@
 
 - `MainPopoverView`：总览、搜索、分组、置顶排序和账户入口。
 - `AccountAddModalView` / `AccountEditModalView`：账户字段、预算、分组、置顶和凭据编辑。
-- `AccountDetailContainerView` / `AccountDetailView`：账户实时投影、趋势、模型和历史补齐状态。
+- `AccountDetailContainerView` / `AccountDetailView`：账户实时投影、固定近 7 日趋势和按日模型明细。
 - `SettingsDataPage`：刷新、历史保留、月预算通知。
 - `SettingsSyncPage` + `DataTransferPanel`：iCloud 普通文件同步、CSV、配置导入导出和本机备份。
 - `RelayMenuBarController`：菜单栏状态、Popover 和辅助窗口导航。
@@ -57,7 +57,7 @@ UI 不拼供应商 URL、不解码供应商 JSON、不持有长期凭据。关�
 
 - `AccountConfiguration` 持久化账户 ID、供应商、站点、启用/隐藏、低余额阈值、手动汇率、月预算、分组、置顶、排序和时间。
 - `ProviderSnapshot` 持久化余额、今日/月消费、请求量、模型使用、能力、数据新鲜度、账户汇率和 workbuddy2api 子账户。
-- `DailyUsageRecord` 保存账户级日消费；模型聚合保留在快照或相关模型结构中。
+- `DailyUsageRecord` 保存账户级日消费及可选 `modelUsages`。新增字段向后兼容，旧记录解码为 nil（未知），空数组表示已知无模型；日模型随原日记录原子持久化、同步和备份，不修改 CSV 口径。
 - `RelaySettings` 当前 schema 1，包含刷新间隔、菜单栏今日消费、基础币种、默认低余额阈值、历史保留和同步开关。
 - `RelaySyncData` 当前 schema 1；本地 JSON 另有 schema 2 兼容检查。配置导出使用独立的 `RelayConfigurationArchive`。
 - `ProviderCredential` schema 为 2，独立保存本机秘密，不作为同步模型。便携 UUID 引用不是凭据正文；合并不能覆盖已保存的本机引用。
@@ -133,11 +133,13 @@ UI 不拼供应商 URL、不解码供应商 JSON、不持有长期凭据。关�
 
 ## 6. 历史、预算和模型分析
 
-历史补齐只覆盖今天以前的目标日，过滤无效和跨币种记录，所有目标日处理完后一次性提交；不覆盖正常刷新写入的今日记录。供应商不支持时显示不可用原因。
+回填入口位于 `AccountEditContainerView` / `AccountEditModalView`，观察共享 store 的进度与取消状态；使用已保存凭据，待保存凭据变更时禁用回填。详情保持固定近 7 日，无范围选择器。历史补齐只覆盖今天以前的目标日，过滤无效和跨币种记录，所有目标日处理完后一次性提交；不覆盖正常刷新写入的今日记录。供应商不支持时显示不可用原因。
 
 预算展示校验同月、同币和有效数值；通知另要求 fresh。Pipio 使用本机日历，DeepSeek 使用 UTC+8 公历。80% 和 100% 通知按账户、月份、币种和预算值持久化去重。
 
-模型分析按消费降序、Token 降序或名称稳定排序，同额按名称，未知消费排最后；免费和未知行保留。消费占比要求列表中金额已知、同币种且总额大于零，不将其宣称为未知请求范围的完整占比；混币消费排序先按币种分组，不比较不同币种原始数字。单位成本按各行可确认消费/正 Token 数计算，百万 Token 为单位。总 Token 优先服务商总数，否则按可确认输入、缓存读取/写入和输出计一次；缓存读取率按完整输入组成汇总分子/分母，未满足条件保持未知。显示用 K/M/B/T/P/E 缩写，悬停与辅助功能保留完整数值。
+`DailyModelUsageService` 按账户 ID 和供应商真实日期选择日模型，初始当天，`AdaptiveLineChart.onSelect` 回传稳定记录 ID 后切换日期。Pipio 回填同时读取该日看板模型桶；DeepSeek 从平台按日、按模型用量/费用桶归集，今日快照使用当天模型而非月度模型。旧 Pipio 同日快照可以回退；旧 DeepSeek 月度快照不按日复用。workbuddy2api 只有累计模型统计，显示按日不支持，不伪造日模型。
+
+模型面板每行五列为模型名、总 Token、缓存占比、费用/百万 Token、当日消费，列宽共享、单行截断，悬停与辅助文本保留完整值；保留排序和 Top 5，消费占比移至悬停。模型分析按消费降序、Token 降序或名称稳定排序，同额按名称，未知消费排最后；免费和未知行保留。消费占比要求列表中金额已知、同币种且总额大于零，不将其宣称为未知请求范围的完整占比；混币消费排序先按币种分组，不比较不同币种原始数字。单位成本按各行可确认消费/正 Token 数计算，百万 Token 为单位。总 Token 优先服务商总数，否则按可确认输入、缓存读取/写入和输出计一次；缓存读取率按完整输入组成汇总分子/分母，未满足条件保持未知。显示用 K/M/B/T/P/E 缩写，悬停与辅助功能保留完整数值。
 
 低余额/预算通知需用户开启和系统授权；发送前重查账户启用、可见性、最新快照、阈值和本机去重状态，单账户成功不等待其他账户长退避。
 
@@ -185,6 +187,10 @@ UI 不拼供应商 URL、不解码供应商 JSON、不持有长期凭据。关�
 
 共享 `RelayVisualStyle` 保留页面 `regularMaterial`、卡片 `thinMaterial`、嵌套 `ultraThinMaterial`；不自绘模糊/渐变替代系统材质。首页汇总内容居中，搜索在账号标题右侧；设置分为通用、数据、快捷键、同步、账户管理、关于。辅助窗口锚定首页位置，显式退出返回首页，保存失败留原页，替换窗口不闪现首页。
 
+点击首页原有“今日总消耗”卡片通过既有 AppKit 辅助窗口打开 `ConsumptionOverviewView`，完成后返回首页，默认当日，可切换月度；分组与账户金额复用日记录，原币、覆盖与环比规则不变。
+
+`relayPanelSurface` 嵌入 `RelayInitialFocusView` 中性响应者，页面装入窗口时设置初始焦点；设置切换分页重新安装中性响应者，窗口展示后同步确认初始响应者，不用延迟回调抢走用户点击后的焦点。文本框与图表保留点击、Tab 和辅助功能选择能力；图表初始选择为 nil，只在用户操作时回传。
+
 `AdaptiveLineChart` 在趋势较密时限制标签，保留选中点、键盘和辅助功能描述；缺日继续使用未知语义。
 
 页面按实际场景区分 Loading、Empty、Refreshing、Partial、Stale、Error、Success。典型错误包括凭据失效、权限不足、限流、网络、响应不兼容、本地存储不可用、bookmark 失效、同步冲突、配置冲突和备份迁移冲突。
@@ -229,6 +235,8 @@ UI 不拼供应商 URL、不解码供应商 JSON、不持有长期凭据。关�
 
 新增 `StrengtheningChecks` 关联 AC-023～AC-032；完整离线回归、三个契约、GUI build-only、SwiftPM 构建和本机重定向专项在基于 `2b4a117` 的当前未提交工作区通过。备份重新创建服务后重试已由 fixture 覆盖，子进程强制退出在复制与清理阶段另有检查；真实断电和原生目录授权仍未验收。
 
+日模型回归覆盖旧 JSON 解码、日期/账户隔离、空与未知、DeepSeek 日模型与月度总量分离、Pipio 历史看板可选失败和回填提交后模型保留。界面焦点与五列布局需要原生图形会话验收；`WindowNavigationContractChecks` 已增加初始中性响应者检查，build-only 不代替运行。
+
 专项运行入口 `scripts/test-provider-redirects.sh` 用两个本机回环服务器验证生产 URLSession 的同来源认证和跨端口/多跳/方法变化保护，不连接真实供应商，不证明供应商 HTTPS 实机对账。系统通知和原生目录选择仍需实际应用环境。
 
 ## 12. 当前决策
@@ -265,7 +273,7 @@ UI 不拼供应商 URL、不解码供应商 JSON、不持有长期凭据。关�
 | 请求跳转 | `HTTPClient` 默认 ephemeral 会话 + `ProviderRedirectDelegate` → `ProviderRedirectPolicy` | 每跳比较原请求来源、端口、方法；跨站/降级/用户信息拒绝，同来源保留认证。loopback 例外不扩大。 |
 | 搬移恢复 | `LocalBackupService` 本机 `.relay-backup-migration.json` → 同步页显式重试 | 清单含目录/bookmark/阶段/文件名/hash。目录选择以私有原子 `.relay-backup-selection.json` 为提交标记，`relay.localBackupSelection`/旧键只作兼容提示。双方内容重新核验后清理，修改或授权失效保持待处理；期间暂停五代裁剪。 |
 | 通知状态 | `NotificationStatusService` / `NotificationStatusPanel`，嵌入低余额与预算区 | 检查系统授权/横幅状态，固定示例测试不消费去重；展示提交失败，不声称系统接受就是已展示。 |
-| 消费总览 | 首页入口 → `ConsumptionOverviewView` / `ConsumptionOverviewService` | 按供应商日历、原币日记录统计本月/上月及覆盖，不重复累加月快照；已结束自然日的完整同币同长度同期且上期非零才显示环比。 |
+| 消费总览 | 首页今日总消耗卡片 → `ConsumptionOverviewView` / `ConsumptionOverviewService` | 按供应商日历、原币日记录统计当日、本月/上月及覆盖，不重复累加月快照；已结束自然日的完整同币同长度同期且上期非零才显示环比。 |
 | 脱敏诊断 | 设置关于 → `DiagnosticExportPanel` → 白名单 `RelayDiagnosticReport` | 预览固定内容后主动保存，无账号名、UUID、URL、路径、原始错误或凭据，不上传；存储故障时关于页仍可用。 |
 | 备份摘要 | 既有同步页 → `LocalBackupService.summary` | 有效份数、容量、最近日期与待处理状态，支持打开目录、重试及重新授权。 |
 | 导入差异 | `ConfigurationDiffService` → 既有确认 sheet | 逐字段前后值、设置变化、历史清除及重填凭据提示；现有 CAS 保留，同步开关保留本机。 |

@@ -23,17 +23,8 @@ struct AccountDetailContainerView: View {
                 dataErrorMessage: state.errorMessage,
                 health: historyID.map { store.health(for: $0) },
                 historyRecords: historyID.map { store.dailyUsage(accountID: $0, limit: nil) },
-                historyBackfillState: historyID.flatMap { store.historyBackfillStates[$0] },
                 monthlyBudget: configuration?.monthlyBudget,
                 budgetSnapshot: historyID.flatMap { id in store.snapshots.first { $0.accountID == id } },
-                onHistoryBackfill: { days in
-                    guard let historyID else { return }
-                    store.startHistoryBackfill(accountID: historyID, days: days)
-                },
-                onCancelHistoryBackfill: {
-                    guard let historyID else { return }
-                    store.cancelHistoryBackfill(accountID: historyID)
-                },
                 onClose: onClose,
                 onSubAccountAction: onSubAccountAction
             )
@@ -51,8 +42,8 @@ struct AccountDetailContainerView: View {
     }
 }
 
-/// Account details with persisted daily aggregates and the provider's current
-/// model aggregate. Relay backfills only documented provider history and never
+/// Account details with persisted daily and model aggregates.
+/// Relay backfills only documented provider history and never
 /// fabricates a spend value for days that cannot be queried.
 public struct AccountDetailView: View {
     public let account: AccountModel
@@ -62,12 +53,9 @@ public struct AccountDetailView: View {
     public let dataErrorMessage: String?
     public let health: AccountHealth?
     public let historyRecords: [DailyUsageRecord]?
-    public let historyBackfillState: HistoryBackfillState?
     public let monthlyBudget: MoneyValue?
     public let budgetSnapshot: ProviderSnapshot?
-    public var onHistoryBackfill: (Int) -> Void
-    public var onCancelHistoryBackfill: () -> Void
-    @State private var selectedHistoryDays = 7
+    @State private var selectedHistoryPointID: String?
     public var onClose: () -> Void
     public var onSubAccountAction: (ProviderSubAccountAction, UUID, String) async throws -> Void
     @State private var confirmingAction: ProviderSubAccountAction?
@@ -82,11 +70,8 @@ public struct AccountDetailView: View {
         dataErrorMessage: String? = nil,
         health: AccountHealth? = nil,
         historyRecords: [DailyUsageRecord]? = nil,
-        historyBackfillState: HistoryBackfillState? = nil,
         monthlyBudget: MoneyValue? = nil,
         budgetSnapshot: ProviderSnapshot? = nil,
-        onHistoryBackfill: @escaping (Int) -> Void = { _ in },
-        onCancelHistoryBackfill: @escaping () -> Void = {},
         onClose: @escaping () -> Void = {},
         onSubAccountAction: @escaping (ProviderSubAccountAction, UUID, String) async throws -> Void = { _, _, _ in }
     ) {
@@ -97,11 +82,8 @@ public struct AccountDetailView: View {
         self.dataErrorMessage = dataErrorMessage
         self.health = health
         self.historyRecords = historyRecords
-        self.historyBackfillState = historyBackfillState
         self.monthlyBudget = monthlyBudget
         self.budgetSnapshot = budgetSnapshot
-        self.onHistoryBackfill = onHistoryBackfill
-        self.onCancelHistoryBackfill = onCancelHistoryBackfill
         self.onClose = onClose
         self.onSubAccountAction = onSubAccountAction
     }
@@ -124,15 +106,15 @@ public struct AccountDetailView: View {
                         trendSection
                     }
 
-                    if account.kind == .deepseek {
-                        DeepSeekUsageSection(
-                            report: deepSeekUsageReport ?? UUID(uuidString: account.id).map { DeepSeekUsageReport.unsupported(accountID: $0) }
-                        )
-                    } else {
-                        if modelUsages.isEmpty { modelUsageSection }
-                        else { ModelAnalysisPanel(items: modelUsages) }
+                    if account.kind == .deepseek, deepSeekUsageReport?.coverage == .unsupported {
+                        DeepSeekUsageSection(report: deepSeekUsageReport)
                     }
-                    if account.kind == .deepseek { ModelAnalysisPanel(items: modelUsages) }
+                    ModelAnalysisPanel(items: selectedModelItems, dateLabel: selectedModelDateLabel,
+                        unavailableMessage: account.kind == .workbuddy2api
+                            ? "网关只提供进程累计模型统计，暂不支持按日模型明细。"
+                            : historyCalendar.isDateInToday(selectedModelDate)
+                                ? "当天暂无可用模型明细，请刷新账户。"
+                                : "该日期暂无可用模型明细，可在编辑账户中回填历史。")
                 }
                 .padding(.horizontal, 18)
                 .padding(.bottom, 14)
@@ -277,7 +259,7 @@ public struct AccountDetailView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("近 \(selectedHistoryDays) 日消耗趋势")
+                    Text("近 7 日消耗趋势")
                         .font(.system(size: 13, weight: .semibold))
                     Text(account.kind == .pipio ? "历史按已完成日期查询，今天由正常刷新更新。" : account.kind == .workbuddy2api ? "根据 /v1/stats 的进程累计积分计算刷新增量；无法恢复未采集日期。" : "平台历史使用手动填写的 userToken，按北京时间统计；缺失日期为未知。")
                         .font(.system(size: 10))
@@ -299,7 +281,9 @@ public struct AccountDetailView: View {
                 .frame(height: 155)
                 .background(.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
             } else {
-                AdaptiveLineChart(dataPoints: displayedHistoryPoints, unit: account.kind == .workbuddy2api ? "积分" : account.currency.symbol)
+                AdaptiveLineChart(dataPoints: displayedHistoryPoints,
+                    unit: account.kind == .workbuddy2api ? "积分" : account.currency.symbol,
+                    onSelect: { selectedHistoryPointID = $0?.id })
                     .frame(height: 165)
                     .padding(8)
                     .background(.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
@@ -314,10 +298,10 @@ public struct AccountDetailView: View {
     private var historyAccountID: UUID? { account.parentAccountID ?? UUID(uuidString: account.id) }
 
     private var displayedHistoryPoints: [DailySpendPoint] {
-        guard let historyRecords, let id = historyAccountID else { return spendPoints }
+        guard let historyRecords, let id = historyAccountID else { return Array(spendPoints.suffix(7)) }
         let calendar = historyCalendar
         let today = calendar.startOfDay(for: Date())
-        guard let firstDay = calendar.date(byAdding: .day, value: -(selectedHistoryDays - 1), to: today),
+        guard let firstDay = calendar.date(byAdding: .day, value: -6, to: today),
               let afterToday = calendar.date(byAdding: .day, value: 1, to: today) else { return [] }
         let formatter = DateFormatter(); formatter.calendar = calendar
         formatter.timeZone = calendar.timeZone; formatter.dateFormat = "MM/dd"
@@ -333,119 +317,38 @@ public struct AccountDetailView: View {
     private var historyCoverageControls: some View {
         if let historyRecords, let id = historyAccountID {
             let coverage = HistoryCoverage.calculate(records: historyRecords, accountID: id,
-                days: selectedHistoryDays, calendar: historyCalendar, currency: account.currency)
-            VStack(alignment: .leading, spacing: 7) {
-                HStack {
-                    Picker("历史范围", selection: $selectedHistoryDays) {
-                        Text("7 日").tag(7)
-                        Text("30 日").tag(30)
-                    }.pickerStyle(.segmented).frame(width: 135)
-                    Spacer()
-                    Text("有效金额 \(coverage.knownDays)/\(coverage.days) 天")
-                        .font(.system(size: 10)).foregroundStyle(.secondary)
-                }
-                if !coverage.isComplete {
-                    Text("尚有 \(coverage.missingDays.count) 天金额未知；图表只绘制已有记录，不能据此判断完整区间总额。")
-                        .font(.system(size: 10)).foregroundStyle(.secondary)
-                }
-                if account.kind != .workbuddy2api {
-                    HStack(spacing: 8) {
-                        Button("回填近 7 日") { onHistoryBackfill(7) }
-                        Button("回填近 30 日") { onHistoryBackfill(30) }
-                    }.buttonStyle(.bordered).controlSize(.small)
-                        .disabled(!account.isEnabled || historyBackfillState?.isActive == true)
-                    if !account.isEnabled {
-                        Text("账户已停用，启用后可回填历史。")
-                            .font(.system(size: 10)).foregroundStyle(.secondary)
-                    }
-                }
-                if let state = historyBackfillState {
-                    if state.isActive {
-                        HStack {
-                            if account.kind == .deepseek { ProgressView().controlSize(.small) }
-                            else { ProgressView(value: state.progress).frame(maxWidth: .infinity) }
-                            Button("取消", action: onCancelHistoryBackfill).controlSize(.small)
-                                .disabled(state.phase == .cancelling)
-                        }
-                    }
-                    Text(state.message).font(.system(size: 10))
-                        .foregroundStyle(state.phase == .failed ? Color.red : Color.secondary)
-                }
+                days: 7, calendar: historyCalendar, currency: account.currency)
+            Text("有效金额 \(coverage.knownDays)/7 天")
+                .font(.system(size: 10)).foregroundStyle(.secondary)
+            if !coverage.isComplete {
+                Text("尚有 \(coverage.missingDays.count) 天金额未知；图表只绘制已有记录。")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
             }
         }
     }
 
-    private var modelUsageSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("模型消耗分析")
-                .font(.system(size: 13, weight: .semibold))
-
-            if modelUsages.isEmpty {
-                Text("服务商未返回可用的分模型消耗数据。")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .padding(.vertical, 5)
-            } else {
-                ModelUsageColumnLayout {
-                    Text("模型")
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    Text("总 Token")
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                    Text("缓存读取")
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                    Text("消耗")
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                }
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 9)
-
-                ForEach(modelUsages) { item in
-                    ModelUsageColumnLayout {
-                        Text(item.modelName)
-                            .font(.system(size: 11, weight: .medium))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.8)
-                            .truncationMode(.middle)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .help(item.modelName)
-                        Text(item.tokenCount.map { RelayNumberFormatter.tokens($0) } ?? item.tokens)
-                            .font(.system(size: 10))
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.75)
-                            .frame(maxWidth: .infinity, alignment: .trailing)
-                            .help("\(item.tokens) Token")
-                            .accessibilityLabel("总 Token：\(item.tokens)")
-                        Text(item.cacheHitRate.map(RelayNumberFormatter.percent) ?? "--")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.75)
-                            .frame(maxWidth: .infinity, alignment: .trailing)
-                        VStack(alignment: .trailing, spacing: 1) {
-                            Text(item.cost.map {
-                                account.kind == .workbuddy2api
-                                    ? RelayNumberFormatter.decimal($0)
-                                    : RelayNumberFormatter.money($0, currency: item.currency)
-                            } ?? "--")
-                                .font(.system(size: 11, weight: .semibold))
-                                .lineLimit(2)
-                                .minimumScaleFactor(0.75)
-                                .multilineTextAlignment(.trailing)
-                            Text(item.percentage.map { String(format: "%.0f%%", $0 * 100) } ?? "--")
-                                .font(.system(size: 9))
-                                .foregroundStyle(.secondary)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                    }
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 7)
-                    .background(.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 7))
-                }
-            }
+    private var selectedModelDate: Date {
+        if let selectedHistoryPointID,
+           let record = historyRecords?.first(where: { $0.id == selectedHistoryPointID }) {
+            return record.day
         }
+        return historyCalendar.startOfDay(for: Date())
+    }
+
+    private var selectedModelDateLabel: String {
+        if historyCalendar.isDateInToday(selectedModelDate) { return "今日" }
+        let formatter = DateFormatter()
+        formatter.calendar = historyCalendar; formatter.timeZone = historyCalendar.timeZone
+        formatter.dateFormat = "MM/dd"
+        return formatter.string(from: selectedModelDate)
+    }
+
+    private var selectedModelItems: [ModelUsageItem]? {
+        guard let id = historyAccountID else { return nil }
+        let models = DailyModelUsageService.models(accountID: id, provider: account.kind,
+            day: selectedModelDate, records: historyRecords ?? [], snapshot: budgetSnapshot,
+            calendar: historyCalendar)
+        return models.map { ModelUsageItem.items(from: $0, currency: account.currency) }
     }
 
     private var accountWebsiteURL: URL? {
@@ -513,36 +416,5 @@ private struct MetricCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(9)
         .relayGlassTile(cornerRadius: 10)
-    }
-}
-
-/// Fixed 2:1:1:1 column proportions for both the header and every model row.
-/// The first column gets two shares so model identifiers have more room while
-/// staying on one line and not competing with the numeric columns.
-private struct ModelUsageColumnLayout: Layout {
-    private let spacing: CGFloat = 4
-
-    private func columnWidths(for totalWidth: CGFloat) -> [CGFloat] {
-        let share = max(0, totalWidth - spacing * 3) / 5
-        return [share * 2, share, share, share]
-    }
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let width = proposal.width ?? subviews.reduce(CGFloat.zero) { $0 + $1.sizeThatFits(.unspecified).width } + spacing * 3
-        let widths = columnWidths(for: width)
-        let height = zip(subviews, widths).map { subview, columnWidth in
-            subview.sizeThatFits(ProposedViewSize(width: columnWidth, height: proposal.height)).height
-        }.max() ?? 0
-        return CGSize(width: width, height: height)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let widths = columnWidths(for: bounds.width)
-        var x = bounds.minX
-        for (subview, columnWidth) in zip(subviews, widths) {
-            subview.place(at: CGPoint(x: x, y: bounds.midY), anchor: .leading,
-                          proposal: ProposedViewSize(width: columnWidth, height: bounds.height))
-            x += columnWidth + spacing
-        }
     }
 }

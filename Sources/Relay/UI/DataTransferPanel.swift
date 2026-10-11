@@ -153,7 +153,7 @@ struct DataTransferPanel: View {
                 Button("确认导入") { confirmImport(preview) }
                     .disabled(isBusy).buttonStyle(.borderedProminent)
             }
-        }.padding(20).frame(width: 420)
+        }.padding(20).frame(width: 420).relayInitialFocus()
     }
 
     private func backupDateText(_ date: Date, format: String) -> String {
@@ -183,7 +183,7 @@ struct DataTransferPanel: View {
                 Button("取消") { backupPreview = nil }.disabled(isBusy)
                 Button("确认恢复") { restore(preview) }.disabled(isBusy).buttonStyle(.borderedProminent)
             }
-        }.padding(20).frame(width: 420)
+        }.padding(20).frame(width: 420).relayInitialFocus()
     }
 
     private func exportUsage() {

@@ -99,7 +99,7 @@ public final class AccountService {
         // Normalize duplicate provider days before the one business-data commit.
         history = Array(Dictionary(history.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest }).values)
         if account.providerKind != .workbuddy2api {
-            history.append(DailyUsageRecord(accountID: account.id, day: today, spend: snapshot.todaySpend, updatedAt: snapshot.fetchedAt))
+            history.append(DailyUsageRecord(accountID: account.id, day: today, spend: snapshot.todaySpend, modelUsages: snapshot.modelUsages, updatedAt: snapshot.fetchedAt))
         }
         try await credentialStore.save(draft.credential, reference: account.credentialReference)
         do {

@@ -111,6 +111,7 @@ public struct SettingsWindowView: View {
             Divider().opacity(0.3)
 
             selectedSettingsPage
+                .background(RelayInitialFocus().id(selectedTab).frame(width: 0, height: 0).accessibilityHidden(true))
                 .disabled(!store.storageAvailability.isAvailable && selectedTab != .about)
                 .frame(maxHeight: .infinity)
                 .relayGlassTile(cornerRadius: 14)

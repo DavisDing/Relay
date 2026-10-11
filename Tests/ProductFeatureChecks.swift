@@ -107,6 +107,34 @@ enum ProductFeatureChecks {
         try check(mixed.hasMixedCurrencies && mixed.rows.allSatisfy { $0.spendShare == nil }, "Native currencies never manufacture cross-currency shares")
         try check(ModelAnalysisService.analyze([model("zero", cost: 0, tokens: 0)]).rows[0].costPerMillionTokens == nil,
                   "Zero-token denominator has unknown unit cost")
+        let yesterday = calendar.date(byAdding: .day, value: -1, to: now)!
+        let dayModel = ModelUsageSummary(modelName: "daily", tokenCount: 200, requestCount: 1,
+                                        cacheHitRate: Decimal(string: "0.5"), spend: MoneyValue(amount: 2, currency: .cny))
+        let recorded = DailyUsageRecord(accountID: normal.id, day: calendar.startOfDay(for: yesterday),
+                                       spend: dayModel.spend, modelUsages: [dayModel], updatedAt: now)
+        let todayRecord = DailyUsageRecord(accountID: normal.id, day: calendar.startOfDay(for: now),
+                                          spend: MoneyValue(amount: 0, currency: .cny), modelUsages: [], updatedAt: now)
+        try check(DailyModelUsageService.models(accountID: normal.id, provider: .pipio, day: yesterday,
+                    records: [recorded, todayRecord], snapshot: nil, calendar: calendar) == [dayModel], "Selected historical day reads its own models")
+        try check(DailyModelUsageService.models(accountID: normal.id, provider: .pipio, day: now,
+                    records: [recorded, todayRecord], snapshot: nil, calendar: calendar) == [], "Known empty today never shows yesterday's models")
+        try check(DailyModelUsageService.models(accountID: pinned.id, provider: .pipio, day: yesterday,
+                    records: [recorded], snapshot: nil, calendar: calendar) == nil, "Another account's models never leak into the selection")
+        let encoded = try JSONEncoder().encode(recorded)
+        try check(try JSONDecoder().decode(DailyUsageRecord.self, from: encoded) == recorded, "Daily models round-trip through persisted JSON")
+        var legacy = try JSONSerialization.jsonObject(with: encoded) as! [String: Any]
+        legacy.removeValue(forKey: "modelUsages")
+        let legacyRecord = try JSONDecoder().decode(DailyUsageRecord.self, from: JSONSerialization.data(withJSONObject: legacy))
+        try check(legacyRecord.modelUsages == nil, "Legacy daily records retain unknown model coverage")
+        let monthlySnapshot = ProviderSnapshot(accountID: normal.id, balance: nil, todaySpend: nil, monthSpend: nil,
+            requestCount: nil, modelUsages: [dayModel], capabilities: [.modelUsage], freshness: .fresh, fetchedAt: now,
+            rate: AccountRate(accountID: normal.id, source: .providerNativeCurrency, nativeCurrency: .cny, fetchedAt: now))
+        try check(DailyModelUsageService.models(accountID: normal.id, provider: .deepseek, day: now,
+                    records: [], snapshot: monthlySnapshot, calendar: calendar) == nil, "Legacy DeepSeek monthly snapshot cannot masquerade as today")
+        let overview = ConsumptionOverviewService.rows(accounts: [normal], history: [recorded, todayRecord], at: now, calendar: calendar)
+        try check(overview.first?.today.amounts.first?.amount == 0 && overview.first?.month.amounts.first?.amount == 2,
+                  "Daily overview and month overview keep separate periods and known zero")
+
         print("PASSED: budget thresholds/persisted dedup/month/currency, pin/group/search and model share/unit-cost integrity")
     }
 }

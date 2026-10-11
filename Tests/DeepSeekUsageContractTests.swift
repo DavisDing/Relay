@@ -128,6 +128,12 @@ struct DeepSeekUsageContractTests {
         try require(firstDay?.tokenCount == 550, "daily token count must be aggregated")
         try require(firstDay?.requestCount == 1, "daily request count must be aggregated")
         try require(firstDay?.spend?.amount == Decimal(string: "0.05"), "daily spend must be aggregated")
+        let dailyModel = firstDay?.modelUsages?.first
+        try require(dailyModel?.tokenCount == 550 && dailyModel?.spend?.amount == Decimal(string: "0.05"),
+                    "selected day model metrics never reuse the monthly total")
+        try require(dailyModel?.cacheHitRate == Decimal(150) / Decimal(400), "cache share uses that day's input categories")
+        let secondDay = report.daily?.last?.modelUsages?.first
+        try require(secondDay?.spend?.amount == Decimal(string: "0.07"), "different days retain their own model consumption")
     }
 
     private static func testUnauthorizedUserTokenIsTyped() async throws {

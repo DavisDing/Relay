@@ -7,11 +7,13 @@ import AppKit
 public struct AdaptiveLineChart: View {
     public let dataPoints: [DailySpendPoint]
     public let unit: String
+    public var onSelect: (DailySpendPoint?) -> Void
     @State private var selectedPointID: String?
 
-    public init(dataPoints: [DailySpendPoint], unit: String = "$") {
+    public init(dataPoints: [DailySpendPoint], unit: String = "$", onSelect: @escaping (DailySpendPoint?) -> Void = { _ in }) {
         self.dataPoints = dataPoints
         self.unit = unit
+        self.onSelect = onSelect
     }
 
     private var selectedIndex: Int? {
@@ -51,6 +53,7 @@ public struct AdaptiveLineChart: View {
         .onChange(of: dataPoints.map(\.id)) { _, ids in
             if let selectedPointID, !ids.contains(selectedPointID) {
                 self.selectedPointID = nil
+                onSelect(nil)
             }
         }
     }
@@ -206,6 +209,7 @@ public struct AdaptiveLineChart: View {
     private func select(at x: CGFloat, positions: [CGFloat?]) {
         guard let index = AdaptiveChartSelection.nearestIndex(to: x, positions: positions) else { return }
         selectedPointID = dataPoints[index].id
+        onSelect(dataPoints[index])
     }
 
     private func moveSelection(by offset: Int) {
@@ -213,6 +217,7 @@ public struct AdaptiveLineChart: View {
         let index = selectedIndex.map { min(max(0, $0 + offset), dataPoints.count - 1) }
             ?? (offset > 0 ? 0 : dataPoints.count - 1)
         selectedPointID = dataPoints[index].id
+        onSelect(dataPoints[index])
     }
 }
 

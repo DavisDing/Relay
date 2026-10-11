@@ -31,7 +31,7 @@ struct DiagnosticExportPanel: View {
                     Spacer()
                     Button("保存 JSON…") { save() }.buttonStyle(.borderedProminent)
                 }
-            }.padding(20).frame(width: 420, height: 390)
+            }.padding(20).frame(width: 420, height: 390).relayInitialFocus()
         }
     }
     private func save() {

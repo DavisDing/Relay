@@ -517,13 +517,16 @@ public struct DailyUsageRecord: Codable, Sendable, Equatable, Identifiable {
     public let accountID: UUID
     public let day: Date
     public let spend: MoneyValue?
+    /// nil means unavailable or a legacy record; [] means a known empty day.
+    public let modelUsages: [ModelUsageSummary]?
     public let updatedAt: Date
 
-    public init(accountID: UUID, day: Date, spend: MoneyValue?, updatedAt: Date = Date()) {
+    public init(accountID: UUID, day: Date, spend: MoneyValue?, modelUsages: [ModelUsageSummary]? = nil, updatedAt: Date = Date()) {
         self.id = "\(accountID.uuidString)-\(Int(day.timeIntervalSince1970))"
         self.accountID = accountID
         self.day = day
         self.spend = spend
+        self.modelUsages = modelUsages
         self.updatedAt = updatedAt
     }
 }

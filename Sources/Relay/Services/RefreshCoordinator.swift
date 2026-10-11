@@ -283,7 +283,7 @@ public final class RefreshCoordinator {
                 ? DeepSeekUsageService.historyCalendar
                 : calendar
             let day = historyCalendar.startOfDay(for: snapshot.fetchedAt)
-            dailyRecord = DailyUsageRecord(accountID: account.id, day: day, spend: snapshot.todaySpend, updatedAt: snapshot.fetchedAt)
+            dailyRecord = DailyUsageRecord(accountID: account.id, day: day, spend: snapshot.todaySpend, modelUsages: snapshot.modelUsages, updatedAt: snapshot.fetchedAt)
         }
 
         // The cumulative baseline must advance only when its delta is persisted.
@@ -370,7 +370,7 @@ public final class RefreshCoordinator {
                 for record in fetched {
                     let day = historyCalendar.startOfDay(for: record.day)
                     guard record.accountID == account.id, day >= oldest, day < today, let spend = record.spend, !spend.amount.isNaN, spend.amount >= 0 else { continue }
-                    let normalized = DailyUsageRecord(accountID: account.id, day: day, spend: spend, updatedAt: clock.now())
+                    let normalized = DailyUsageRecord(accountID: account.id, day: day, spend: spend, modelUsages: record.modelUsages, updatedAt: clock.now())
                     records[normalized.id] = normalized
                 }
                 state.processedDays = days - 1; state.availableDays = records.count
@@ -391,7 +391,7 @@ public final class RefreshCoordinator {
                     guard record.accountID == account.id, normalizedDay >= oldest, normalizedDay < today,
                           normalizedDay == day, let spend = record.spend, !spend.amount.isNaN, spend.amount >= 0 else { continue }
                     let normalized = DailyUsageRecord(accountID: account.id, day: normalizedDay,
-                        spend: spend, updatedAt: clock.now())
+                        spend: spend, modelUsages: record.modelUsages, updatedAt: clock.now())
                     records[normalized.id] = normalized
                 }
                 state.processedDays = offset; state.availableDays = records.count

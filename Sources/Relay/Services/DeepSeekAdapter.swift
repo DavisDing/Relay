@@ -103,18 +103,21 @@ public struct DeepSeekAdapter: ProviderAdapter {
                     rate: rate
                 )
             }
+            let todayModels = summary.daily.first {
+                DeepSeekUsageService.historyCalendar.isDate($0.day, inSameDayAs: now)
+            }?.modelUsages
             var capabilities: ProviderCapabilities = [.balance]
             if summary.todaySpend != nil { capabilities.insert(.todayUsage) }
             if summary.monthSpend != nil { capabilities.insert(.monthlyUsage) }
             if summary.requestCount != nil { capabilities.insert(.requestCount) }
-            if let models = summary.modelUsages, !models.isEmpty { capabilities.insert(.modelUsage) }
+            if let models = todayModels, !models.isEmpty { capabilities.insert(.modelUsage) }
             return ProviderSnapshot(
                 accountID: account.id,
                 balance: balance,
                 todaySpend: summary.todaySpend,
                 monthSpend: summary.monthSpend,
                 requestCount: summary.requestCount,
-                modelUsages: summary.modelUsages,
+                modelUsages: todayModels,
                 capabilities: capabilities,
                 freshness: .fresh,
                 fetchedAt: now,
@@ -166,6 +169,7 @@ public struct DeepSeekAdapter: ProviderAdapter {
                 accountID: account.id,
                 day: historyCalendar.startOfDay(for: row.day),
                 spend: spend,
+                modelUsages: row.modelUsages,
                 updatedAt: report.fetchedAt
             )
         }

@@ -19,6 +19,7 @@ public struct MainPopoverView: View {
     private let onPresentSettings: () -> Void
     private let onPresentDetail: (AccountModel) -> Void
     private let onPresentEdit: (AccountModel) -> Void
+    private let onPresentConsumptionOverview: (() -> Void)?
 
     public init(
         store: RelayStore,
@@ -27,7 +28,8 @@ public struct MainPopoverView: View {
         onPresentAddAccount: @escaping () -> Void = {},
         onPresentSettings: @escaping () -> Void = {},
         onPresentDetail: @escaping (AccountModel) -> Void = { _ in },
-        onPresentEdit: @escaping (AccountModel) -> Void = { _ in }
+        onPresentEdit: @escaping (AccountModel) -> Void = { _ in },
+        onPresentConsumptionOverview: (() -> Void)? = nil
     ) {
         self.store = store
         self.initialGlobalShortcutConfiguration = initialGlobalShortcutConfiguration
@@ -36,6 +38,7 @@ public struct MainPopoverView: View {
         self.onPresentSettings = onPresentSettings
         self.onPresentDetail = onPresentDetail
         self.onPresentEdit = onPresentEdit
+        self.onPresentConsumptionOverview = onPresentConsumptionOverview
     }
 
     private var visibleTopLevelAccounts: [AccountModel] {
@@ -228,10 +231,17 @@ public struct MainPopoverView: View {
                         summaryCard(title: "总可用折算余额",
                             value: homeAmount(totalBalance.map { RelayNumberFormatter.money($0, currency: store.settings.baseCurrency) } ?? "--"),
                             subtitle: store.balanceTotalCNY.isComplete ? "\(enabledAccountCount) 个账号运行正常" : "部分账号缺少可靠数据或汇率", accent: .primary)
+                        Button {
+                            if let onPresentConsumptionOverview { onPresentConsumptionOverview() }
+                            else { showConsumptionOverview = true }
+                        } label: {
                         summaryCard(title: "今日总消耗",
                             value: homeAmount(totalTodaySpend.map { RelayNumberFormatter.money($0, currency: store.settings.baseCurrency) } ?? "--"),
                             subtitle: totalTodaySpend == nil ? "数据不完整，已不参与统计" : "全量统计（已完整）",
                             accent: totalTodaySpend == nil ? .primary : .orange)
+                        }.buttonStyle(.plain).frame(maxWidth: .infinity)
+                            .help("查看当日与月度消费")
+                            .accessibilityHint("打开当日与月度消费总览")
                     }
                 }
                 if visibleTopLevelAccounts.contains(where: { $0.kind == .workbuddy2api }) {
@@ -243,8 +253,6 @@ public struct MainPopoverView: View {
                             subtitle: "网关未提供可靠的自然日统计", accent: .secondary)
                     }
                 }
-                Button("月度与分组消费…") { showConsumptionOverview = true }
-                    .font(.system(size: 11)).buttonStyle(.plain).foregroundStyle(Color.accentColor)
                 ForEach(store.gatewayNotices, id: \.self) { notice in
                     Label(notice, systemImage: "info.circle")
                         .font(.system(size: 10)).foregroundStyle(.secondary)
