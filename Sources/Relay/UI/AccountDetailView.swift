@@ -124,10 +124,11 @@ public struct AccountDetailView: View {
 
             Divider().opacity(0.35)
             HStack {
-                Text(dataErrorMessage.map { "读取失败，保留上次数据：" + $0 } ?? healthFooterText)
+                Text(compactFooterText)
                     .font(.system(size: 10))
                     .foregroundStyle(dataErrorMessage == nil ? Color.secondary : Color.red)
-                    .help(dataErrorMessage ?? healthFooterText)
+                    .help(footerDetailText)
+                    .accessibilityLabel(footerDetailText)
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: 6)
@@ -165,9 +166,41 @@ public struct AccountDetailView: View {
         }
     }
 
-    private var healthFooterText: String {
-        guard let health, account.isEnabled else { return lastUpdatedText }
-        return health.summary + " · " + lastUpdatedText
+    private var compactFooterText: String {
+        if dataErrorMessage != nil { return "读取失败" }
+        if !account.isEnabled { return "已停用" }
+        if let health {
+            switch health.phase {
+            case .queued: return "排队中"
+            case .refreshing: return "刷新中"
+            case .backingOff: return health.issue == .rateLimit ? "限流中" : "待重试"
+            case .idle: break
+            }
+            if let issue = health.issue {
+                switch issue {
+                case .credentials: return "凭据失效"
+                case .permission: return "权限不足"
+                case .rateLimit: return "限流中"
+                case .network: return "网络异常"
+                case .provider: return "服务异常"
+                case .incompatibleResponse: return "数据异常"
+                case .storage: return "存储异常"
+                }
+            }
+            if health.freshness == .stale { return "缓存数据" }
+            if health.freshness == .partial { return "部分数据" }
+        }
+        guard let updated = account.lastUpdated else { return "未刷新" }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = Calendar.current.isDateInToday(updated) ? "HH:mm" : "MM/dd HH:mm"
+        return "更新 " + formatter.string(from: updated)
+    }
+
+    private var footerDetailText: String {
+        if let dataErrorMessage { return "读取失败，保留上次数据：" + dataErrorMessage }
+        if !account.isEnabled { return "账户已停用；" + lastUpdatedText }
+        return health.map { $0.detail + "；" + lastUpdatedText } ?? lastUpdatedText
     }
 
     private var header: some View {
@@ -399,7 +432,7 @@ private struct MetricCard: View {
     let accentColor: Color
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .center, spacing: 4) {
             Text(title)
                 .font(.system(size: 10))
                 .foregroundStyle(.secondary)
@@ -413,7 +446,8 @@ private struct MetricCard: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .multilineTextAlignment(.center)
+        .frame(maxWidth: .infinity, alignment: .center)
         .padding(9)
         .relayGlassTile(cornerRadius: 10)
     }
