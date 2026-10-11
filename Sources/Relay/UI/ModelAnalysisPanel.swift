@@ -75,10 +75,14 @@ public struct ModelAnalysisPanel: View {
 
 private struct ModelUsageColumns: Layout {
     private let spacing: CGFloat = 4
-    private let weights: [CGFloat] = [2.1, 1, 0.85, 1.4, 1.3]
+    // Keep metrics compact and aligned across the header and all rows. Give
+    // spare width to the model identifier instead of spreading numeric columns.
+    private let metricWidths: [CGFloat] = [40, 36, 44, 44]
     private func widths(_ width: CGFloat) -> [CGFloat] {
         let available = max(0, width - spacing * 4)
-        return weights.map { available * $0 / weights.reduce(0, +) }
+        let metrics = metricWidths.reduce(0, +)
+        let scale = min(1, available / metrics)
+        return [max(0, available - metrics)] + metricWidths.map { $0 * scale }
     }
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let width = proposal.width ?? 310
