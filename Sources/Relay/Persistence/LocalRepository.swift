@@ -4,6 +4,7 @@ public protocol LocalRepository: AnyObject {
     @MainActor func fetchAccounts() throws -> [AccountConfiguration]
     @MainActor func account(id: UUID) throws -> AccountConfiguration?
     @MainActor func upsertAccount(_ account: AccountConfiguration) throws
+    @MainActor func commitNewAccount(_ account: AccountConfiguration, snapshot: ProviderSnapshot, history: [DailyUsageRecord]) throws
     @MainActor func deleteAccount(id: UUID) throws
     @MainActor func snapshot(accountID: UUID) throws -> ProviderSnapshot?
     @MainActor func upsertSnapshot(_ snapshot: ProviderSnapshot) throws
@@ -22,6 +23,17 @@ public protocol LocalRepository: AnyObject {
 }
 
 extension LocalRepository {
+    @MainActor public func commitNewAccount(_ account: AccountConfiguration, snapshot: ProviderSnapshot, history: [DailyUsageRecord]) throws {
+        let current = try syncData()
+        guard !current.accounts.contains(where: { $0.id == account.id }), snapshot.accountID == account.id,
+              history.allSatisfy({ $0.accountID == account.id }) else { throw LocalRepositoryError.unavailable }
+        var tombstones = current.deletedAccountIDs
+        tombstones.removeValue(forKey: account.id)
+        let candidate = RelaySyncData(accounts: current.accounts + [account], snapshots: current.snapshots + [snapshot],
+            dailyUsage: current.dailyUsage + history, settings: current.settings, settingsUpdatedAt: current.settingsUpdatedAt,
+            deletedAccountIDs: tombstones)
+        guard try replaceNonsecretData(candidate, expected: current) else { throw LocalRepositoryError.unavailable }
+    }
     @MainActor public func replaceNonsecretData(_ data: RelaySyncData, expected: RelaySyncData) throws -> Bool {
         throw LocalRepositoryError.unavailable
     }
@@ -143,12 +155,7 @@ public final class FileLocalRepository: LocalRepository {
         if let fileURL {
             resolvedURL = fileURL
         } else {
-            guard let applicationSupport = FileManager.default.urls(
-                for: .applicationSupportDirectory, in: .userDomainMask
-            ).first else { throw LocalRepositoryError.unavailable }
-            resolvedURL = applicationSupport
-                .appendingPathComponent("cloud.dinghao.relay", isDirectory: true)
-                .appendingPathComponent("relay-local-v1.json", isDirectory: false)
+            resolvedURL = try Self.defaultFileURL()
         }
         self.fileURL = resolvedURL
         encoder = JSONEncoder()
@@ -176,6 +183,59 @@ public final class FileLocalRepository: LocalRepository {
         rebuildHistoryIndex()
         updateCapacityDiagnostics(fileBytes: loadedBytes)
         performanceDiagnostics.reloadMilliseconds = RepositoryPerformanceClock.elapsedMilliseconds(since: reloadStarted)
+    }
+
+    public static func defaultFileURL() throws -> URL {
+        guard let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            throw LocalRepositoryError.unavailable
+        }
+        return support.appendingPathComponent("cloud.dinghao.relay", isDirectory: true).appendingPathComponent("relay-local-v1.json")
+    }
+
+    /// Only a readable corrupt file is eligible. Unknown versions never downgrade.
+    static func recoveryOriginal(at url: URL) throws -> Data {
+        let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
+        guard attrs[.type] as? FileAttributeType == .typeRegular,
+              let size = attrs[.size] as? NSNumber, size.intValue <= 64 * 1_024 * 1_024 else { throw LocalRepositoryError.unreadable }
+        let bytes = try Data(contentsOf: url)
+        guard bytes.count <= 64 * 1_024 * 1_024 else { throw LocalRepositoryError.unreadable }
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        do {
+            _ = try decoder.decode(State.self, from: bytes)
+            throw DataTransferError.stalePreview
+        } catch let error as LocalRepositoryError { throw error }
+        catch let error as DataTransferError { throw error }
+        catch { return bytes }
+    }
+
+    static func recover(_ source: RelaySyncData, at url: URL, expectedOriginal: Data) throws -> URL {
+        let validated = try DataTransferService.decodeBackup(DataTransferService.exportBackup(source))
+        var settings = validated.settings
+        settings.iCloudFileSyncEnabled = false
+        // A corrupt file cannot prove the old origin-to-credential mapping.
+        let accounts = validated.accounts.map { original -> AccountConfiguration in
+            var account = original; account.credentialReference = UUID().uuidString; return account
+        }
+        let candidate = State(accounts: accounts, snapshots: validated.snapshots, dailyUsage: validated.dailyUsage,
+            settings: settings, settingsUpdatedAt: Date(), deletedAccountIDs: validated.deletedAccountIDs)
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601; encoder.outputFormatting = [.sortedKeys]
+        let replacement = try encoder.encode(candidate)
+        let preserved = url.deletingLastPathComponent().appendingPathComponent("relay-damaged-\(UUID().uuidString).json")
+        var coordinationError: NSError?
+        var result: Result<Void, Error>?
+        NSFileCoordinator().coordinate(writingItemAt: url, options: .forReplacing, error: &coordinationError) { coordinatedURL in
+            result = Result {
+                guard try recoveryOriginal(at: coordinatedURL) == expectedOriginal else { throw DataTransferError.stalePreview }
+                try PrivateFileWriter.write(expectedOriginal, to: preserved)
+                guard try Data(contentsOf: preserved) == expectedOriginal,
+                      try recoveryOriginal(at: coordinatedURL) == expectedOriginal else { throw DataTransferError.stalePreview }
+                try PrivateFileWriter.write(replacement, to: coordinatedURL)
+            }
+        }
+        if let coordinationError { throw coordinationError }
+        guard let result else { throw LocalRepositoryError.unavailable }
+        try result.get()
+        return preserved
     }
 
     public func fetchAccounts() throws -> [AccountConfiguration] {

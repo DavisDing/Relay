@@ -48,6 +48,14 @@ enum BackupMigrationChecks {
         do { _ = try await verification.selectDirectory(parent); throw NSError(domain: "corrupt copy accepted", code: 1) }
         catch BackupDirectoryError.sourceChanged {}
         try check(manager.fileExists(atPath: first.fileURL.path), "Verification failure keeps originals")
+        let verificationPending = await verification.hasPendingMigration()
+        try check(verificationPending, "Unverified partial copy is retained for explicit inspection")
+        // Explicitly inspect/remove the fixture-owned corrupt destination; no
+        // production recovery path is allowed to blindly delete altered files.
+        for name in try manager.contentsOfDirectory(atPath: parent.appendingPathComponent("RelayBackups").path) {
+            try manager.removeItem(at: parent.appendingPathComponent("RelayBackups").appendingPathComponent(name))
+        }
+        _ = try await normal.retryPendingMigration()
         let deletion = BackupMigrationIO(remove: { _ in throw Fault.injected })
         let cleanup = LocalBackupService(directoryURL: source, preferences: defaults, codec: codec, credentialDirectoryURL: credentials, migrationIO: deletion)
         let warning = try await cleanup.selectDirectory(parent)

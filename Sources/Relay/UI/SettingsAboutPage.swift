@@ -3,6 +3,7 @@ import AppKit
 
 @MainActor
 struct SettingsAboutPage: View {
+    @ObservedObject var store: RelayStore
     @ObservedObject var updateState: RelayUpdateState
     @Binding var isDownloadingUpdate: Bool
     @Binding var updateStatusMessage: String?
@@ -84,6 +85,7 @@ struct SettingsAboutPage: View {
             .padding(12)
             .relayInsetSurface(cornerRadius: 12)
 
+            DiagnosticExportPanel(store: store)
             Text("© 2026 Relay · 开源项目")
                 .font(.system(size: 10))
                 .foregroundStyle(.tertiary)

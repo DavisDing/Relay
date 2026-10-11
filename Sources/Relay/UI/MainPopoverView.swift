@@ -8,6 +8,8 @@ public struct MainPopoverView: View {
     @AppStorage("homeAmountsHidden") private var homeAmountsHidden = false
     @State private var accountPendingDeletion: AccountModel?
     @State private var expandedProviders = Set<ProviderKind>()
+    @State private var showConsumptionOverview = false
+    @State private var showStorageRecovery = false
     @State private var accountSearch = ""
     @State private var accountGroup: String?
 
@@ -103,6 +105,12 @@ public struct MainPopoverView: View {
         .frame(width: RelayVisualStyle.panelWidth, height: 520)
         .relayPanelSurface(cornerRadius: RelayVisualStyle.panelCornerRadius)
         .preferredColorScheme(preferredColorScheme)
+        .sheet(isPresented: $showConsumptionOverview) {
+            ConsumptionOverviewView(store: store, onClose: { showConsumptionOverview = false })
+        }
+        .sheet(isPresented: $showStorageRecovery) {
+            StorageRecoveryView(store: store, onClose: { showStorageRecovery = false })
+        }
         .alert("确认删除账号？", isPresented: Binding(
             get: { accountPendingDeletion != nil },
             set: { if !$0 { accountPendingDeletion = nil } }
@@ -186,6 +194,9 @@ public struct MainPopoverView: View {
                 .font(.caption).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
             Button("重新读取") { store.retryOpeningStorage() }
+            if store.storageAvailability == .unavailable(.corruptData) {
+                Button("从备份恢复…") { showStorageRecovery = true }
+            }
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -232,6 +243,8 @@ public struct MainPopoverView: View {
                             subtitle: "网关未提供可靠的自然日统计", accent: .secondary)
                     }
                 }
+                Button("月度与分组消费…") { showConsumptionOverview = true }
+                    .font(.system(size: 11)).buttonStyle(.plain).foregroundStyle(Color.accentColor)
                 ForEach(store.gatewayNotices, id: \.self) { notice in
                     Label(notice, systemImage: "info.circle")
                         .font(.system(size: 10)).foregroundStyle(.secondary)

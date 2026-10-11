@@ -1,220 +1,129 @@
-# AI CONTEXT
+# Relay 项目长期上下文
 
-> Relay 项目长期上下文。所有 AI Agent 开始工作前应读取。
-> 只记录长期有效的信息，不记录临时任务过程、真实凭据或个人数据。
+> 维护对象：长期有效的项目事实、技术边界和验证边界。
+> 本文件不记录逐次实现日志、临时进度、真实凭据或个人数据。
+> 最近整理：2026-10-11。
+> 阅读顺序：本文 → [需求与验收](REQUIREMENT.md) → [当前技术设计](DESIGN.md)。
 
-## 1. Project Overview
+## 项目定位
 
-- 名称：Relay / 驿站
-- 类型：macOS 菜单栏桌面应用
-- 目标：只读监控多个 AI 服务商、多个账户的余额、消费和用量。
-- 平台：macOS 27，Apple Silicon。
-- 网络模式：应用直接访问供应商 API，无 Relay 自建服务器。
+Relay（驿站）是面向 Apple Silicon、macOS 27 的菜单栏应用，用于只读查看多个 AI 服务商和多个账户的余额、消费、请求量和 Token 用量。应用直接访问供应商接口，没有 Relay 自建后端。
 
-## 2. Technology Stack
+当前正式支持的供应商适配器为 Pipio、DeepSeek 和 workbuddy2api；自定义 OpenAI 兼容站点仍是模型中的扩展类型，不代表已经有通用账单适配器。
 
-- UI：SwiftUI，必要时使用 AppKit。
-- 语言：Swift。
-- 并发/网络：Swift Concurrency + URLSession。
-- 图表：Swift Charts（如当前工具链可用）。
-- 当前本地数据：版本化 JSON 文件，通过 `LocalRepository` 抽象访问。
-- 凭据：`FileCredentialStore`，保存到本机 Application Support 私有文件，不使用 Keychain。
-- 同步：规划使用 iCloud Drive 普通文件，仅同步非秘密数据；不使用 CloudKit Container。
-- 构建：Swift Package Manager，`swift build`。
+## 技术栈与目录
 
-## 3. Project Structure
+- Swift（Package tools version 5.9、Swift 5 language mode）、SwiftUI，必要处使用 AppKit；Swift Package Manager 可执行目标。
+- 网络使用 Swift Concurrency 和 `URLSession`。
+- 本地业务数据使用版本化 JSON，通过 `LocalRepository` 访问；当前本地文件 schema 为 2，文件位于 `~/Library/Application Support/cloud.dinghao.relay/relay-local-v1.json`。SwiftData 不是当前运行时前提。
+- 本机凭据由 `FileCredentialStore` 保存到 `~/Library/Application Support/cloud.dinghao.relay/relay-credentials-v1.json`，目录 0700、文件 0600；不使用 Keychain，不进入同步、导出、备份或日志。
+- 非秘密同步使用 iCloud Drive 普通文件，不使用 CloudKit Container。逻辑目录为 `iCloud Drive/Documents/Relay`（中文 Finder 显示“文稿/Relay”），由用户选择实际目录，不拼接本地化物理路径。同步文件名为 `relay-sync-v1.json`。
+- 主要目录：`Sources/Relay/Models`、`Persistence`、`Services`、`UI`、`Tests`、`docs`。
+
+## 当前架构事实
 
 ```text
-Relay/
-├── Sources/Relay/Models/       # 领域模型和旧 UI 展示模型
-├── Sources/Relay/Persistence/  # LocalRepository、本地 JSON 存储
-├── Sources/Relay/Services/     # 供应商适配器、凭据、刷新、汇率、汇总
-├── Sources/Relay/UI/           # SwiftUI 菜单栏、面板、账户页面
-├── Sources/Relay/main.swift    # 应用入口
-└── docs/                       # 需求、设计和长期上下文
+SwiftUI/AppKit 菜单栏
+        ↓
+RelayStore / AccountService / RefreshScheduler / RefreshCoordinator
+        ├── ProviderAdapter → URLSession → Pipio / DeepSeek / workbuddy2api
+        ├── FileCredentialStore → 本机私有凭据文件
+        ├── LocalRepository → relay-local-v1.json
+        ├── FileSyncService → iCloud Drive 普通非秘密文件
+        └── LocalBackupService → 本机 RelayBackups 备份
 ```
 
-## 4. Architecture
+### 账户和刷新
 
-```text
-SwiftUI / MenuBar
-       ↓
-Local business services
-(AccountService / RefreshCoordinator / DashboardAggregator / RateService)
-       ├── ProviderAdapter → URLSession → Pipio / DeepSeek
-       ├── FileCredentialStore → local private credential file
-       └── LocalRepository → relay-local-v1.json
+- `AccountService` 负责账户验证、凭据写入、元数据保存和首个快照；网络准备后一次提交账户/首快照/历史，保存失败补偿新凭据，补偿失败明确报告。
+- `RefreshScheduler` 负责账户去重、手动优先、全局并发和同源串行；`RefreshCoordinator` 负责一次尝试、退避、原子提交和取消语义。
+- 单账户失败不会覆盖其他账户或上一次成功快照。未知、未支持和真实的零值保持区分。
+- `RecoverableLocalRepository` 把启动读取失败分为不可读、损坏和版本不支持；故障态禁止写入，提供重新读取与损坏库备份恢复入口，不回退到可写空库；恢复保留原件，重新分配凭据引用并关闭同步，不覆盖不可读文件或未知版本。
+- `AccountHealth` 是运行期状态，区分凭据、权限、限流、网络、供应商、响应不兼容和本地存储问题，不写入同步文件。
+- 详情页按稳定账户 ID 读取共享 `RelayStore`，不会保留打开时的旧数据副本；临时读取失败保留最后完整数据，确认账户删除后才关闭详情页。
+
+### 供应商边界
+
+- Pipio 的管理地址和模型 API 地址分开规范化：`https://pipio.io/api` 与 `https://pipio.io/v1`。管理令牌和数值 `Pipio-User` 分开保存和发送。
+- Pipio 今日消费使用看板数据；模型和 Token 等可选指标缺失时保持未知。历史补齐只处理今天以前的 7/30 日范围。
+- DeepSeek 余额固定使用官方 `GET https://api.deepseek.com/user/balance`。平台历史用量只在用户手动提供 `userToken` 时访问网页内部接口；应用不读取浏览器 Cookie。
+- workbuddy2api 读取网关状态、子账户积分和可选统计，并提供已经存在的子账户启停请求入口。远端启停与本机 loopback HTTP 的产品边界见 REQUIREMENT 的 `NEEDS_CONFIRMATION`。
+- 汇率与额度换算按账户隔离；没有可靠换算值时禁止跨币种汇总。
+
+### 数据、同步和迁移
+
+- 本地 JSON 写入使用候选状态和原子替换；刷新、历史批量提交、导入和恢复失败不得落半批。
+- iCloud 同步只包含账户元数据、设置、日/模型聚合和删除 tombstone。同步合并按稳定记录 ID、更新时间和 tombstone 处理，冲突副本保留并提示；本地数据优先可用。
+- 导入导出：CSV 只导出日消费，保留原币种和未知状态；配置 JSON 只包含非秘密账户配置和设置，导入前预览并校验。
+- 本机备份运行期间每日最多自动创建一份，也支持手动和恢复前备份，正常创建后保留最近 5 份；默认目录为 `~/Library/Application Support/Relay/Backups`。选择备份目录使用 security-scoped bookmark，并在所选父目录下使用 `RelayBackups` 子目录。切换目录时先复制、逐文件校验，再更新设置并删除已校验的旧原件；失败时保留旧原件。备份日期显示使用 `yyyyMMdd`，文件名仍是内部时间戳和 UUID。
+- 同步载荷会关闭同步开关；目录 bookmark、通知开关/去重、快捷键和外观等 UserDefaults 偏好仅存本机。
+- 凭据引用只在本机解析；跨设备同步、配置导入和备份恢复都不会复制凭据正文。相同账户 ID/供应商/origin 保留本机引用；来源变化或新账户分配新引用。
+
+### 恢复与使用反馈
+
+- 备份搬移清单、授权与阶段仅留本机，未完成时保留有效文件，支持显式重试；完成前不执行五代裁剪。
+- 首页有月度及分组已记录消费总览，按原币/供应商日历统计覆盖，已结束自然日的完整可比同期数据才显示环比。
+- 低余额/月预算设置显示系统授权与测试通知；测试不占真实去重，提交失败可见。
+- 关于页支持白名单脱敏诊断预览及主动导出，无账号名、ID、站点、路径、原始错误或凭据，不上传。
+- 同步页有备份份数/容量/最近成功及导入字段差异；账户管理支持原子批量分组、隐藏和启停，删除单独确认。
+
+### 当前 UI 约定
+
+- 保持现有 Liquid Glass、菜单栏、Popover、设置和辅助窗口布局；优先修改状态、绑定和入口，不重做已确认视觉结构。
+- 预算、分组、置顶在添加/编辑账户表单中保存；首页提供搜索、分组筛选和置顶排序，筛选不改变汇总口径。
+- 设置「数据」分页把数据刷新、历史数据、月预算通知作为同级区块；设置「同步」分页承载导入、导出和本机备份。
+- 关闭设置、添加账户、编辑账户和账户详情返回首页；保存失败留在原页，点击外部隐藏保留未提交内容。设置内 sheet 返回父页面，退出 Relay 仍退出程序。
+- 本机备份列表和恢复预览主日期显示 `yyyyMMdd`，时间以 `HH:mm:ss` 作为次要信息。
+
+## 安全和发布边界
+
+- Pipio/DeepSeek 地址校验要求 HTTPS；workbuddy2api 另允许本机 loopback HTTP（localhost/127.0.0.1/::1），与原 HTTPS 需求的例外边界见 REQUIREMENT；跨 origin 不转发认证头属于安全要求，供应商请求使用独立同来源重定向 delegate，拒绝跨站/端口/降级/方法改变，真实请求仍需验收。`UpdateService` 已有独立的下载重定向白名单和 SHA-256 校验，不据此推定供应商请求使用同一策略。
+- 日志、诊断、同步、导出和备份不得出现 Authorization、Token、Cookie、Pipio 用户 ID 或 DeepSeek `userToken`。
+- 当前发布路线是 GitHub Releases、ad-hoc 签名和手动安装；不把 Developer ID、公证或 App Store 作为前提。SHA-256 只证明下载完整性，不证明发布者身份。
+- 当前工程只有 SwiftPM 可执行目标和手工 app 打包入口，没有 WidgetKit extension target。
+- 真实第二台 Mac 的 iCloud 验收、真实供应商对账和完整发布安装验收不属于当前已验证事实。
+
+## 构建与验证
+
+部署目标为 macOS 27；本机已核实可用的 Command Line Tools 构建配置使用 MacOSX26.5 SDK 和隔离缓存（不代表降低部署目标）：
+
+```bash
+HOME=/tmp/relay-home \
+SWIFTPM_MODULECACHE_OVERRIDE=/tmp/relay-cache \
+CLANG_MODULE_CACHE_PATH=/tmp/relay-clang \
+SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk \
+swift build --scratch-path /tmp/relay-build
 ```
 
-本项目没有传统远程后端；“后端”指本地业务层、供应商适配器和持久化层。
+离线验证入口：
 
-## 5. Important Modules
+```bash
+SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk scripts/test-regressions.sh
+SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk scripts/test-contracts.sh
+SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk scripts/test-provider-redirects.sh
+SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk scripts/test-window-navigation.sh --build-only
+git diff --check
+```
 
-- `PipioAdapter`：访问 Pipio 管理 API；管理令牌与 Pipio 数值用户 ID 分开建模；从 `/api/status` 获取该账户自己的 `quota_per_unit`/币种参数。
-- `DeepSeekAdapter`：余额固定访问 DeepSeek 官方 `GET /user/balance`；可选的平台 `userToken` 仅用于历史用量接口，余额按供应商返回币种处理。
-- `AccountRate` / `RateService`：汇率和换算参数按 `accountID` 隔离，禁止按 provider/host 共享。
-- `AccountService`：验证账户、保存账户元数据和首个快照，失败时回滚本地凭据。
-- `RefreshCoordinator`：账户级刷新和错误隔离；单账户失败不能覆盖其他账户或旧快照。
-- `DashboardAggregator`：仅在金额可比较、数据完整时汇总；不把未知值伪造为 0。
-- `LocalRepository`：当前实现是版本化 JSON；未来可在完整 Xcode 工具链下替换为 SwiftData，但 SwiftData 不是当前运行前提。
-- `FileCredentialStore`：凭据文件默认位于 `~/Library/Application Support/cloud.dinghao.relay/relay-credentials-v1.json`；父目录 0700，文件 0600，不进入同步文件。
+`scripts/verify-icloud-sync.sh --mode deterministic` 提供同步 fixture 验证；退出码 2 表示没有 fixture 失败但缺少真实第二台 Mac，不能当作双机通过。`test-window-navigation.sh --run` 需要实际图形会话，环境不可用的退出码 77 表示跳过，不表示通过。
 
-## 6. Important Decisions
+这些检查覆盖离线业务、契约和 GUI 检查编译。重定向专项仅绑定本机回环服务；系统文件协调与本机端口在受限沙箱可能被拒绝，应在允许的验证环境执行，不绕过生产保护。`--build-only` 不等于真实 GUI 验收；真实图形会话、供应商请求、第二台 Mac、发布资产和安装升级仍需对应环境证据。当前 CLT 沙箱可能阻止 SwiftPM 的 `sandbox-exec`，应使用隔离缓存配置并在允许的构建环境重试，不能把沙箱错误写成源码编译失败。
 
-### Decision 001：账户级汇率
+## 已确认的默认值与系统能力
 
-每一个 `AccountRate` 必须绑定一个账户 UUID。Pipio 每个账户单独读取站点返回的换算参数；DeepSeek 的原生余额为 CNY，转换系数为 1。没有可靠换算值时禁止跨币种求和。
+- 自动刷新默认 5 分钟，当前设置按分钟输入，最少 1 分钟；不再描述为固定四档选择器。
+- 额度/汇率自动刷新默认每 7 天，可选每天、每周、每月、仅手动；手动 USD→CNY 按账户保存，不能修改 `quota_per_unit`。
+- 历史默认 1 年，当前选项为一月、半年、一年、永久；低余额默认阈值 20，未知余额不提醒。
+- 菜单栏使用系统单色闪电，仅显示可核实今日消费数字；固定宽度为 70pt，未知消费只保留入口图标。
+- 共享原生材质由 `RelayVisualStyle` 管理：页面 `regularMaterial`、卡片 `thinMaterial`、嵌套状态 `ultraThinMaterial`。
+- 快捷键仅支持“显示/隐藏面板”和“刷新全部账户”，由 `GlobalShortcutService` 封装 Carbon `RegisterEventHotKey`，可分别留空；登录项使用 `SMAppService.mainApp`，需要实际应用包/系统环境证据。
+- 更新、打包流程分别见 `UpdateService`、[CI 与发布说明](CI_RELEASE.md)；workflow 存在不等于当前提交已发布。
 
-### Decision 002：不使用 Keychain
+## 维护规则
 
-日期：2026-09-18。
-
-用户明确选择不使用 macOS Keychain，改为 Relay 私有 Application Support 文件。该方案只提供 0700/0600 文件权限和本地隔离，不等同于 Keychain 的硬件保护、系统访问控制或授权提示。当前不自定义加密算法、不保存到 iCloud、不写入日志、源码或同步 JSON。
-
-### Decision 003：SwiftData 不是当前前提
-
-SwiftData 是 Apple 系统框架，不单独收费，也没有固定独立包体大小；但当前实现使用本地 JSON repository，以减少工具链和迁移复杂度。`LocalRepository` 协议保留未来迁移空间。
-
-### Decision 004：免费 Apple 账户分发边界
-
-免费 Apple 账户可以本地开发、编译和调试；Apple Developer Program 标准价格为 99 USD/年（地区可能显示本地货币），付费计划主要影响 Developer ID 签名、公证、App Store/TestFlight 等分发能力。首期按 GitHub Releases + 用户手动放行 Gatekeeper 的路线设计。
-
-## 7. Coding Rules
-
-- 优先小范围修改，避免无关重构。
-- 不写入真实 Token、API Key、Pipio User ID、Cookie 或日志。
-- 不读取浏览器 Cookie，不自动获取网页登录状态；DeepSeek 平台 `userToken` 只能由用户手动输入，并仅保存在本机凭据文件。该 token 只用于平台历史用量接口，接口属于网页内部接口，可能变化。
-- UI 不直接拼 API URL、不解释供应商 JSON、不持有长期凭据。
-- 账户失败必须隔离；刷新失败保留旧快照并显示 stale/error。
-- 未支持或不完整指标保持 `nil`，不显示伪造的 0。
-- 跨币种仅使用账户专属、有效的换算参数。
-- 新依赖前先确认现有能力不能复用。
-
-## 8. UI Rules
-
-已确认的菜单栏、Popover、添加账户、详情和设置页面应保持布局与视觉风格稳定。优先修改数据绑定、状态、错误处理和业务调用，不为了接入业务重做 UI。
-
-## 9. Environment
-
-- macOS
-- Swift Package Manager
-- Swift 5.9 language mode
-- macOS 27 deployment target
-- 当前验证命令：
-  `HOME=/tmp/relay-home SWIFTPM_MODULECACHE_OVERRIDE=/tmp/relay-cache CLANG_MODULE_CACHE_PATH=/tmp/relay-clang SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk swift build --scratch-path /tmp/relay-build`
-
-## 10. Known Constraints
-
-- 当前 Command Line Tools 环境无法稳定使用 XCTest；测试结果必须如实标记，不能伪造通过。
-- 当前 `FileLocalRepository` 是业务数据实现；SwiftData 仅是后续可替换方案。
-- 凭据文件是明文 JSON + 文件权限保护，属于用户选择的安全降级；若未来需要更强保护，应先设计用户主密码/系统加密迁移，不得私自声称已加密。
-- 不使用 CloudKit Container；同步文件永远不能包含凭据。
-
-## 11. 2026-09-18 Implementation Update
-
-- UI 与业务层已完成首轮接线：`RelayStore` 统一持有 `AccountService`、`RefreshCoordinator`、`FileLocalRepository`、`FileCredentialStore` 和生产适配器注册表。
-- 添加账号的测活现在执行真实 Pipio/DeepSeek 请求；保存前验证，保存后写入首个快照；不再写入硬编码余额或模拟延迟。
-- 菜单栏和主面板读取本地快照，刷新失败保留旧快照；未知余额在 UI 中显示 `--`。
-- `docs/SECURITY_DESIGN.md` 是凭据不使用 Keychain 的单独安全设计记录。
-- 本地业务 JSON 在打开已有文件和写入时都会校正为目录 `0700`、文件 `0600`。
-- SwiftData 结论已再次确认：它是 Apple 系统框架且不要求单独付费；当前仍不作为项目运行时依赖。Apple 免费账户足以做本地开发/编译/调试，正式 App 分发、公证和 Developer ID 才需要付费 Developer Program。
-
-## 12. 2026-09-19 Implementation Update
-
-- `RelaySettings` 默认自动刷新间隔与产品约束统一为 5 分钟，并在设置界面提供 1/5/15/30 分钟选择。
-- 设置界面已接入历史保留策略：1 年或永久；本地 repository 按策略清理日聚合数据。
-- `AccountService.updateAccount` 在替换凭据时先读取旧凭据；元数据写入失败会恢复旧凭据，避免出现半提交状态。
-- 账户编辑保存改为 `async throws`；只有业务保存成功才关闭弹窗，失败会留在弹窗内显示错误。
-- Pipio 日志列表已按当天分页拉取并聚合模型、请求数、Token 与消费；无法解析或接口不可用时保持模型指标未知，不影响余额/基础快照。
-- `ProviderSnapshot` 增加可选 `modelUsages`，旧版本 JSON 缺少该字段时仍可解码。
-- iCloud 普通文件同步增加 `NSFileCoordinator` 协调读写，并尝试合并可解码的未解决冲突版本；同步不可用仍不阻断本地数据路径。
-- 首次启用同步时先尝试导入已有云端 payload，再写入本机设置，避免空本地库覆盖已有同步文件。
-- 删除账户增加二次确认；账户详情接入已保存的每日趋势和 Pipio 模型聚合。
-
-## 13. AI_CONTEXT UPDATE PROPOSAL
-
-- 变化：新增模型用量聚合、编辑回滚、历史保留选项、刷新频率选项和同步冲突协调。
-- 原因：补齐 P1 详情能力并修复编辑/同步的半提交和并发风险。
-- 影响：`ProviderSnapshot` schema 增加可选字段；本地 JSON 和同步 JSON 对旧数据保持向后兼容；刷新期间 Pipio 多一个分页日志请求路径。
-- 建议：后续新增适配器时继续将模型聚合保持为可选能力，不把缺失模型数据转换为 0。
-- 变化：iCloud 同步目录改为系统选择器确认并保存安全作用域 bookmark；低余额通知去重状态持久化到本机 UserDefaults；设置页接入 `SMAppService.mainApp` 登录项。
-- 原因：满足目录授权、每日通知去重和开机启动的产品约束，同时让未打包开发环境中的失败可见。
-- 影响：bookmark 和通知日期均为本机元数据，不进入同步 JSON；登录项能力依赖正式 macOS 应用包，裸 SwiftPM 可执行文件只能显示真实错误。
-
-## 13. 2026-09-19 Implementation Update (continued)
-
-- iCloud 同步目录由系统目录选择器确认，并保存安全作用域 bookmark；同步服务不再根据本地化路径拼接目录。
-- 低余额通知去重状态按账户 UUID 与自然日持久化在本机 UserDefaults；通知授权失败不会消耗当天额度。
-- 设置页接入 macOS `SMAppService.mainApp` 登录项开关；裸 SwiftPM 可执行文件没有应用包身份时，UI 显示真实注册错误。
-
-## 14. 2026-09-20 Implementation Update
-
-- 全局快捷键已接入 AppKit 菜单栏控制器：支持显示/隐藏 Relay 面板和刷新全部账户；未新增“打开设置”快捷键。快捷键配置仅保存到本机 UserDefaults，注册失败不会覆盖上一次有效配置；未打包的 SwiftPM 环境明确显示未注册。
-- 菜单栏可见面板由 `RelayMenuBarController` 持有 `NSStatusItem + NSPopover`，用于提供可被全局快捷键控制的显式显示/隐藏目标；SwiftUI `Settings { EmptyView() }` 仅保持 App 生命周期，并保留退出命令。
-- DeepSeek 已区分余额与历史用量：API Key 只调用官方 `GET https://api.deepseek.com/user/balance`；可选 userToken 调用 `platform.deepseek.com/api/v0/usage/amount` 与 `/api/v0/usage/cost`。未填写 userToken 时只查余额，填写后首次回填最近 7 天；不读取 Cookie，token 不进入同步数据。平台接口失败时保留余额并标记 partial。DeepSeek 历史月份、日桶、今日消费和首次 7 天回填统一按固定 GMT+8（北京时间）计算，不跟随 Mac 本地时区。
-- iCloud 同步状态已接入设置页；检测到 unresolved conflict versions 时只生成冲突报告并保留本机/远端候选，不在用户决策前修改本机 repository 或覆盖主同步文件。用户选择“保留本机 / 保留远端 / 接受合并结果”后，才通过显式 resolve API 应用结果；解析过程不自动删除冲突候选。
-- 同步目录缺失时状态显示为 `unavailable`，本机数据仍可读取和刷新；同步异常状态不会阻断本机业务路径。同步 payload 继续通过安全投影排除凭据。
-- `scripts/verify-icloud-sync.sh --mode deterministic` 的 SYNC-001 至 SYNC-004 已通过；SYNC-005 因没有第二台真实 Mac 标记 `blocked`，不能以 fixture 结果替代实机验证。
-- 当前 `swiftc -parse-as-library -typecheck` 全量类型检查通过，仅有既有 SwiftUI 本地化插值弃用警告。`scripts/test-regressions.sh`、三组独立 contract tests 均通过。`swift build` 仍受本机 Swift 编译器与 macOS SDK 版本不匹配阻塞，不能视为构建通过。
-
-## 15. 2026-09-21 Data and panel corrections
-
-- Pipio 分模型数据改用数据看板“模型 Token 明细”同源的 `GET /api/data/self`，按查询时间范围合并各模型时间桶；不再用最多 10 页请求日志推算看板总量。`token_used` 为总 Token；消费为 `quota / quota_per_unit`。免费模型、消费缺失但存在用量的模型不因金额为零/未知而从 UI 删除。
-- 缓存读取占比优先保留覆盖契约完整时的 `cache_read_tokens / cache_eligible_input_tokens`；原本未知时回退为同一模型所有时间桶的 `sum(cache_read_tokens) / sum(input_tokens + cache_read_tokens + cache_write_tokens)`。官网模型明细中的普通输入、缓存读取和缓存写入是独立分量，不能用读取大于普通输入来判定无效。回退要求每桶三个输入分量均存在且非负、总分母大于 0；不平均各桶百分比，不将缺失值补零。明细覆盖不完整时，该回退只代表已获取明细，不用 `token_used - output_tokens` 补出分母。公开前端契约与合成 fixture 不代表真实账户已对账。
-- Pipio `/api/status` 的正值 `usd_exchange_rate` 用于该账户 USD→CNY 汇总；不硬编码汇率。旧快照 USD 汇率缺少该字段时在下次刷新重取，不等待每周过期。获取失败不伪造转换值。
-- 菜单栏点击外部只隐藏当前页面；重新点开恢复同一个表单/详情窗口。草稿仅驻留内存，明确取消、保存、关闭或退出后不保留。辅助窗口跟随首页内容位置并限制在对应屏幕内，不再居中。
-- 主 Popover 与设置、添加账号、编辑账号、账号详情辅助面板统一固定宽度为 360 点；固定菜单栏入口宽度为 70 点。只显示今日消费数值，不显示余额、币种或“今日”前缀。使用系统模板 SF Symbol，跟随菜单栏外观，不使用彩色 Emoji。关闭今日消费显示或数据不完整时只保留入口图标。账户详情更新时间使用本地时区 `MM/dd HH:mm`。
-- `scripts/test-regressions.sh` 包含 Pipio 看板合成契约测试（端点、五模型、多桶合并、Token、缓存覆盖、免费/未知模型、汇率和旧缓存重取）；不请求真实账户。
-
-- 本机使用第 9 节的 MacOSX26.5 SDK 与临时构建目录可完成 `swift build`（需要允许 SwiftPM manifest 的 sandbox-exec）；MacOSX27 SDK 的既往不匹配不能再概括为所有本机构建均失败。项目部署目标仍为 macOS 27，未降级。
-
-### 账户外汇参数（2026-09-21）
-
-- `quota_per_unit` 是额度到原生金额的除数，只信任站点返回值，不允许手动覆盖/默认猜值。`usd_exchange_rate` 是 USD→CNY 乘数，两者不可混用。
-- `AccountConfiguration.manualUSDToCNY` 为可选正数，编辑账户页可设置/清空；手动值优先，清空使用未过期站点值。手动值随非秘密账户配置持久化和同步，自动刷新不会覆盖。
-- `DashboardAggregator` 按账户应用手动 FX，保存配置可离线即时刷新首页/菜单栏合计，不修改原生快照、历史或模型金额。旧账户 JSON 自动兼容；无参数仍不伪造金额。
-
-### 菜单栏与模型消费分析（2026-09-21）
-
-- 模型总 Token 优先读取 `token_used`；缺失时按时间桶使用有效非负 `input_tokens + cache_read_tokens + cache_write_tokens + output_tokens`，独立分量各计一次；缺失分量或无效原始总数不伪造结果，整数溢出安全失败。
-- 分模型列表按原生消费金额降序排列，同额按模型名稳定排序；免费模型保留，未知消费排最后。解析层与展示层均应用排序，因此旧缓存无须迁移。
-- 详情页总 Token 列固定宽度、使用等宽数字及完整值悬停提示，避免被长模型名挤压。`scripts/test-regressions.sh` 同时验证模型计数/比例/排序和菜单栏展示内容。
-
-### 表单与首页/详情反馈（2026-09-21）
-
-- 添加账户与测活共用 `AccountDraft.validateRequiredFields`，先列出当前服务商的全部缺填字段，再做地址格式和远端校验；空显示名称不再报站点地址无效。编辑账户的空名称也给出对应字段提示。
-- 首页两个汇总卡片的标题、金额和说明居中；模型 Token 自动使用十进制 K/M/B/T/P/E 缩写（最多两位小数），悬停与辅助功能保留完整整数；不改变原始计数或持久化 schema。
-- Pipio 今日消费改为与模型分析共用一次 `/api/data/self` 返回，按本地当天时间范围汇总原始 quota 后除以账户 `quota_per_unit`。公开官网概览脚本也从该看板数据汇总今日金额；真实账户具体差额未做认证请求对账。余额、月消费及已完成日期的历史查询接口保持不变。历史回填跳过今天，避免覆盖快照已经写入的今日记录。
-- 看板返回成功且当日数组为空时今日消费为 0；任一当日 quota 缺失或接口失败则今日消费未知，不回退到另一口径的 `/api/log/self/stat`。可选 Token 聚合失败不丢弃可确认的消费总额。
-- 详情页右上角关闭、底部“返回首页”和原生窗口关闭均通过窗口关闭代理重新打开首页；点击应用外部仍只隐藏并保留详情状态。其他辅助窗口关闭行为不变。
-
-### 通用导航：关闭辅助页面返回首页
-
-设置、添加账户、编辑账户和账户详情统一遵循“显式关闭返回首页；隐藏保留页面状态”的规则，不再仅为详情单独开启。公共窗口控制器处理自定义关闭、完成、取消、保存成功与原生窗口关闭；保存失败留在原页。后续同级辅助页面默认继承此行为，设置内部 sheet 保持返回父页面。
-
-替换窗口不触发旧窗口返回，延迟返回可被后续隐藏/切页取消。新增 `scripts/test-window-navigation.sh`，需 macOS 登录图形会话，使用模拟内存数据检查实际 AppKit 窗口导航。可按本机已核实的 SDK 设置执行：`SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk scripts/test-window-navigation.sh`；不要把该 SDK 选择理解为 GitHub 打包环境的修改。
-
-### 原生材质视觉统一（2026-09-22）
-
-- Relay 首页及辅助页面采用 `Sources/Relay/UI/RelayVisualStyle.swift` 的共享 SwiftUI 原生材质样式：页面容器使用 `regularMaterial`，卡片使用 `thinMaterial`，嵌套状态面板使用 `ultraThinMaterial`。
-- 本次只改变材质、边缘、阴影和文字对比度，不改变首页/详情/设置/添加/编辑页面的布局、模块功能、字段和导航行为；浅色模式不写死黄色或其他壁纸颜色，背景色由系统材质自然透入。
-- 该视觉实现不使用自绘模糊或渐变模拟玻璃；实际渲染应以 macOS 27 的系统 Material 和语义颜色为准。
-
-## 15. 2026-09-24 Implementation Update
-
-- 设置 → 数据新增账号管理：可对已添加的顶层账号启用/停用、隐藏/取消隐藏和删除；workbuddy2api 按网关父账号管理，删除网关会移除其本地快照、历史和凭据引用。
-- 账号新增 `isHidden` 持久化字段，旧本地 JSON 缺失该字段时按未隐藏兼容解码；隐藏账号仍可后台刷新，但不进入首页账户投影、汇总、网关提示和低余额通知。
-- 删除账号先清理本地账户、快照、历史和同步 tombstone，再清理凭据；凭据已不存在时不阻断删除。
-
-### 账户详情实时数据绑定（2026-10-06）
-
-- 详情窗口由 `AccountDetailContainerView` 订阅共享 `RelayStore`，只保留账户稳定 ID，通过 `accountDetail(for:)` 获取当前账户、7 日趋势、模型统计和 DeepSeek 用量报告，不再使用打开窗口时的数据副本。
-- 网关内部账户使用非 UUID 的子账户 ID 定位当前积分/状态，其趋势和模型数据读取父网关；趋势点沿用持久化记录 ID，刷新不重建窗口或重置页面本地状态。
-- 详情对应账户或网关子账户消失时走现有关闭/返回首页路径，不继续显示已移除账户的旧快照；刷新失败仍保留上次成功数据并使用共享账户错误状态。
-
-### 刷新事务与详情故障隔离（2026-10-07）
-
-- `LocalRepository.commitRefresh` 将本次快照及对应日历史一次提交；`FileLocalRepository` 使用同一候选状态和原子文件替换，失败不推进网关累计基线或内存状态。现有 JSON schema 保持版本 2，无数据库迁移。
-- `RelayStore` 在账户、快照及最近 30 条日历史全部读取成功后发布完整数据；读取失败保留上次成功的账户、完整快照和详情历史。跨日字段及汇率有效期仍按当前时钟失效，不能把昨日消费当作今日金额。
-- `AccountDetailState` 区分可用、暂时不可用和已移除。暂时不可用保留详情，底部原有更新时间区域显示错误；后续完整读取成功自动恢复，仅确认移除时关闭返回首页。
-- 详情的数据存在性不依赖首页可见性：隐藏网关仍可刷新其子账户详情；停用网关保留子账户快照、趋势和模型信息，停止采集并继续从首页快照汇总中排除。详情子账户显示“网关已停用”状态。
+- 新的长期事实直接更新对应章节，不追加“某日实现记录”；代码变更日志用 Git 历史，具体构建/验收证据按提交、命令、环境和结果记录，不把一次通过永久沿用。
+- 需求变化先更新 REQUIREMENT，再更新 DESIGN 和本文件中受影响的事实。
+- 设计方案、待确认项和验证结果必须分别标记 `PROPOSED`、`NEEDS_CONFIRMATION`、`VERIFIED`、`NOT_EXECUTED`；代码存在不等于环境验收完成。
+- 先读取本文件及 REQUIREMENT/DESIGN，保护用户已有未提交修改，按当前角色工作；需求与代码冲突时保留目标与现状，不能由代码反推授权。
+- 本轮三个基线文件优先于旧工作流记录中的实现状态；`docs/workstreams` 是历史任务材料。`SECURITY_DESIGN.md` 中旧删除顺序与现状不同，账户删除以当前 REQUIREMENT/DESIGN 为准。
+- 真实凭据、用户数据和临时命令输出不得进入文档。

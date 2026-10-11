@@ -4,6 +4,9 @@ import SwiftUI
 struct SettingsAccountsPage: View {
     @ObservedObject var store: RelayStore
     @Binding var accountPendingDeletion: AccountModel?
+    @State private var selected = Set<UUID>()
+    @State private var groupName = ""
+    @State private var batchMessage: String?
     let onEditAccount: ((AccountModel) -> Void)?
 
     private var managedAccounts: [AccountModel] {
@@ -21,6 +24,26 @@ struct SettingsAccountsPage: View {
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
+                if !managedAccounts.isEmpty {
+                    HStack {
+                        Button("全选") { selected = Set(managedAccounts.compactMap { UUID(uuidString: $0.id) }) }
+                        Button("取消选择") { selected.removeAll() }
+                        Text("已选 \(selected.count) 项").font(.caption).foregroundStyle(.secondary)
+                    }.controlSize(.small)
+                    if !selected.isEmpty {
+                        HStack {
+                            TextField("目标分组，留空取消", text: $groupName).textFieldStyle(.roundedBorder)
+                            Button("移动分组") { applyBatch(group: groupName, changeGroup: true) }
+                        }
+                        HStack {
+                            Button("隐藏") { applyBatch(hidden: true) }
+                            Button("取消隐藏") { applyBatch(hidden: false) }
+                            Button("停用") { applyBatch(enabled: false) }
+                            Button("启用") { applyBatch(enabled: true) }
+                        }.controlSize(.small)
+                    }
+                    if let batchMessage { Text(batchMessage).font(.caption).foregroundStyle(.secondary) }
+                }
                 if let error = store.globalErrorMessage {
                     Label(error, systemImage: "exclamationmark.triangle.fill")
                         .font(.system(size: 10))
@@ -46,6 +69,11 @@ struct SettingsAccountsPage: View {
     @ViewBuilder
     private func accountManagementRow(_ account: AccountModel) -> some View {
         HStack(spacing: 9) {
+            if let id = UUID(uuidString: account.id) {
+                Toggle("选择\(account.name)", isOn: Binding(get: { selected.contains(id) }, set: {
+                    if $0 { selected.insert(id) } else { selected.remove(id) }
+                })).labelsHidden().toggleStyle(.checkbox)
+            }
             Image(systemName: account.kind == .workbuddy2api ? "point.3.connected.trianglepath.dotted" : "person.crop.circle")
                 .foregroundStyle(account.isHidden ? .secondary : Color.accentColor)
                 .frame(width: 20)
@@ -107,6 +135,12 @@ struct SettingsAccountsPage: View {
         .padding(.horizontal, 9)
         .padding(.vertical, 8)
         .relayInsetSurface(cornerRadius: 9)
+    }
+    private func applyBatch(group: String? = nil, changeGroup: Bool = false, hidden: Bool? = nil, enabled: Bool? = nil) {
+        do {
+            try store.organizeAccounts(selected, group: group, changeGroup: changeGroup, hidden: hidden, enabled: enabled)
+            batchMessage = "已更新 \(selected.count) 个账户。"; selected.removeAll()
+        } catch { batchMessage = error.localizedDescription }
     }
 
 }

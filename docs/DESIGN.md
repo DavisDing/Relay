@@ -1,1075 +1,280 @@
-# Relay / 驿站 · 技术设计
+# Relay 技术设计
 
-**版本**：v1.3-draft
-**日期**：2026-09-18
-**阶段**：Architecture
+**版本**：v2.0
+**状态**：当前实现设计
+**最近整理**：2026-10-11
 
-阅读指引：前文保留历次方案与实施记录；2026-10-09 已实施基线见第 17 节，2026-10-10 增量评估与待确认事项见第 18 节，本轮实施与验证见第 19 节。早期“尚无业务代码”、顺序刷新、无下载校验等描述不代表当前实现。
+需求与验收见 [REQUIREMENT](REQUIREMENT.md)，长期事实和构建命令见 [AI_CONTEXT](AI_CONTEXT.md)；原始凭据方案见 [SECURITY_DESIGN](SECURITY_DESIGN.md)；该旧记录的删除顺序不代表现状，账户生命周期以本文和 REQUIREMENT 为准。
 
-## 1. 技术栈
+本文描述当前代码的职责边界、数据流、持久化、界面入口、异常语义和验证边界。未实现的方案必须标记 `PROPOSED`，未经过目标环境操作的内容标记 `NOT_EXECUTED`。
 
-| 层 | 方案 | 原因 |
+## 1. 设计约束
+
+- 使用 SwiftUI + AppKit 的 macOS 菜单栏单体应用；不新增远程后端、数据库或第三方依赖。
+- 本地优先；业务数据、同步数据和凭据数据分离。
+- 已保存凭据仅由 `FileCredentialStore` 读取；UI 可持有用户正在录入的临时草稿，不回显旧值，同步、导出和备份不接触凭据正文。
+- 账户失败隔离，刷新和写入采用原子提交；未知值不能被转成零。
+- 复用现有页面和原生材质，不通过结构重做解决局部状态问题。
+
+## 2. 模块职责
+
+### UI
+
+`Sources/Relay/UI` 负责输入、展示和页面状态：
+
+- `MainPopoverView`：总览、搜索、分组、置顶排序和账户入口。
+- `AccountAddModalView` / `AccountEditModalView`：账户字段、预算、分组、置顶和凭据编辑。
+- `AccountDetailContainerView` / `AccountDetailView`：账户实时投影、趋势、模型和历史补齐状态。
+- `SettingsDataPage`：刷新、历史保留、月预算通知。
+- `SettingsSyncPage` + `DataTransferPanel`：iCloud 普通文件同步、CSV、配置导入导出和本机备份。
+- `RelayMenuBarController`：菜单栏状态、Popover 和辅助窗口导航。
+
+UI 不拼供应商 URL、不解码供应商 JSON、不持有长期凭据。关闭辅助页返回首页；外部隐藏保留页面状态。
+
+### 业务服务
+
+- `AccountService`：账户验证、凭据事务、首个快照和元数据保存。
+- `ProviderAdapter`：供应商 URL、凭据请求、快照、历史和能力适配。
+- `RefreshScheduler`：账户请求去重、全局并发、同源串行、手动优先和取消。
+- `RefreshCoordinator`：执行单次请求、退避、能力补充、历史批量提交和刷新原子事务。
+- `DashboardAggregator`：基于可比较金额和数据完整性生成总览，不将未知视为零。
+- `AccountOrganizationService`：搜索、分组筛选、置顶和稳定排序的纯投影。
+- `BudgetService`：月预算币种、月份、80/100% 阈值和本机去重状态。
+- `ModelAnalysisService`：模型消费、Token、占比、单位成本和未知原因。
+- `AccountHealth`：运行期健康摘要，不持久化秘密。
+- `UpdateService`：GitHub Release 检查、精确版本/资产绑定、暂存下载和 SHA-256 验证。
+- `GlobalShortcutService` / `LaunchAtLoginService`：快捷键事务注册和系统登录项调用，失败报告真实系统错误。
+
+### 持久化与文件服务
+
+- `FileLocalRepository`：`relay-local-v1.json`，版本化 JSON、原子替换、权限校正和恢复前内容比较与交换（compare-and-swap）。
+- `RecoverableLocalRepository`：启动读取失败时保持故障态，不创建可写空库；支持重试打开与明确确认的损坏库备份恢复。
+- `FileSyncService` / `SyncFileWorker`：iCloud Drive 普通文件、`NSFileCoordinator`、后台准备、冲突合并和最多三次 compare-and-swap 重试。
+- `LocalBackupService`：本机备份创建、列表、预览、security-scoped bookmark 和目录迁移；数据恢复事务由 `RelayStore` 执行。
+- `FileCredentialStore`：本机私有凭据文件，独立于其他持久化模型。
+
+## 3. 领域模型和版本
+
+- `AccountConfiguration` 持久化账户 ID、供应商、站点、启用/隐藏、低余额阈值、手动汇率、月预算、分组、置顶、排序和时间。
+- `ProviderSnapshot` 持久化余额、今日/月消费、请求量、模型使用、能力、数据新鲜度、账户汇率和 workbuddy2api 子账户。
+- `DailyUsageRecord` 保存账户级日消费；模型聚合保留在快照或相关模型结构中。
+- `RelaySettings` 当前 schema 1，包含刷新间隔、菜单栏今日消费、基础币种、默认低余额阈值、历史保留和同步开关。
+- `RelaySyncData` 当前 schema 1；本地 JSON 另有 schema 2 兼容检查。配置导出使用独立的 `RelayConfigurationArchive`。
+- `ProviderCredential` schema 为 2，独立保存本机秘密，不作为同步模型。便携 UUID 引用不是凭据正文；合并不能覆盖已保存的本机引用。
+- `RepositoryPerformanceDiagnostics` 与同步耗时只供运行期使用；本地历史按账户建立读取索引，写入仍全量 JSON 原子替换。
+- 新增可选字段必须兼容旧 JSON；删除或改变含义必须先增加 schema 迁移和回归夹具。
+
+### 文件边界
+
+| 文件/位置 | 当前格式与版本 | 内容/授权边界 |
 |---|---|---|
-| UI | SwiftUI + 少量 AppKit | SwiftUI 实现页面；AppKit 负责状态栏、窗口层级和必要的 macOS 生命周期控制 |
-| 语言 | Swift（macOS 27 SDK） | 原生平台能力、菜单栏、文件协调和 Liquid Glass 支持最好 |
-| 并发/网络 | Swift Concurrency + URLSession | 不引入第三方网络框架；便于账户级隔离、取消和限流 |
-| 图表 | Swift Charts | 7/30 日趋势，无需第三方图表库 |
-| 本地数据 | 版本化 JSON `FileLocalRepository`（当前实现） | 无第三方依赖、免费账户可直接编译运行；通过 `LocalRepository` 协议保留未来替换空间 |
-| 文件同步 | iCloud Drive 普通文件 + `NSFileCoordinator` | 不使用 CloudKit；默认逻辑目录为 `iCloud Drive/文稿/Relay`，仅同步非秘密数据 |
-| 凭据 | `FileCredentialStore` 私有应用支持目录 | 用户已明确选择不使用 Keychain；目录/文件使用 0700/0600，不进入同步文件 |
-| 启动项 | ServiceManagement | 原生登录项管理 |
+| `~/Library/Application Support/cloud.dinghao.relay/relay-local-v1.json` | 本地 schema 2 | 账户、快照、日历史、设置和 tombstone，不含凭据 |
+| 同目录 `relay-credentials-v1.json` | 凭据 schema 2 | 仅本机秘密，禁止复制到同步/备份 |
+| 用户选定同步目录 `relay-sync-v1.json` | RelaySyncData schema 1 | 非秘密投影，credentialReference 重写为便携 UUID，同步开关关闭 |
+| 配置导出 JSON | `relay-configuration` schema 1 | 仅账户配置和 RelaySettings，不含历史/凭据/授权 |
+| 默认 `Application Support/Relay/Backups` 或所选父目录 `RelayBackups` | RelaySyncData schema 1 | 非秘密备份，创建/恢复前备份使用同一服务 |
+| UserDefaults | 各功能自己的本机键 | bookmark、外观、通知开关/去重、快捷键等，不随配置文件授权 |
 
-项目当前只有文档，没有可复用业务代码或既有技术栈。版本化本地 JSON 是当前本机事实源；iCloud 云盘同步文件是可合并副本，不直接替代本地数据。SwiftData 作为未来可替换实现，不是当前运行前提。CloudKit 不在当前或后续已规划范围内。
+内部 JSON 日期采用 ISO 8601 编解码；`yyyyMMdd` 只是备份界面的显示格式，不改变 JSON 日期字段、CSV 日期或文件名。同步同一记录取更新时间较新者；时间按秒比较，同秒编辑用规范编码稳定裁决，同秒删除优先于编辑。日记录 ID 使用账户 UUID 与日桶时间戳，不添加旧草案中未实现的 ModelDailyUsage 表或设备写入者字段。
 
-## 2. 系统结构
+### 账户生命周期
+
+测活只执行网络验证，不写账户或凭据。新增先获取汇率、验证账户并取得快照，再准备可选历史，再保存凭据，一次提交账户、首快照及日历史；失败补偿新凭据，补偿失败明确报告。业务提交原子性不代表两个文件跨文件原子性。编辑账户偏好归入原元数据提交路径，保持原凭据替换回滚语义。删除先提交本机账户/快照/历史删除和 tombstone，再清理凭据；凭据已不存在不阻断删除。
+
+## 4. 供应商适配与数据流
+
+### Pipio
+
+输入站点可以是站点根地址或 `/v1` 地址。`ProviderURLNormalizer` 派生 origin、`/api` 管理基址和 `/v1` 模型基址。管理请求使用 `Authorization: Bearer` 和 `Pipio-User`，两者来自本机凭据文件的不同字段。
+
+快照路径：
 
 ```text
-Menu Bar / SwiftUI Views
-          │
-          ▼
-       AppStore                         SettingsStore
-          │                                  │
-          ├───────────────┬──────────────────┘
-          ▼               ▼
-   AccountService    RefreshCoordinator
-          │               │
-          │               ├── PipioAdapter ── URLSession ── pipio.io
-          │               └── DeepSeekAdapter ─ URLSession ─ deepseek.com
-          │
-          ├── CredentialStore ── Application Support/relay-credentials-v1.json
-          ├── LocalRepository ── relay-local-v1.json
-          └── FileSyncService ── iCloud Drive/Documents/Relay
+/api/status + /api/user/self
+  → 额度、余额、站点换算参数、能力
+/api/data/self（看板数据）
+  → 当日消费、模型/Token/缓存可选指标
+/api/log/self/stat
+  → 当前月份消费与今天以前的历史日消费
+  → ProviderSnapshot + DailyUsageRecord
 ```
 
-Relay 无自建后端。前端、业务层和供应商访问均运行在本机；“前后端职责”在本项目中对应 UI 层与本地业务/数据层。
+今日只使用看板口径：成功空数组为零，缺 quota 或失败则未知，不回退旧日志统计；可选模型请求失败不得丢弃可确认的消费总额。
 
-## 3. 模块设计
+### DeepSeek
 
-### 3.1 AppShell
+余额固定调用 `https://api.deepseek.com/user/balance`。可选平台历史用量访问 `platform.deepseek.com` 的已封装用量接口，按 UTC+8 月份聚合；没有用户手动提供的 `userToken` 时只提供余额能力。
 
-职责：应用生命周期、菜单栏入口、Dock 显示策略、弹出面板、设置窗口、深色模式和全局快捷键。
+### workbuddy2api
 
-主要组件：
+地址仅接受 HTTPS，另保留已实现的 localhost/127.0.0.1/::1 loopback HTTP 例外；该例外尚未成为已确认安全需求。读取网关 `status` 和可选 `v1/stats`，将子账户积分、状态、请求量和模型统计转换为统一快照。网关积分独立于金额汇总；累计统计的每日记录是采集间隔观测增量，无法还原离线各日真实消耗。子账户启停请求在执行前重新读取当前状态并确认外部 ID 存在；该写操作的产品边界见 REQUIREMENT 的 `NEEDS_CONFIRMATION`。
 
-- `RelayApp`
-- `MenuBarController`
-- `PanelCoordinator`
-- `AppRoute`
-
-### 3.2 Dashboard
-
-职责：组合本地快照，计算可展示的总余额、完整的今日消费、账户状态和趋势。
-
-规则：
-
-- 只汇总币种一致或已有有效换算结果的金额。
-- `knownTotal` 与 `isComplete` 同时返回；今日消费只有在当前展示范围完整时才交给 UI，否则该字段隐藏。
-- UI 首屏直接读本地缓存；刷新异步发生。
-
-### 3.3 AccountService
-
-职责：账户增删改、启用禁用、验证、本地凭据引用维护、删除数据和文件同步 tombstone。
-
-添加 Pipio 账户流程：
-
-1. 规范化站点 URL，拆分 origin、management base、model base。
-2. 请求 `GET {origin}/api/status`。
-3. 校验令牌非空、`pipioUserId` 为正整数。
-4. 请求 `GET {origin}/api/user/self`。
-5. 请求统计接口并生成 `ProviderCapabilities`。
-6. 先写本地凭据文件，成功后写账户元数据；任一步失败则回滚本次新建数据。
-7. 保存首个快照和按日聚合。
-
-### 3.4 ProviderAdapter
-
-供应商通过协议适配，不让 UI 直接理解供应商响应。
-
-```swift
-protocol ProviderAdapter {
-    var kind: ProviderKind { get }
-    func probeSite(_ configuration: SiteConfiguration) async throws -> SiteMetadata
-    func validateAccount(_ account: AccountConfiguration,
-                         credential: ProviderCredential) async throws -> ValidationResult
-    func fetchSnapshot(_ context: FetchContext) async throws -> ProviderSnapshot
-    func fetchUsage(_ range: DateInterval,
-                    context: FetchContext) async throws -> ProviderUsage
-}
-```
-
-规范化输出：
-
-- `MoneyValue?`
-- `UsageMetrics?`
-- `ModelUsage[]`
-- `ProviderCapabilities`
-- `DataFreshness`
-- `ProviderError`（脱敏）
-
-#### PipioAdapter
-
-已验证管理令牌可用于 Pipio 管理接口，但不可用于 `/v1/models`。Pipio 账户的数值用户 ID 可从用户本人已登录网页的 `/api/user/self` 请求头 `Pipio-User` 读取；Relay 不读取浏览器 Cookie，也不尝试自动抓取 Safari 会话。
-
-URL 规则：
+## 5. 刷新与原子提交
 
 ```text
-输入：https://pipio.io/v1
-origin：https://pipio.io
-modelBaseURL：https://pipio.io/v1
-managementBaseURL：https://pipio.io/api
+定时/手动/详情刷新
+  → RefreshScheduler 合并账户请求
+  → RefreshCoordinator 读取凭据并执行一次尝试
+  → 适配器返回快照与可选历史
+  → 提交前复核账户仍存在、配置未变、仍有订阅者
+  → LocalRepository 原子写入快照和今日记录
+  → RelayStore 发布完整投影
+  → 健康/预算通知评估
+  → FileSyncService 异步合并非秘密数据
 ```
 
-不能执行字符串直接拼接 `input + /api/...`。使用 `URLComponents` 删除已知 `/v1` 后缀并保留 origin。
+- 默认全局并发 3，同一 scheme/host/port 的 origin 串行；历史补齐与正常刷新共用请求许可和原点冷却。
+- `Retry-After` 支持秒数和 HTTP 日期。等待退避的任务释放执行名额，未结束的非协作请求仍占名额。
+- 最后一个订阅者取消、删除、停用或编辑账户后，旧结果不能提交。
+- 刷新提交失败不推进快照、历史、网关累计基线或已发布完整数据；失败健康状态可更新。
+- 自动刷新逐账户投递，每账户最多一个定时订阅者；下一轮不等待长冷却账户结束，睡眠后不回放所有错过的周期。
+- `RelayStore` 完整读完账户/快照/详情历史后才发布，读取失败保留上次投影。隐藏/停用与详情存在性分别判断；临时不可用保留窗口，确认移除才返回首页。
+- `StorageAvailability` 区分启动故障与短暂供应商错误；故障态暂停刷新/同步并拒绝写入，重新读取成功后恢复。
 
-认证头：
+## 6. 历史、预算和模型分析
 
-```http
-Authorization: Bearer <secret>
-Pipio-User: <positive integer>
-```
+历史补齐只覆盖今天以前的目标日，过滤无效和跨币种记录，所有目标日处理完后一次性提交；不覆盖正常刷新写入的今日记录。供应商不支持时显示不可用原因。
 
-首期只发送服务端明确要求的 `Pipio-User`；`New-Api-User` 作为兼容选项仅在验证后加入，不默认重复发送两个身份头。
+预算展示校验同月、同币和有效数值；通知另要求 fresh。Pipio 使用本机日历，DeepSeek 使用 UTC+8 公历。80% 和 100% 通知按账户、月份、币种和预算值持久化去重。
 
-已知端点：
+模型分析按消费降序、Token 降序或名称稳定排序，同额按名称，未知消费排最后；免费和未知行保留。消费占比要求列表中金额已知、同币种且总额大于零，不将其宣称为未知请求范围的完整占比；混币消费排序先按币种分组，不比较不同币种原始数字。单位成本按各行可确认消费/正 Token 数计算，百万 Token 为单位。总 Token 优先服务商总数，否则按可确认输入、缓存读取/写入和输出计一次；缓存读取率按完整输入组成汇总分子/分母，未满足条件保持未知。显示用 K/M/B/T/P/E 缩写，悬停与辅助功能保留完整数值。
 
-| 用途 | Method/Path | 认证 |
-|---|---|---|
-| 站点能力 | `GET /api/status` | 无 |
-| 当前账户 | `GET /api/user/self` | Bearer + Pipio-User |
-| 聚合统计 | `GET /api/log/self/stat` | Bearer + Pipio-User |
-| 日志列表 | `GET /api/log/self` | Bearer + Pipio-User |
-| 模型列表 | `GET /v1/models` | 模型 API Key；不与管理系统令牌混用 |
+低余额/预算通知需用户开启和系统授权；发送前重查账户启用、可见性、最新快照、阈值和本机去重状态，单账户成功不等待其他账户长退避。
 
-配额换算：
+## 7. 同步、导入导出与备份
+
+### iCloud 文件同步
+
+- 文件名 `relay-sync-v1.json`，仅存非秘密账户配置、设置、聚合历史和 tombstone。
+- 逻辑目录为 `iCloud Drive/Documents/Relay`（中文“文稿/Relay”）；首次启用由系统选择器确认实际目录，保存 security-scoped bookmark，不拼接 Mobile Documents 或本地化路径。同步书签可解析且 stale 时尝试续写；无法解析/访问时重新授权，不改用猜测目录。备份书签的 stale 拒绝策略另见本机备份节。
+- `SyncFileWorker` 在后台准备和编码，`NSFileCoordinator` 负责读写；本地版本改变时 compare-and-swap，冲突候选保留。
+- 首次启用先导入再写出，避免空本地库覆盖云端；关闭同步只停止读写，不删除本地数据。
+- `NSFileCoordinator` 失败或未调用 accessor 时拒绝操作，没有直接写入回退；冲突报告冻结候选，用户明确选择后应用，候选副本不会自动删除。
+- 同步合并保留本机 credentialReference；新设备/供应商或 origin 改变使用新引用。bookmark、同步开关和通知去重不跨设备授权。
+
+### 配置和 CSV
+
+配置导出采用白名单字段；导入先检查格式、版本、大小、账号数量、地址、预算和敏感字段，再生成预览，确认后在存储层 compare-and-swap 应用。CSV 过滤账户/日期范围，保留原币种和未知状态，并转义危险公式前缀。文件上限 20 MiB、账户 1000、备份历史 200000；导入不删除未列出的本机账户，恢复替换完整非秘密数据。
+
+`RelayStore.applyTransferredData` 阻止账户写入，取消刷新并等待在途同步，再复查预览内容；先创建当前数据备份，成功后原子替换。相同 ID/供应商/origin 保留本机凭据映射；目标改变清除旧快照/历史并分配新引用。导入/恢复保持本机同步开关，结束后恢复定时刷新，不立即强制上传。
+
+### 本机备份
+
+`LocalBackupService` 是共享 actor，自动/手动/恢复前备份和目录迁移串行执行。运行期间每日按本机日历检查备份，正常创建保留最近 5 份；默认位于 `~/Library/Application Support/Relay/Backups`。
+
+它只处理 `relay-backup-*.json` 普通文件，不读取凭据。所选父目录内的 `RelayBackups` 子目录获得私有权限；父目录、无关文件和凭据目录不改权限。
+
+目录切换流程：
 
 ```text
-amount = quota / quota_per_unit
+选择/恢复默认目录
+  → 验证父目录、bookmark、目标子目录和可写性
+  → 读取源目录全部 Relay 备份
+  → 复制到目标并保留新副本修改日期，核对字节和源文件集合
+  → 校验成功后提交新 bookmark/路径
+  → 再删除已核验旧原件
 ```
 
-`quota_per_unit` 来自站点状态；缺失或非法时标记金额不可换算，而不是静默使用错误值。Pipio 不提供手动额度除数或猜测兜底值。
+复制或验证失败仅清理仍经双方校验的本次副本并保留旧设置；不匹配副本保留为待处理，不能盲删；同名不同内容拒绝覆盖；删除失败保留两处有效副本并返回清理警告；迁移阶段不执行五代保留裁剪。列表与恢复预览使用 `yyyyMMdd` 主日期和 `HH:mm:ss` 次要时间。备份文件名仍为 `relay-backup-<Unix秒>-<UUID>.json`，无需重命名旧文件；固定 POSIX locale、公历、本机时区，DateFormatter 用 `yyyyMMdd` 而非周年份 `YYYY`。
 
-#### DeepSeekAdapter
+列表只展示可解码备份，日期目前取文件修改时间（创建时设为备份时间，搬移新副本时保留）；外部改写修改时间可能影响排序与显示，不声称存在独立的不可变日期索引。所选路径拒绝非目录、符号链接及凭据目录/祖先/子目录；不修改用户父目录权限。
 
-- P0 不实现，P1 接入 DeepSeek 官方余额接口；历史用量作为 userToken 可选能力接入。
-- 用户必须主动提供 DeepSeek 官方 API Key；Relay 使用该 Key 调用官方账户余额端点。
-- 不读取浏览器 Cookie，不复制登录会话。用户可手动提供可选平台 userToken，仅用于 DeepSeek 网站的历史用量接口；该接口属于网页内部接口，可能变更，失败时降级为余额可用。
-- 官方接口无法提供的用量维度显示为“不支持”，不通过网页抓包补齐。
+同目录重选只续授权；旧 bookmark 无效时先重新授权原目录，不能静默猜测源数据。迁移不是跨目录单次原子事务；本机清单支持重启后复核清理，中断仍可能留下双副本，不据普通回归声称断电恢复。
 
-### 3.5 RefreshCoordinator
+## 8. UI 与错误
 
-职责：定时刷新、手动刷新、账户级并发、取消、退避、数据落库和状态发布。
+共享 `RelayVisualStyle` 保留页面 `regularMaterial`、卡片 `thinMaterial`、嵌套 `ultraThinMaterial`；不自绘模糊/渐变替代系统材质。首页汇总内容居中，搜索在账号标题右侧；设置分为通用、数据、快捷键、同步、账户管理、关于。辅助窗口锚定首页位置，显式退出返回首页，保存失败留原页，替换窗口不闪现首页。
 
-建议规则：
+`AdaptiveLineChart` 在趋势较密时限制标签，保留选中点、键盘和辅助功能描述；缺日继续使用未知语义。
 
-- 最大并发：3 个账户。
-- 同一账户同一时间最多一个刷新任务；手动刷新复用或取消旧任务。
-- 5xx/超时：1、2、5、15、30 分钟退避并加抖动。
-- 401/403：停止自动重试，状态变为 `credentialInvalid`。
-- 429：优先遵守 `Retry-After`，否则退避。
-- 成功后清零失败计数。
+页面按实际场景区分 Loading、Empty、Refreshing、Partial、Stale、Error、Success。典型错误包括凭据失效、权限不足、限流、网络、响应不兼容、本地存储不可用、bookmark 失效、同步冲突、配置冲突和备份迁移冲突。
 
-### 3.6 CredentialStore
+显示规则：未知/未支持不显示 0；今日不完整时隐藏今日总消费；同步或供应商失败时保留本地可用数据；目录迁移清理失败明确显示未清理文件数。
 
-- 实现：`FileCredentialStore`，不依赖 `Security.framework`。
-- 默认文件：`~/Library/Application Support/cloud.dinghao.relay/relay-credentials-v1.json`。
-- 文件内容：版本化 JSON map，key 为稳定的本地 `accountId` 引用，value 为令牌和供应商所需的用户 ID。
-- 文件权限：父目录 0700，凭据文件 0600；写入使用 `.atomic`。
-- 该文件只属于当前 Mac 的本地应用数据，不进入 SwiftData、iCloud Drive 同步文件、源码、文档、日志或诊断导出。
-- 这是用户明确选择的安全降级：普通文件不具备 Keychain 的硬件保护、系统访问控制和授权提示。当前不自创主密码或加密算法，避免产生虚假的安全保证。
-- 只向业务层返回短生命周期值，不进入可观察 UI state。
+## 9. 安全设计
 
-### 3.7 LocalRepository
+- 凭据持久化只进入 `FileCredentialStore`；输入草稿和请求内存是临时生命周期，不进入业务 JSON 或日志。
+- JSON 编码前使用非秘密投影；导入、同步、备份和诊断均禁止凭据字段。
+- Authorization、Pipio-User、Cookie、Token、userToken 和原始响应不进入日志。
+- HTTPS 是原需求；workbuddy2api loopback HTTP 的现有例外单列为待确认。代码负责校验站点/输入；不安全证书与跨 origin 认证转发是安全验收要求。供应商请求使用独立同来源重定向 delegate；下载白名单测试不能代替本项。
+- 当前普通文件凭据不等同于 Keychain；不声称具备硬件保护。
 
-职责：保存账户元数据、最近快照、日聚合、模型聚合、偏好和同步状态。
+## 10. 更新与发布
 
-不保存：系统令牌、Pipio 用户 ID、API Key、Cookie、完整原始日志响应；DeepSeek userToken 仅保存在本机凭据文件，不进入同步数据。
+`UpdateService` 先绑定固定仓库的 Release tag/版本/准确 DMG 或 ZIP 文件名，下载前重新读取该 tag 元数据。优先用资产 `sha256:` digest，否则读取同版本 checksum；缺失、畸形、重复、版本不符、大小不符均拒绝。临时下载通过独立重定向策略限定 GitHub/CDN 路径，验证成功后移入 Downloads 且不覆盖已有文件，失败清理暂存。只下载，不解包替换自身。
 
-### 3.8 FileSyncService
+`.github/workflows/build.yml` 定义 main/tag 发布：回归、契约、GUI build-only、打包、checksum 复核、上传 ZIP/DMG/metadata/checksum，再创建 Release；PR 构建不等于发布。使用 ad-hoc、手动 Gatekeeper 放行，不采用 Developer ID/公证。SHA-256 不认证发布者身份；更详细流程见 [CI_RELEASE](CI_RELEASE.md)。
 
-- 不创建或使用 CloudKit Container。同步只读写 iCloud 云盘普通文件；Finder/iCloud Drive 客户端负责上传下载，Relay 不读取用户的 iCloud 账户凭据。
-- 默认逻辑目录为 `iCloud Drive/Documents/Relay`，中文 Finder 中显示为 `iCloud Drive/文稿/Relay`。不得硬编码 `~/Library/Mobile Documents/...` 或本地化的“文稿”字符串。首次启用时用系统目录选择器定位 iCloud Drive，并让用户确认“文稿/Relay”；保存确认后目录的持久化 URL bookmark。
-- 当前保存带安全作用域的持久化 URL bookmark；bookmark 失效或目录不可访问时要求用户重新选择，不阻塞本地功能。即使当前 GitHub 构建不启用 App Sandbox，也保持该授权模型，避免未来迁移时改变数据路径语义。
-- 同步文件名固定为 `relay-sync-v1.json`，使用版本化 schema、临时文件和原子替换，并通过 `NSFileCoordinator` 协调读写。
-- 同步账户元数据、日/模型聚合、用户主动设置和 tombstone；不含令牌、用户 ID、API Key、Cookie、原始日志或认证响应。
-- 合并以记录 UUID、`updatedAt` 和 tombstone 为依据；检测到无法自动解决的 iCloud 冲突版本时保留双方文件并提示用户。
-- 同步失败不阻塞本地写入；`FileLocalRepository` 始终是当前本机事实源。
-- 其他设备导入账户元数据后显示“需要在此设备补充凭据”。
+## 11. 验证设计
 
-### 3.9 RateService
+离线测试采用独立 Swift 脚本和临时 fixture，不使用真实供应商凭据：
 
-- 读取 Pipio 站点发布的 `quota_per_unit`、币种和相关换算元数据。
-- 刷新频率可配置：每天、每 7 天（默认）、每月、仅手动。
-- 缓存来源、获取时间和有效状态；失败时保留最后一次成功值并标记过期。
-- USD→CNY 优先读取账户配置中的有效手动外汇参数，否则使用未过期站点汇率；不改写用于额度归一化的 `AccountRate`。
+- `scripts/test-regressions.sh`：业务、刷新、存储、同步、账户偏好、备份、历史、预算、模型和图表回归。
+- `scripts/test-contracts.sh`：DeepSeek 用量、快捷键、同步冲突和 GUI 会话保护。
+- `scripts/test-window-navigation.sh --build-only`：编译 GUI 导航检查，不操作 WindowServer。
+- `swift build`：SwiftPM 应用构建；本机已核实的隔离 HOME/缓存/MacOSX26.5 SDK 命令见 AI_CONTEXT；部署目标仍为 macOS 27，发布 runner 配置为 xcode-27。
+- `git diff --check`：文档和代码格式检查。
 
-### 3.10 SwiftData 与账户/发布限制
+验证状态按证据使用：`IMPLEMENTED` 表示已有代码，`VERIFIED` 只表示对应检查在指定提交/环境通过，`NOT_EXECUTED` 表示目标验收未执行，`PROPOSED` 表示候选方案，`NEEDS_CONFIRMATION` 表示需求冲突待决定。代码存在、fixture 通过和 GUI 编译都不能代替真实 GUI、供应商、iCloud 双 Mac、发布资产或安装验收。
 
-- SwiftData 是 Apple 平台随系统提供的原生框架，不是需要单独购买或单独下载的第三方 SDK；没有按数据量或调用量收费。
-- SwiftData 没有一个适用于所有 App 的固定“占用多少 MB”数字；它由系统提供，最终应用包体受链接、优化和实际使用 API 影响，当前不为它单独估算包体。
-- 代码体积没有 Apple 官方固定数字；实际包体增量取决于链接方式、优化和最终使用的 API，不能在设计阶段承诺一个固定 MB 数。
-- 免费 Apple 账户可以用于本地 Xcode 开发、编译和在自己的 Mac 上运行调试版本；不需要先购买 Apple Developer Program。
-- 付费 Apple Developer Program 主要影响 Developer ID 签名、公证、App Store/TestFlight 等分发能力，不是 SwiftData 的使用门槛；Apple 官方标准价格为 99 USD/年（地区可能显示本地货币）。
-- 因此当前不把 SwiftData 作为必要依赖；现有 `LocalRepository` 已支持将来替换。
-
-### 3.11 Distribution
-
-- Bundle ID：`cloud.dinghao.relay`。
-- 发布渠道：GitHub Releases，不提交 Mac App Store。
-- 当前使用免费 Apple 账户，因此不能把 Developer ID 签名和公证作为首期前提；CloudKit Container 已明确不采用，与未来是否付费无关。
-- Release 构建至少执行 ad-hoc code signing 以固定应用包内部签名结构，但它不等同于 Apple 信任的 Developer ID 签名或公证。首期不启用 App Sandbox，以避免依赖当前不可稳定分发的沙盒授权与安全作用域书签身份。
-- 安装文档优先说明首次尝试打开后，到“系统设置 → 隐私与安全性 → 仍要打开”的流程；不把 `sudo xattr` 作为默认安装步骤。
-- `xattr -d/-rd com.apple.quarantine` 仅删除下载文件的 quarantine 扩展属性，不是代码签名、开发者认证或公证。普通用户对自己拥有的 App 通常不需要 `sudo`；该命令只作为高级故障排查说明，并附带来源校验警告。
-
-## 4. 层职责
-
-### UI 层
-
-- 展示本地状态、收集输入、基础格式校验。
-- 不直接拼 API URL，不持有长期凭据，不解释供应商 JSON。
-- 完整处理 Loading、Empty、Refreshing、Partial、Stale、Error、Success。
-
-### 业务层
-
-- 账户验证、能力探测、金额/时间规范化、汇总、刷新调度、错误分类。
-- 所有安全校验必须在业务层再次执行。
-
-### 数据层
-
-- `FileCredentialStore` 管本机凭据文件；不使用 Keychain。
-- `FileLocalRepository` 管当前本地业务数据；SwiftData 不是当前运行前提。
-- FileSyncService 管 `iCloud Drive/文稿/Relay` 中的可同步非秘密数据。
-
-### 外部服务层
-
-- 每个适配器只访问其声明的 HTTPS origin。
-- 响应先解码为供应商 DTO，再映射为统一领域模型。
-
-## 5. 数据流
-
-### 5.1 启动
-
-```text
-App Launch
-  → 读取 Settings / Accounts / Cached Snapshots
-  → 立即渲染菜单栏与首页
-  → 对到期且启用的账户安排后台刷新
-  → 单账户结果独立落库并更新汇总
-```
-
-### 5.2 Pipio 刷新
-
-```text
-Account metadata + local credential file
-  → PipioAdapter 构造 management request
-  → /api/user/self + /api/log/self/stat
-  → DTO 校验与单位换算
-  → ProviderSnapshot / DailyUsage
-  → LocalRepository 原子写入
-  → Dashboard 重算
-  → FileSyncService 异步合并并写入同步文件
-```
-
-## 6. API 设计
-
-### 6.1 Relay 自建 API
-
-`NOT_REQUIRED`：Relay 没有自建服务器或公开 HTTP API。
-
-### 6.2 Pipio 外部 API 合约
-
-#### PIPIO-001 站点状态
-
-```http
-GET {origin}/api/status
-```
-
-读取字段（其余忽略）：
-
-```json
-{
-  "success": true,
-  "data": {
-    "system_name": "Pipio",
-    "version": "...",
-    "server_address": "https://pipio.io",
-    "quota_per_unit": 500000,
-    "credit_currency": "USD",
-    "quota_display_type": "USD"
-  }
-}
-```
-
-错误：非 2xx、`success != true`、`quota_per_unit <= 0` 或 JSON 不可解析。状态接口失败时仍可允许用户手动继续验证账户，但需显示站点探测失败。
-
-#### PIPIO-002 当前账户
-
-```http
-GET {origin}/api/user/self
-Authorization: Bearer <system-token>
-Pipio-User: <numeric-user-id>
-```
-
-已实测返回 `data` 对象，包含数值配额、已用配额、请求数、账户状态和权限元数据等字段。实现时只读取余额/配额、累计消耗、请求数和状态所需字段；用户身份、邮箱和权限等非必要字段直接忽略，不持久化、不进入诊断或汇总。
-
-#### PIPIO-003 聚合统计
-
-```http
-GET {origin}/api/log/self/stat?start_timestamp=<seconds>&end_timestamp=<seconds>&model_name=<optional>
-Authorization: Bearer <system-token>
-Pipio-User: <numeric-user-id>
-```
-
-已实测 `data` 返回 `quota`、`rpm`、`tpm` 三个聚合字段；请求可使用 Unix 秒级 `start_timestamp`/`end_timestamp`。该接口不保证按模型拆分，模型维度首期从日志列表聚合。
-
-#### PIPIO-004 日志列表
-
-```http
-GET {origin}/api/log/self?...pagination...
-Authorization: Bearer <system-token>
-Pipio-User: <numeric-user-id>
-```
-
-响应为分页 `data.page`、`data.page_size`、`data.total`、`data.items`；单条日志包含 `created_at`（Unix 秒）、`model_name`、`quota`、`prompt_tokens`、`completion_tokens`、`use_time`、`is_stream` 等字段。首期可按时间窗口分页拉取并本地按日/模型聚合；`other` 字段和缓存命中率仍视为未知，不解析为强依赖。
-
-### 6.3 DeepSeek 官方 API 合约（P1）
-
-```http
-GET https://api.deepseek.com/user/balance
-Authorization: Bearer <deepseek-api-key>
-```
-
-只解析官方返回的可用状态、币种和余额字段。DeepSeek API Key 存本机 Relay 凭据文件，并固定请求 `GET https://api.deepseek.com/user/balance`。可选平台 userToken 另存于同一本机凭据文件，仅请求 `https://platform.deepseek.com/api/v0/usage/amount` 和 `/api/v0/usage/cost`，不读取 Cookie。
-
-## 7. 数据设计
-
-### DATABASE
-
-本地数据库：`REQUIRED`（当前为版本化 JSON；SwiftData 不是运行前提）。
-服务器数据库：`NOT_REQUIRED`。
-
-### Account
-
-| 字段 | 类型 | 说明 |
+| 验收范围 | 现有验证入口/夹具 | 证据限制 |
 |---|---|---|
-| id | UUID | 本地主键/跨设备稳定标识 |
-| providerKind | enum | pipio/deepSeek |
-| displayName | String | 用户可编辑 |
-| siteOrigin | URL/String | 规范化 origin，不含令牌 |
-| credentialRef | String | 本地凭据文件 map key；Pipio 用户 ID 与令牌仅保存在私有应用数据目录 |
-| enabled | Bool | 是否刷新和汇总 |
-| lowBalanceThreshold | Decimal? | 账户级阈值 |
-| sortOrder | Int | 默认手动顺序 |
-| createdAt/updatedAt | Date | UTC |
-| deletedAt | Date? | tombstone |
+| 账户与表单（AC-001/002/005/008/014） | `AccountFeedbackChecks`、`AccountFormPreferencesChecks`、`RegressionChecks` | 网络/磁盘注入和状态验证，不代替真实表单操作 |
+| 刷新与故障（AC-003/009/010/011） | `RefreshSchedulingChecks`、`StorageRecoveryChecks`、`RegressionChecks` | 不代替真实睡眠唤醒、网络及供应商对账 |
+| 历史/预算/模型（AC-004/006/012/013/015） | `HistoryBackfillChecks`、`ProductFeatureChecks`、`PipioDashboardContractChecks` | fixture 统计不等于官网真实账单对账或系统通知体验 |
+| 迁移/备份（AC-016/017/018） | `DataTransferChecks`、`TransferIntegrationChecks`、`BackupMigrationChecks` | 此三组检查不含真实目录选择器及断电；子进程中断由 StrengtheningChecks 单列验证 |
+| 备份日期/导航（AC-019/020） | GUI build-only，`WindowNavigationContractChecks` 的实际运行需图形会话 | 日期专门行为检查和真实界面验收尚未执行 |
+| 同步（AC-007/021） | `SyncSafetyChecks`、`SyncConflictContractTests`、双机 fixture 脚本 | fixture 不证明真实 iCloud 下载、冲突或第二台 Mac |
+| 更新（AC-022） | `UpdateIntegrityChecks`、`test-update-integrity.sh` | 不证明当前 Release 已发布、可安装或完成升级 |
 
-索引：仅保证 `id` 唯一；不得使用用户 ID、令牌、其哈希或可逆派生值构造索引。首期不做基于秘密字段的自动去重，重复账户由显示名、站点和用户确认处理。
+新增 `StrengtheningChecks` 关联 AC-023～AC-032；完整离线回归、三个契约、GUI build-only、SwiftPM 构建和本机重定向专项在基于 `2b4a117` 的当前未提交工作区通过。备份重新创建服务后重试已由 fixture 覆盖，子进程强制退出在复制与清理阶段另有检查；真实断电和原生目录授权仍未验收。
 
-### AccountSnapshot
+专项运行入口 `scripts/test-provider-redirects.sh` 用两个本机回环服务器验证生产 URLSession 的同来源认证和跨端口/多跳/方法变化保护，不连接真实供应商，不证明供应商 HTTPS 实机对账。系统通知和原生目录选择仍需实际应用环境。
 
-| 字段 | 类型 | 说明 |
+## 12. 当前决策
+
+| 编号 | 决策 |
+|---|---|
+| D-001 | 原生 SwiftUI/AppKit 单体应用，不引入自建后端。 |
+| D-002 | 供应商适配器输出统一领域模型，UI 不直接处理供应商 JSON。 |
+| D-003 | 凭据与业务/同步数据分离；使用私有文件而非 Keychain。 |
+| D-004 | Pipio 管理 API `/api` 与模型 API `/v1` 分开；不混用令牌。 |
+| D-005 | iCloud 使用普通文件，不使用 CloudKit Container；冲突保留候选。 |
+| D-006 | Bundle ID `cloud.dinghao.relay`，GitHub Releases + ad-hoc，手动安装；不使用 Developer ID/公证。 |
+| D-007 | 默认刷新 5 分钟、汇率 7 天、历史 1 年、低余额 20；未知今日消费不展示。 |
+| D-008 | Carbon 全局快捷键运行时与 AppKit 面板控制分离，事务注册/回滚，本机保存。 |
+| D-009 | DeepSeek 官方余额与用户手动提供的可选平台历史分开，历史/月份使用 UTC+8。 |
+| D-010 | iCloud 冲突生成不可变报告，暂停自动写回，用户决定后应用，保留候选。 |
+| D-011 | 离线、编译、真实 GUI、双 Mac、供应商和发布分别验收，不以 fixture 替代实机。 |
+| D-012 | 当前 JSON repository；SwiftData 只保留未来替换空间。 |
+| D-013 | 预算、分组、置顶归入账户表单；搜索位于账号标题右侧。 |
+| D-014 | 备份目录切换按复制、校验、提交、清理；固定日期 `yyyyMMdd`、时间 `HH:mm:ss`。 |
+
+## 13. 未决事项与后续入口
+
+需求未决项为 workbuddy2api 有限远端启停和 loopback HTTP 例外，见 REQUIREMENT；不据现有代码确认“只读”或“仅 HTTPS”的需求变更。
+
+### 13.1 当前新增实现（IMPLEMENTED）
+
+用户已授权恢复与加强项及六项产品功能。复用 JSON repository 和现有页面，不新增后端、数据库或第三方依赖。
+
+| 能力 | 修改入口与数据流 | 限制 |
 |---|---|---|
-| accountId | UUID | 关联账户 |
-| balanceAmount | Decimal? | 未知可空 |
-| currencyCode | String? | ISO 代码或站点单位 |
-| todaySpend | Decimal? | 未知可空 |
-| monthSpend | Decimal? | 未知可空 |
-| requestCount | Int64? | 未知可空 |
-| tokenCount | Int64? | 未知可空 |
-| cacheHitRate | Decimal? | 0...1；未支持为空 |
-| capabilities | OptionSet/raw | 实际能力 |
-| fetchedAt | Date | 本次完成时间 |
-| sourceUpdatedAt | Date? | 服务端时间 |
-| freshness | enum | fresh/stale/partial |
-
-每账户只保留一条 current snapshot；历史进入 `DailyUsage`。
-
-### DailyUsage
-
-唯一键：`accountId + localDate + timeZoneId`。
-
-字段：消费金额、币种、请求数、输入/输出/缓存 Token、是否完整、来源更新时间。
-
-### ModelDailyUsage
-
-唯一键：`accountId + localDate + modelName`。保存 token/request/spend 聚合，不保存单次日志。
-
-### RefreshState
-
-每账户保存最近成功时间、最近尝试时间、连续失败次数、下次允许刷新时间、脱敏错误代码。
-
-### AppSettings
-
-刷新间隔、状态栏显示项、外观、默认页面、低余额默认值（20）、历史保留策略（默认 1 年/可选永久）、iCloud Drive 同步目录书签、文件同步开关、汇率刷新频率（默认 7 天）。
-
-### SyncEnvelope
-
-同步文件顶层结构：
-
-```text
-schemaVersion
-exportedAt
-writerDeviceId
-accounts[]
-dailyUsage[]
-modelDailyUsage[]
-preferences
-tombstones[]
-```
-
-- `writerDeviceId` 是随机设备 UUID，不包含账户身份。
-- `accounts[]` 不包含 `credentialRef`、令牌或 Pipio 用户 ID；导入后按 `Account.id` 关联本地凭据。
-- 永久历史仍只保存日/模型聚合，不保存单次请求日志。
-- schema 升级必须向后读取至少一个旧版本；未知新版本只读保护，不覆盖。
-
-### RetentionPolicy
-
-- `.oneYear`：默认，滚动保留最近 365 个本地日期。
-- `.forever`：不按时间自动删除聚合历史。
-- 清理只作用于聚合记录；tombstone 按独立周期保留，确保删除已传播后再回收。
-
-## 8. 前端设计
-
-### 8.1 菜单栏折叠态
-
-元素：模板图标、可选金额、完整性/异常提示。
-状态：无账户、正常、部分未知、刷新中、过期、认证失败。
-
-### 8.2 首页面板
-
-- 顶部：总余额、今日消费（仅完整时）、账户数、最近刷新；今日数据不完整时整个今日字段隐藏。
-- 中部：账户卡片列表；默认按手动顺序。
-- 底部：刷新、添加、设置。
-- 首次无账户时显示引导，不显示空图表。
-- 高度超过上限后列表滚动，顶部总览和底部操作保持可达。
-
-### 8.3 添加/编辑账户
-
-步骤：选择供应商 → 输入站点/身份/凭据 → 验证 → 展示可用能力 → 保存。
-
-Pipio 表单明确区分：
-
-- 站点地址（可粘贴 `/v1` 地址，应用负责规范化）
-- 系统令牌
-- 数值用户 ID (`Pipio-User`)
-
-令牌和数值用户 ID 均按敏感输入处理：保存后不回显现有值，编辑时仅支持留空保持或覆盖更新。
-
-### 8.4 账户详情
-
-- 概览指标。
-- 能力支持时显示用量和分模型数据。
-- 7/30 日切换。
-- 显示数据更新时间和来源状态。
-- 编辑/禁用/删除放在更多菜单；删除二次确认。
-
-### 8.5 设置
-
-- 账户
-- 刷新、汇率与低余额
-- 状态栏与外观
-- 登录项/快捷键
-- iCloud 云盘文件同步（默认 `文稿/Relay`）
-- 高级（缓存、数据保留、诊断信息）
-
-诊断导出必须脱敏，不包含令牌、Pipio 用户 ID、Cookie、邮箱、姓名或原始认证响应。
-
-## 9. 错误处理
-
-| 场景 | 领域错误 | UI 行为 |
-|---|---|---|
-| 未填 Pipio 用户 ID | validation | 阻止验证并定位字段 |
-| `/v1/api/...` 误拼 | invalidBaseURL | 自动规范化；诊断显示管理基址 |
-| 401 缺少 Pipio-User | missingUserHeader | 提示填写数值用户 ID |
-| 401 Invalid token | credentialInvalid/typeMismatch | 提示令牌无效或类型不匹配，不自动重试 |
-| 403 | forbidden | 保留旧数据，提示无权限 |
-| 429 | rateLimited | 按 Retry-After 延迟 |
-| 5xx/超时 | transient | 保留旧数据并退避 |
-| JSON 字段变化 | responseIncompatible | 当前账户标记部分失败；仅保存错误代码和结构版本，不保存原始响应或身份字段 |
-| 指标缺失 | unsupported/unknown | 隐藏或标注未知，不显示 0 |
-| 同步目录不可用/冲突 | syncUnavailable/syncConflict | 本地照常工作；提示重新授权目录或处理冲突 |
-| 本地凭据文件读取失败 | credentialUnavailable | 提示重新录入 |
-
-## 10. 安全设计
-
-- 代码、测试夹具和文档均不得包含真实令牌或真实 Pipio 用户 ID；只能使用字段名、协议示例和明确的占位符。
-- 网络日志通过统一 `RedactingLogger`，过滤 Authorization、`Pipio-User`、Cookie、Token、userToken 和查询中的敏感项。
-- UI state 不存明文 credential；验证表单离开后清空。
-- 不枚举 `Pipio-User`，不尝试访问不属于用户的账户。
-- 站点 URL 只允许 HTTPS；重定向到不同 origin 时默认拒绝携带认证头。
-- 同步文件、本地 JSON 序列化和诊断导出需检查令牌、用户 ID 及其派生值永不进入序列化模型；凭据只能进入独立的本机凭据文件。
-
-## 11. 测试关注点
-
-### 单元测试
-
-- `/v1` 输入到 origin/management/model 三种 URL 的规范化。
-- Decimal 配额换算和缺失 `quota_per_unit`。
-- 未知/null/0 的区分。
-- 今日边界、时区和夏令时。
-- 能力矩阵与 UI 字段可见性。
-- 退避、429 Retry-After、401 不重试。
-- 今日字段完整性、汇率过期，以及缺少可靠换算时拒绝跨币种求和。
-
-### 集成测试
-
-- MockURLProtocol 覆盖 status/self/stat/log 的 2xx、401、403、429、5xx、超时和畸形 JSON；夹具只使用明显的虚构占位值。
-- 本地凭据文件新增、覆盖、删除、不可用和权限检查；验证本地 JSON、同步文件、日志及诊断导出均不出现令牌或用户 ID。
-- 单账户失败不影响其他账户。
-- 删除账户时本地数据、本机凭据文件与 tombstone 一致。
-- iCloud 云盘离线、目录书签失效、文件冲突、schema 升级和恢复同步。
-- 一年/永久保留策略切换及清理边界。
-- 默认低余额阈值 20 的币种显示与用户覆盖。
-
-### UI 测试
-
-- 空状态、部分数据、过期数据、认证失效、刷新中。
-- 菜单栏金额过长和无金额。
-- 面板最大高度、键盘操作、VoiceOver、增强对比度、减少透明度。
-- 删除和关闭文件同步的二次确认。
-
-### 实机验证
-
-- 菜单栏面板焦点/失焦关闭行为。
-- 登录项、睡眠唤醒、网络切换。
-- Liquid Glass 性能和文字可读性。
-
-## 12. 重要风险
-
-| 风险 | 影响 | 处理 |
-|---|---|---|
-| Pipio 管理接口非稳定公开合约 | 字段/路径变化导致统计失败 | 适配器隔离、容错 DTO、能力降级、契约测试 |
-| 管理令牌与模型 API Key 语义不同 | 将管理令牌误用于 `/v1/models` 会得到 401 | 适配器分离 management/model credential；管理接口只走 `/api` |
-| DeepSeek 平台历史接口是网页内部接口 | 接口/响应可能变化，userToken 可能过期 | 用户主动提供 token；解析失败保留余额并标记 partial，不把未知值写成 0 |
-| iCloud 云盘是文件同步而非数据库 | 多设备并发可能产生冲突副本 | NSFileCoordinator、版本字段、确定性合并和冲突提示 |
-| 首期为未公证、非沙盒的 GitHub 构建 | Gatekeeper 警告且应用权限边界弱于沙盒应用 | 发布校验和、公开源码/构建流程、最小文件访问、安装风险提示；优先使用系统“仍要打开”，不把移除 quarantine 冒充认证；未来取得 Developer ID 后签名公证并评估沙盒 |
-| 多币种汇总 | 过期或缺失汇率导致总额误导 | 使用 Pipio 发布值、默认 7 天刷新、过期标记；无法可靠换算时不汇总 |
-
-## 13. NEEDS_CONFIRMATION
-
-`NONE`：当前 Architecture 阶段无待确认项。
-
-已确认：Bundle ID 为 `cloud.dinghao.relay`；GitHub Releases 发布；不使用 CloudKit Container；同步使用 `iCloud Drive/文稿/Relay` 普通文件；凭据不通过任何 iCloud 机制同步；凭据存放在本机私有应用数据目录而不是 Keychain；DeepSeek 余额使用官方接口，历史用量使用可选的用户手动输入 userToken；汇率默认每 7 天刷新；历史默认 1 年并可选永久；低余额默认 20；今日数据不完整时隐藏该字段。
-
-## 14. 设计决策
-
-### D-001 原生单体应用
-
-**决定**：SwiftUI/AppKit 单体，无 Relay 后端。
-**原因**：需求只需要本机读取供应商 API 和 iCloud 云盘普通文件同步，自建服务增加隐私与维护成本。
-**日期**：2026-09-18。
-
-### D-002 供应商适配器 + 统一领域模型
-
-**决定**：每个供应商独立 Adapter，UI 只读取统一快照与能力。
-**原因**：第三方接口字段和能力差异大，需支持降级且避免供应商逻辑渗入 UI。
-**日期**：2026-09-18。
-
-### D-003 凭据与同步数据分离
-
-**决定**：令牌和供应商用户 ID 仅在请求期间短暂驻留内存，持久化时只存当前 Mac 的非同步 Relay 凭据文件；本地 JSON repository 和 iCloud 云盘同步文件只存非秘密数据。凭据不跨设备同步。
-**原因**：用户已明确选择不使用 Keychain，同时禁止凭据通过 iCloud Keychain、iCloud 云盘文件或其他 iCloud 机制同步；其他设备必须重新录入。
-**日期**：2026-09-18。
-
-### D-004 Pipio 双基址
-
-**决定**：模型 API `/v1` 与管理 API `/api` 分开建模。
-**原因**：2026-09-18 实测 `/v1/api/...` 为 404，而 `/api/status` 可用。
-**日期**：2026-09-18。
-
-### D-005 iCloud 云盘文件同步
-
-**决定**：不使用 CloudKit；采用版本化 JSON 普通文件同步，默认逻辑目录为 `iCloud Drive/文稿/Relay`。首次设置时通过系统目录选择器确认实际目录并保存 bookmark，不硬编码本地化物理路径。
-**原因**：用户明确选择 iCloud 云盘文件同步，同时要求凭据不参与同步。
-**日期**：2026-09-18。
-
-### D-006 GitHub 非 App Store 发布
-
-**决定**：Bundle ID 使用 `cloud.dinghao.relay`，通过 GitHub Releases 发布；当前构建使用 ad-hoc 签名，不把 Developer ID 公证作为首期要求。
-**原因**：用户明确不在 App Store 上架且当前没有付费开发者账户。
-**日期**：2026-09-18。
-
-### D-007 数据默认值
-
-**决定**：汇率默认每 7 天刷新；历史默认保留 1 年并可选永久；低余额阈值默认 20；今日数据不完整时隐藏今日消费字段。
-**原因**：用户已明确产品行为。
-**日期**：2026-09-18。
-
-## 13. 本轮实现记录（2026-09-18）
-
-- `RelayStore` 已接入菜单栏 UI，负责本地缓存加载、账户添加、真实测活、保存、刷新、删除和错误状态。
-- `AccountAddModalView` 不再构造假的 `AccountModel`，而是创建 `AccountDraft`，由业务层真实调用供应商接口。
-- `MainPopoverView` 不再维护孤立的内存账号数组；账户列表、汇总和刷新状态都来自 `RelayStore`。
-- `AccountModel.balance` 已改为可选，未知余额显示 `--`。
-- `FileLocalRepository` 也使用 `0700` 目录和 `0600` 文件权限；凭据仍只由 `FileCredentialStore` 保存。
-- 独立安全设计变更见 `docs/SECURITY_DESIGN.md`。
-
-## 14. 2026-09-19 Implementation Update
-
-- 账户编辑采用凭据先验证、元数据提交、失败回滚旧凭据的事务式顺序；UI 仅在 `async throws` 成功后关闭。
-- `ProviderSnapshot.modelUsages` 为可选的模型聚合列表，Pipio 通过 `/api/log/self` 当日分页日志聚合模型、请求数、Token 和消费；解析失败只降级该能力。
-- 设置持久化支持历史保留策略（1 年/永久）和 1/5/15/30 分钟自动刷新频率，默认 5 分钟。
-- iCloud 普通文件路径使用 `NSFileCoordinator` 协调读写，导入时尝试合并可解码的冲突版本；首次启用先导入再导出，凭据仍不进入 payload。
-- 删除账户 UI 增加二次确认，避免误删本地凭据和同步 tombstone。
-
-## 15. 2026-09-20 本轮设计落地
-
-### D-008 全局快捷键运行时
-
-使用 AppKit `NSStatusItem + NSPopover` 作为菜单栏面板的显式控制目标；Carbon `RegisterEventHotKey` 负责注册快捷键。快捷键服务通过 runtime 抽象隔离系统注册，支持事务性回滚和离线契约测试。快捷键配置只保存 key code 与 modifier，不同步凭据或业务数据。
-
-### D-009 DeepSeek 余额与可选历史用量
-
-余额使用 API Key 请求官方 `GET https://api.deepseek.com/user/balance`；历史用量在用户手动提供平台 userToken 后请求 `platform.deepseek.com/api/v0/usage/amount` 和 `/api/v0/usage/cost`。未填写 token 时只获取余额；填写后首次回填最近 7 天，当天快照优先。Relay 不读取浏览器 Cookie，平台接口失败时保留余额并标记 partial；未知值不转换为 0。DeepSeek 历史月份、日桶、今日消费和首次 7 天回填固定按 GMT+8（北京时间）计算，不跟随 Mac 本地时区。
-
-### D-010 iCloud 冲突状态机
-
-`FileSyncService` 在发现多个远端候选或 unresolved conflict versions 时生成不可变 `SyncConflictReport`，并暂停本次自动合并写回。`RelayStore.resolveSyncConflict` 通过 `FileSyncService.resolve` 应用用户明确选择的 resolution；候选文件保留，不由 resolution 自动删除。同步目录不可用时使用 `unavailable` 状态，同时保持本机 repository 可用。
-
-### D-011 验证边界
-
-确定性同步脚本的退出码 2 表示无 fixture 失败但缺少真实第二台 Mac；此结果是环境阻塞而非通过。当前命令行工具链的 SDK/compiler mismatch 使 `swift build` 无法完成，交付报告必须单独列出该阻塞。
-
-### 2026-09-21：菜单栏状态保留与 Pipio 看板契约修正
-
-本段替代此前通过 `/api/log/self` 分页聚合模型明细的方案。Pipio 公开数据看板当前使用 `/api/data/self?start_timestamp=…&end_timestamp=…` 的数组数据进行模型 Token 明细聚合，`/api/data/flow/self` 属于另一块流量明细，不混用。独立 `PipioDashboardParser` 负责字段解码、时间筛选、模型合并和完整性判断，适配器继续隔离可选能力失败。余额、今日/月消费已有接口保持不变。
-
-`RelayMenuBarController` 保留辅助窗口及其 SwiftUI 状态；点击外部/再次点击入口使用 `orderOut`，再次打开复用窗口，显式关闭才释放。打开详情/设置/表单前记录首页内容屏幕坐标用于定位，并按屏幕可视区域限制边界。固定宽度 70 点，无金额时缩为仅图标入口；缩窄后的双行显示及多屏定位仍需打包 GUI 实测。
-
-Pipio 换算按账户读取公开 `usd_exchange_rate`，有效正数才允许 USD→CNY 汇总。真实账户模型数、金额及系统令牌授权范围仍需有效凭据验证，合成 fixture 不作为真实对账结论。
-
-### 2026-09-21：区分额度参数与外汇参数
-
-`AccountConfiguration.manualUSDToCNY: Decimal?` 是可选非秘密元数据，旧 JSON 缺少该字段时兼容解码为 nil。`ManualExchangeRateUpdate` 区分不修改、设置和清空，避免无关账户编辑清除手动值。业务层在凭据读写/验证之前校验正数，沿用事务写入和账户 `updatedAt` 合并语义；同步安全投影显式保留该字段。
-
-`AccountRate` 始终记录站点原始参数、来源、获取/过期时间，`quota_per_unit` 只用于适配器归一化。`RelayStore` 将账户级手动 FX 字典交给 `DashboardAggregator`，只在 USD→CNY 汇总时使用，保存立即重算，不重写快照或历史。无有效手动值时才回落到未过期站点汇率；已知原生金额配合手动 FX 不继承站点 FX 过期时间。手动值不会补全未知原生金额、过期今日消费或未知额度除数。
-
-编辑页保留原表单风格，增加独立汇率区；参数只读、手动输入留空恢复自动，内容区域滚动，按钮固定。仅更新本地元数据无需系统令牌；真实站点对账仍需单独验证。
-
-### 2026-09-21：消费展示与模型统计修正
-
-替代前述菜单栏余额/今日双行显示和缓存比例无回退的约定：`MenuBarStatusPresentation` 统一数值与状态符号，AppKit 用模板 `NSImage(systemSymbolName:)` 交给系统着色；只给完整且已启用显示的今日消费生成两位小数文本。金额换算逻辑不变，首页余额不受影响。
-
-`PipioDashboardParser` 继续只请求公开 `/api/data/self` 数据契约。`token_used` 缺失时使用该桶有效非负普通输入+缓存读取+缓存写入+输出计数，再跨桶求和；提供商明确返回的总数优先。原缓存覆盖契约可用时不改结果，否则以 `sum(cache_read_tokens) / sum(input_tokens + cache_read_tokens + cache_write_tokens)` 计算模型级加权比例。三个输入分量均须存在且非负，分母须大于零；缓存读取可以大于普通输入，明确零读取返回零占比。该回退按用户确认不再依赖旧覆盖计数字段；覆盖不完整时只代表已获取明细，禁止用可能覆盖不同请求的 `token_used - output_tokens` 替代分母。合成测试包含用户表格转录的五模型数据、多模型交错桶、非零写入和缺失/溢出边界，不代表认证 API 已对账。
-
-`ModelUsageSummary.spendDescending` 在解析与展示入口复用，保留免费/未知模型并稳定排序。Token 展示列固定宽度以避免被长模型名挤占。现有持久化与同步 schema 不变；派生总数与缓存比例在下次刷新时获得，无需迁移，排序立即应用于旧快照。
-
-### 2026-09-21：表单反馈与今日消费统一
-
-替代前文“今日消费保持原 stat 接口”的约定：`PipioDashboardParser.usage` 从一次解码后的当天看板时间桶产生原生消费总额和分模型明细，总额基于原始 quota，不基于已格式化/四舍五入后的 UI 字符串。模型计数溢出等可选明细错误与有效总金额隔离。适配器不再另查当日 stat，月统计与余额不变；当日能力根据金额是否可确认设置。历史回填只查询已完成日期，今日记录由创建/刷新快照负责写入。
-
-`AccountDraft` 统一收集空字段，业务层在 URL 归一化、选取适配器、网络和持久化之前抛出带字段名的 `AccountServiceError`。展示模型保留原始 `tokenCount` 和完整字符串；`RelayNumberFormatter.tokens` 只负责显示缩写，临界四舍五入到 1000 时提升单位。首页汇总卡片仅调整内部对齐。
-
-`RelayMenuBarController` 给详情窗口标记关闭后返回首页；原生 `windowWillClose` 先释放详情引用，再在下一主线程事件重新展示现有 Popover。切换辅助窗口前清除返回标记，避免误弹首页；`orderOut` 隐藏不触发返回。详情底部按钮明确命名“返回首页”，右上角按钮增加相同辅助说明。
-
-### 辅助窗口统一返回首页
-
-替代 `returnsToDashboard` 逐页开关：所有通过 `RelayMenuBarController.presentAuxiliaryWindow` 打开的窗口统一由 `windowWillClose` 清理引用并在下一主队列事件展示首页。设置完成、表单取消/保存成功及自定义关闭沿用公共 `closeAuxiliaryWindow`，原生窗口关闭使用同一委托路径。页面保存失败不调用关闭回调。
-
-替换旧页面前先移除旧窗口委托，再关闭旧窗口，避免触发返回首页。`pendingDashboardReturn` 请求标识使延迟返回可以被 `close()`、`toggle()` 或页面替换取消，避免已收起或已切换后又意外弹出首页。隐藏仍使用 `orderOut`，不释放页面状态。页面结构不变，设置/添加/编辑的右上角按钮补充“返回首页”悬停和辅助功能标签。
-
-`scripts/test-window-navigation.sh` 是需登录图形会话的独立 AppKit 集成检查，使用内存数据和实际首页回调，检查四类页面的窗口关闭、隐藏/恢复、页面替换及延迟返回取消；不调用服务商接口。不纳入仅业务层的离线回归脚本。
-
-### 辅助页面面板视觉统一（2026-09-22）
-
-设置、添加账号、编辑账号和账号详情继续使用独立 `NSWindow` 承载复杂表单与滚动内容，避免直接嵌入菜单栏 `NSPopover` 时出现失焦或交互不稳定；但窗口统一改为无标题栏的无边框 key window。窗口外观由共享的 Relay 面板容器提供，与首页使用相同的 `regularMaterial`、圆角和阴影，页面内部保留统一的标题及“返回首页/关闭”操作。这样只保留普通窗口的交互稳定性，不再向用户暴露 macOS 原生关闭、最小化和缩放标题栏。
-
-### 2026-09-22：Relay 全局原生材质视觉统一
-
-首页、账户详情、添加/编辑账户、设置、全局快捷键和同步冲突页面统一使用 `RelayVisualStyle` 提供的 SwiftUI 原生 `regularMaterial` / `thinMaterial` / `ultraThinMaterial`。容器与卡片保留现有尺寸、布局、功能和导航，只统一材质层级、圆角、细边缘和阴影；文字继续使用系统语义色，保证浅色壁纸透入时仍有足够对比度。不得通过自绘渐变或自定义模糊替代系统材质。
-
-### 2026-10-07：原子刷新与详情完整读取
-
-常规刷新先计算对应日历史，再调用 `LocalRepository.commitRefresh(snapshot, dailyUsage:)`。文件 repository 在单个候选状态中更新快照和可选历史，经一次原子写入成功后才替换内存状态；不能先推进 workbuddy2api 累计值再写历史，否则存储失败会永久丢失增量。没有新增持久化字段，原有 JSON 和同步文件保持兼容。
-
-`RelayStore.reloadFromRepository` 先完整读取设置、账户、所有账户快照和每账户最近 30 条日历史，再发布。详情使用完整快照/历史缓存，首页仍使用启用及可见性过滤；子账户投影共用状态构建逻辑，但详情定位不依赖 `dashboardAccounts`。读取失败保留完整缓存和原窗口，发布 `repositoryErrorMessage`，并继续按当前时间使今日消费等时效字段失效。
-
-详情容器根据 `AccountDetailState` 展示最新数据、上次成功数据及读取失败提示，或仅在完整读取确认移除后返回首页。现有布局不变，错误占用底部已有更新时间文本位置并提供悬停全文。离线回归覆盖实际文件写入失败/恢复、累计基线持久化与去重、隐藏/停用子账户详情、部分读取失败、跨日失效和错误恢复；窗口脚本补充相应 GUI 用例，需正常登录图形会话执行。
-
-## 16. 2026-10-09 当前软件优化方向评估（仅设计，未实施）
-
-### 16.1 评估范围与当前基线
-
-本节是对当前工作区实现的优化路线评估，不改变 `REQUIREMENT.md` 已确认的产品范围，也不表示下列方案已经实现。
-
-已核实的当前基线：
-
-- 本地回归脚本覆盖凭据原子写入、刷新事务、历史去重、同步合并、账户详情故障隔离和三个已接入供应商的关键契约；2026-10-09 在当前环境执行通过。
-- iCloud 确定性验证中的 `SYNC-001` 至 `SYNC-004` 通过；`SYNC-005`（真实第二台 Mac）按脚本设计返回 `blocked`，不能视作多设备验收通过。
-- `RefreshCoordinator.refreshAll` 当前顺序刷新全部启用账户；`RelayStore` 以单个全局 `isRefreshing` 防止重叠刷新。
-- 发布检查仅从 GitHub Releases 选择 Apple Silicon 包并下载到用户下载目录；当前版本没有安装包的哈希、签名或公证校验链。
-- 本地数据仍是单个版本化 JSON 文件。刷新提交已具备快照与当日历史的一次原子提交语义；凭据仍按已确认决策保存于私有本地文件，不进入同步文件。
-
-本轮没有发现应立即改动的业务功能缺陷；以下路线按风险、用户可感知收益和实施成本排序。
-
-### 16.2 优先级排序
-
-| 优先级 | 优化项 | 主要收益 | 触发依据 | 本轮结论 |
-| --- | --- | --- | --- | --- |
-| P0 | 刷新调度、限流与取消 | 多账户场景下缩短等待，避免过时任务占用网络 | 当前全量刷新逐账户串行，且全局刷新状态会阻塞单账户重试 | 建议作为下一项实现 |
-| P0 | 更新包完整性与来源验证 | 降低下载篡改、错包与误安装风险 | 当前仅限制 GitHub 下载地址和文件名/后缀；发布仍为 ad-hoc 签名路线 | 需要先确认发布身份方案 |
-| P0 | 真实双 Mac 同步验收 | 关闭数据正确性与可恢复性的剩余验证缺口 | `SYNC-005` 尚未执行 | 不需要先改业务代码 |
-| P1 | 供应商健康状态与可诊断反馈 | 更快区分账户凭据、限流、接口变更和网络故障 | 当前 UI 有账户错误文案，但没有可持续的刷新健康摘要 | 建议与刷新调度一起设计 |
-| P1 | 测试分层与 GUI/可访问性自动化 | 降低菜单栏、无边框窗口和系统版本升级回归风险 | 现有离线脚本覆盖丰富，但图形检查需要登录会话，尚未进入 CI 主路径 | 建议逐步补充 |
-| P2 | JSON 存储的容量阈值与读取优化 | 在长期保留、大量账户时避免全量编解码放大 | 每次写入替换整个状态；重新加载会按账户读取最近 30 条历史 | 先度量，暂不迁移存储技术 |
-| P2 | 状态与设置页面拆分 | 降低后续功能迭代的耦合与回归面 | `RelayStore` 同时承担编排、投影、通知和同步状态，设置页面职责集中 | 作为结构性整理，不应抢占 P0 |
-
-### 16.3 P0-1：刷新编排改造
-
-#### 目标
-
-在维持“一个账户失败不影响其他账户”“旧快照不被失败覆盖”“供应商凭据不进入 UI 状态”的既有约束下，使全量刷新可并发、可取消、可合并，并对各供应商保持有限并发。
-
-#### 拟定方案
-
-1. 将“刷新请求”定义为带来源的意图：`scheduled`、`manualAll`、`manualAccount`、`afterAccountSave`。UI 仅提交意图，不直接创建无管理的 `Task`。
-2. 新增仅负责运行期编排的 `RefreshScheduler`（可由 `RelayStore` 持有）：
-   - 同一账户在途时合并相同请求；手动请求可以提升优先级，但不重复发起相同网络读取。
-   - 全量任务采用受限任务组并发执行；初始并发上限建议为 3，并按 provider/host 设置独立上限为 1，避免对单一站点突发并发。
-   - 应用退出、账号禁用/删除、设置缩短刷新周期或新一轮手动刷新时，取消已不再有意义的等待与退避；取消不得写入失败状态或覆盖已保存快照。
-   - 继续由每个账户自己的 `RefreshCoordinator` 路径计算快照与日历史，并用既有 `commitRefresh` 原子提交；调度器不得绕过 repository 事务。
-3. `RelayStore` 改为发布“整体是否在刷新”和“账户级刷新阶段/最近结果”两个投影。首页保留现在的刷新按钮语义；账号行可以显示仅属于该账户的进行中或失败状态。
-4. 退避继续识别 `Retry-After`，但调度层应记录下一次允许尝试时间，以免定时循环在限流窗口内重复启动同类请求。
-
-#### 不在本项范围内
-
-- 不改变 Pipio、DeepSeek、workbuddy2api 的请求协议或统计口径。
-- 不增加远程队列、服务端或分析上报。
-- 不将账户刷新结果合并为不可靠的跨币种总额。
-
-#### 验收与回归重点
-
-- 3 个以上账户时，慢账户不阻塞其他独立账户完成；同 host 不超过设定并发。
-- 定时刷新与手动刷新重叠时，同一账户请求数可预测且不会重复记入 workbuddy2api 增量。
-- 取消期间不写入半成品快照、不清除旧错误以外的数据，下一次刷新可正常恢复。
-- 限流、认证失败、网络超时与取消在账号行显示不同的可行动含义，但错误信息不得包含 token、用户 ID 或响应原文中的秘密。
-- 补充纯 Swift 调度契约测试，使用可控时钟与假 adapter；保留现有原子刷新回归组。
-
-### 16.4 P0-2：更新安全链（原评估方案，实施选择见第 17 节）
-
-#### 目标
-
-使用户在下载更新前能够验证包与项目发布物的对应关系，且不把“已下载”误表述为“可信安装”。
-
-#### 拟定方案
-
-1. Release 同时发布机器可读的 manifest：版本、资产名、SHA-256、构建提交 SHA、生成时间和签名/公证状态；manifest 本身由发布身份签名。
-2. `UpdateService` 在下载完成后校验：允许的 GitHub 主机、manifest 中的资产名、文件长度（如提供）和 SHA-256；校验失败删除临时文件并显示明确失败原因。
-3. 安装前在本机执行只读校验：DMG/应用解包后的 `codesign --verify` 与预期 Team ID/Designated Requirement 比较；若未来使用 Developer ID，再检查 notarization/Gatekeeper 评估结果。
-4. 在“关于/更新”界面展示验证状态：仅下载、哈希已验证、签名已验证、无法验证；不自动替换正在运行的应用。
-5. CI 在创建 Release 前生成 manifest，并以独立校验步骤重新计算产物哈希，防止上传步骤与元数据脱节。
-
-#### 发布身份选择（已于 2026-10-09 确认不使用 Developer ID/公证）
-
-当前设计明确允许 ad-hoc 签名和用户手动放行 Gatekeeper。强制校验稳定 Team ID 或公证状态，需要用户选择以下之一后才能定案：
-
-- 继续 ad-hoc 路线：实施 GitHub Release manifest + SHA-256 校验，并在 UI 明确提示“文件完整性已核对，但未具备 Developer ID 身份验证”。
-- 迁移 Developer ID：增加证书保管、CI 签名/公证和 Team ID 固定校验；成本和发布流程会变化。
-
-在确认前，不应把代码签名校验写成当前已具备的能力。
-
-### 16.5 P0-3：iCloud 双机验收
-
-此项是验证工作流而非功能扩张。应按 `docs/verification/icloud-multidevice.md` 用两个实际 Mac 和同一 Apple ID 执行以下场景，并把结果留在一次发布验收记录中：首次导入、双端不同修改、删除 tombstone、iCloud 延迟下载、冲突副本、离线编辑后恢复、旧版本/损坏文件。
-
-准入规则：任何一个场景没有确认“凭据不出本机、合并后账户可读、冲突时不静默覆盖”前，不把 iCloud 同步标记为完全验收；但不影响本地优先使用。
-
-### 16.6 P1：用户可感知的可用性提升
-
-#### 账户健康摘要
-
-在不记录敏感请求内容的前提下，为每个账户维护非秘密的运行期摘要：最近成功刷新时间、最近失败分类、连续失败次数、是否正在退避、数据新鲜度。首页优先展示“需要操作”的状态，例如重新录入凭据、等待限流或检查网络；详情页才展示更完整的时间线。该摘要默认不进入 iCloud 同步，除非后续有明确的跨设备产品需求。
-
-#### 图表与信息密度
-
-趋势图在 7/30 日数据较多时应只标注选中点、最后点和极值，避免每个点都绘制数字标签造成重叠；无数据与部分数据继续使用现有“未知不等于 0”语义。该项仅调整呈现密度，不重画已确认的原生材质、导航和面板结构。
-
-#### 可访问性与窗口回归
-
-已存在部分按钮的辅助标签和悬停说明，后续应补齐列表操作、刷新状态、图表替代文本和更新验证状态；在已登录图形会话下把 `scripts/test-window-navigation.sh` 扩展为可重复的 GUI 验收，并在支持该能力的 CI runner 上作为独立必需检查。业务层离线脚本继续保持无图形依赖。
-
-### 16.7 P2：容量与代码结构的保护性演进
-
-#### 存储容量
-
-不预设迁移 SwiftData 或数据库。先在 debug/测试中记录以下非秘密指标：账户数、历史条数、单个 JSON 文件大小、一次 reload/commit 耗时。建议阈值为任一条件连续出现：同步文件超过 5 MB、单账户历史超过 3,000 条、或典型刷新提交/详情加载超过 200 ms。达到阈值后再评估：
-
-- 保持 JSON schema，通过按账户历史分片、摘要索引和惰性读取降低全量编解码；或
-- 在不改变 `LocalRepository` 公开契约的前提下引入本地数据库实现，并设计一次性、可回滚迁移。
-
-同步 payload 与凭据隔离、删除 tombstone 和版本兼容性是迁移的硬约束。
-
-#### 结构拆分
-
-优先按运行期职责拆分而不是引入新的通用框架：将刷新编排、同步状态、低余额通知和详情投影从 `RelayStore` 分离为小型可测试组件；将设置页面按“通用/数据/账户/同步/关于”拆为子视图和独立表单状态。对外 UI 行为、`LocalRepository` 和 provider adapter 契约保持稳定。此项必须在 P0 调度改造完成且回归覆盖不下降后再开始。
-
-### 16.8 推荐实施顺序与阶段出口
-
-1. **阶段 A：刷新调度设计与实现。** 先完成可控时钟、取消、去重、host 限流的测试，再替换顺序全量刷新；阶段出口是现有回归全绿并新增多账户并发/取消/去重测试。
-2. **阶段 B：更新完整性。** 根据发布身份确认实现 manifest 校验；阶段出口是 CI 产物可独立复算哈希，客户端可拒绝篡改 fixture。
-3. **阶段 C：双机验收。** 不等待新功能，执行真实 iCloud 验收；阶段出口是 `SYNC-005` 有真实设备记录，或明确记录阻塞原因与风险接受人。
-4. **阶段 D：可用性与可维护性。** 按实际使用反馈优先做健康摘要、图表密度和可访问性；容量/结构性整理以量测阈值触发。
-
-### 16.9 长期文档更新建议
-
-`docs/AI_CONTEXT.md` 第 9 节及 2026-09-21 补充已记录指定 SDK/缓存路径可构建，覆盖了更早的编译器/SDK 不匹配记录。2026-10-09 再次验证该命令通过，仅有 Command Line Tools 链接搜索路径警告；不需要将此事实重复写回。建议之后维护长期上下文时整理旧环境描述，并补充本轮调度、更新校验、历史索引与设置子页事实；保留真实双 Mac iCloud 未验证状态。本轮未直接修改 `AI_CONTEXT.md`。
-
-
-## 17. 2026-10-09 整合实施方案与分工
-
-本节补充第 16 节的评估，记录用户已确认的实施选择及对应代码入口。已授权实现；不是把拟实施方案写入长期上下文。
-
-### 17.1 已确认边界
-
-- 不使用 Developer ID、公证或 Keychain；继续 ad-hoc 签名与手动替换安装。第 16 节“签名 manifest/固定 Team ID”不在本轮范围。
-- 真实双 Mac 验收按用户决定跳过，保持“未验证”，不标记通过。
-- 保留原有视觉材质、窗口尺寸、导航、供应商统计口径和 JSON schema；不引入数据库、远程服务或第三方依赖。
-
-### 17.2 并行工作包与集成边界
-
-| 工作包 | 主要写入范围 | 集成点 | 状态 |
-| --- | --- | --- | --- |
-| A 刷新与健康 | `RefreshScheduler`、`RefreshCoordinator`、`RelayStore`、健康模型、首页/详情 | 账户级结果、运行期健康回调、现有原子 `commitRefresh` | 已实现，统一回归验证 |
-| B 更新完整性 | `UpdateService`、打包脚本、发布 workflow、新增测试 | 保持原有更新/下载调用接口；校验后才交付文件 | 已实现，离线校验验证 |
-| C 图表与设置 | 趋势图、设置窗口及六个设置子页 | 使用原有领域模型/绑定/回调；由窗口保持编辑状态 | 已实现，选择/标签契约验证 |
-| D 存储容量 | `FileLocalRepository`、诊断、新增索引测试 | JSON schema 不变；只在成功提交后替换内存与索引 | 已实现，成功/失败路径验证 |
-| E 验证入口 | 独立契约入口、GUI 检查脚本/测试 | 无头契约可必需执行，真实 GUI 明确分开 | 已实现，GUI 会话受环境限制 |
-
-各工作包写集分离，最后统一连接回归入口和文档；GUI/双机结果不能由离线 fixture 冒充。
-
-### 17.3 刷新数据流与取消语义
-
-`RelayStore.refreshAll/refresh` → `RefreshCoordinator` → `RefreshScheduler` → 单账户 adapter/rate → 配置与订阅状态校验 → `LocalRepository.commitRefresh` → 运行期健康/详情投影。
-
-- 调度器维护全局最多 3 个运行账户、同一规范化原点最多 1 个；HTTP 默认 80、HTTPS 默认 443 显式归一化。同账户在途请求共享结果，排队请求可升级强制汇率和手动优先级；已经开始的请求不额外复制网络操作。
-- 调度器拥有运行任务与订阅者。单个订阅者取消只解除自身等待；最后一个订阅者取消终止任务。取消标记通过加锁 ticket 同步记录，避免异步 MainActor 清理晚于结果提交；返回订阅结果前也检查取消。
-- 停用、删除、编辑和应用退出调用显式取消入口。取消中的非协作 adapter 未退出前仍保留账户/原点槽位，后继请求不能并行计入同一账户增量。
-- 最后提交前重新读取账户，比较完整配置并检查是否仍存在有效订阅者；校验与原子提交之间不发生 actor suspension。已完成的原子提交不因之后到达的取消撤销。
-- 限流按原点共享内存冷却表；数值和 HTTP 日期 `Retry-After` 均解析。收到限流响应后即使任务被取消也保留冷却，但不发布账户失败。无效等待值默认 60 秒；长冷却最多每 24 小时重新检查一次，不提前缩短供应商给出的期限（极端日期限制为 Foundation distantFuture）。
-- 仅网络、HTTP 5xx 和限流可重试；取消不是网络错误，本地写入失败归类存储而非网络。重试当前保留运行槽位，刻意避免同站点突发重试；后续可根据实测考虑退避时释放全局槽位。
-- 自动任务使用 scheduled 来源；UI 提交手动请求，调度器管理真正的在途操作。账户完成后立即更新本地显示，不必等全部账户完成；同步交换沿用原有整轮结束逻辑。
-
-### 17.4 账户健康与反馈
-
-`AccountHealth` 非 Codable，保留阶段、最近成功时间、连续终态失败次数、分类、可重试时间及新鲜度。重试中的每次失败不重复计为一轮失败；成功清零，取消保持之前失败状态。旧快照提供首次运行后的最近成功时间。
-
-首页现有状态位置显示排队、刷新、限流/退避或具体可行动提示，完整摘要通过悬停/辅助描述读取；详情底部沿用已有时间/错误区域。摘要中的最近成功时间不使用“本次请求完成时间”替代；长时间未成功的新鲜度仅影响健康描述，不改金额/汇率的既有严格有效性判断。
-
-### 17.5 更新校验与发布行为
-
-- 精确绑定 `DavisDing/Relay`、Release tag、语义版本、资产名与原始下载路径；下载前重读该 tag 的元数据，而不是只依赖最新版本查询。
-- 优先采用该资产的 `sha256:<hex>` digest；digest 缺失才读取同 Release 的 `Relay-<version>-sha256.txt`。畸形 digest 不降级绕过；checksum 拒绝重复或不匹配条目。
-- 下载使用受限 HTTPS 重定向策略，验证最终主机/路径；在暂存文件中核对可用长度和流式 SHA-256 后才移入 Downloads。不覆盖已有文件，失败或取消清理暂存。
-- 打包生成 ZIP/DMG 的版本化 checksum，CI 构建与 artifact 下载后分别复算，随 Release 发布。当前选择是同源未签名完整性记录，不提供独立发布者身份认证。
-- 老版本若 digest/checksum 都缺失，应用内下载明确阻止；用户仍可选择手动安装。关于页及下载完成提示明确区分哈希已验证与未签名/未公证身份状态。
-
-### 17.6 存储与界面职责
-
-- `RepositoryPerformanceDiagnostics` 只在内存保留数量、JSON 字节数、初次加载/最近提交耗时与成功标记，无账户名、地址、凭据或响应文本。5 MB、单账户 3,000 条、200 ms 为建议调查阈值而非自动迁移或删除规则。
-- `historyByAccount` 是已提交状态的排序投影，初始化和成功提交后构建；失败写入不替换索引、容量或状态，schema 不变。加载耗时不是整个 Store UI 重建耗时。
-- 设置拆为通用、数据、账户、快捷键、同步、关于六个子页，共享布局工具与窗口编辑状态；不增加新的通用架构层。Store 已抽出调度/健康模型，本轮不大规模重写通知/同步/详情职责。
-- 图表只使用已知数据点，点选/拖动/键盘/辅助调整共用选择；只保留选中、最后、极值标签，并在窄宽度时优先选中点、避免重叠。空数据和单点有明确呈现；日期标签仍沿用现有投影，不宣称未记录日期为零。
-
-### 17.7 验证入口与未验证项
-
-- `scripts/test-regressions.sh`：既有业务检查 + 新的调度/取消/冷却、更新完整性、存储索引/失败语义，并独立运行图表选择/标注检查。
-- `scripts/test-contracts.sh`：分别运行既有 DeepSeek、全局快捷键、同步冲突契约及 GUI 会话预检 fixture；无用户目录、网络或真实凭据。
-- `scripts/test-window-navigation.sh --build-only`：仅编译，CI 执行该项不等于 GUI 通过；`--check-session` 无有效会话时 skipped/77。实际 `--run` 需要图形会话，可打开模拟窗口，尚未实机执行。
-- CI 同时接入离线回归、独立契约与 GUI 只编译步骤。生产 CI 发布、真实 GUI/VoiceOver、正式 release 模式打包及真实供应商调用不由本轮离线测试证明。
-- 双 Mac 验收：用户明确跳过本轮；仍保留现有验证文档，未更改 fixture 或将其改为通过。
-
-### 17.8 本轮本地验证记录（2026-10-09）
-
-- 指定 MacOSX26.5 SDK、缓存目录及 scratch path 的 `swift build` 通过；仍有既有 Command Line Tools 链接搜索路径警告。不是 macOS 27/Xcode 27 正式发布验收。
-- 扩展后的离线回归通过，包含原有业务组、更新完整性、刷新并发/去重/取消/配置校验/冷却/健康分类、历史索引与失败提交语义。图表选择/标注 24 个断言通过。
-- 三组独立契约与 12 个 GUI 会话判断 fixture 通过；没有真实供应商请求、真实凭据或真实 iCloud 账户访问。
-- GUI `--build-only` 通过；实际会话预检 skipped/77（无 Quartz GUI session / WindowServer）。没有执行真实窗口交互、VoiceOver 或视觉验收。
-- 本地 debug 打包在更新工作包中通过，ZIP/DMG/checksum 可独立复算；未执行正式 release 模式打包或生产 CI 发布。
-- 存储合成样本 8 账户/24,008 历史记录约 5.05 MB，一次观测的 80 次索引读取约 0.12 ms、原扫描排序约 359 ms。该样本用于证明索引效果，不是生产性能承诺或不稳定的耗时门禁。
-- 真实双 Mac 验收按用户决定跳过，继续标记未验证。未修改其验证脚本的判定，也未把离线“两设备”模拟组当作真实双机结果。
-
-## 18. 2026-10-10 增量优化评估（设计建议，未实施）
-
-### 18.1 范围、证据与分类
-
-目标是加强当前本地优先、多账户监控的可靠性、数据解释和维护效率。本轮基于工作区 `cfcb2f2` 的文档、代码、测试及 workflow 静态检查；未重跑构建、故障注入、真实供应商、GUI 或生产 CI。第 17.8 节的通过记录属于此前验证，不能充当本次或后续提交的测试结果。
-
-已具备刷新并发/取消/去重、账户健康、下载 SHA-256 校验、图表选择、历史索引、设置分页及离线验证入口，不重复列为待开发功能。下列“需要加强”是代码路径分析；尚未做动态复现的影响明确保留验证边界。
-
-| 顺序 | 方向 | 分类 | 当前依据与收益 |
-| --- | --- | --- | --- |
-| P0-A | 长限流隔离与自动刷新持续性 | 需要加强 | 重试等待保留全局运行槽，整轮刷新完成后才开始下一次定时等待；长冷却会牵连独立账户 |
-| P0-B | 启动存储故障与恢复入口 | 需要加强；备份恢复未实现 | 打开失败退回内存 repository，启动错误可能被自动刷新清除；缺少明确恢复流程 |
-| P1-A | 同步协调失败保护与响应性能 | 需要加强 | 文件协调失败存在直接操作回退；同步读写和本地全量提交在 MainActor 路径，卡顿程度待量测 |
-| P1-B | 历史覆盖说明与按需补取 | 部分已实现；补取入口未实现 | 仅建账时回填 7 天，日常刷新不修复离线缺日或此前回填失败 |
-| P1-C | 实际应用包验收与诊断 | 已实现但验证不完整；诊断导出未实现 | 已有离线/GUI 编译检查，真实窗口、系统集成与当前发布结果需单独取证 |
-| P1-D | 文档事实与产品边界整理 | 需要加强／NEEDS_CONFIRMATION | 历史方案和现状混排；网关远端控制与“只读监控”的文档边界不一致 |
-
-范围外：本轮不改业务代码、测试、CI 配置或 REQUIREMENT；不重画已确认 UI，不新增服务端/数据库/依赖，不改变不使用 Keychain、Developer ID、公证的选择，不恢复已跳过的双 Mac 验收要求。
-
-### 18.2 P0-A：等待限流的账户不能拖住其他账户
-
-**现状入口**：`RefreshCoordinator.execute` 在重试循环内等待 `Retry-After`；`RefreshScheduler.pump` 将有 task 的 job 全部计入全局并发；`RelayStore.startAutomaticRefresh` 等待 `refreshAll` 完成后再 sleep；整轮后的 repository reload 才触发同步与低余额通知。
-
-具体场景：A 收到 1 小时冷却，B 首轮虽然能成功，但下一轮自动刷新仍等 A；若三个不同原点都进入长退避，第四个健康原点的首次任务也排队。第 17.3 节已记录保留槽位的取舍，此处建议将“保持原点冷却”和“占用全局执行名额”分开。静态路径可确定上述等待依赖，实际耗时影响未运行复现。
-
-**拟改方案**：复用现有 scheduler，将一次请求尝试结束后的 job 转为带 `notBefore` 的等待状态，保留订阅者、重试计数和原点冷却，释放全局执行名额；到期重新排队。实际网络任务未结束、尤其非协作取消任务仍占槽，不能提前释放。同账户去重、手动优先和提交前配置校验保持。
-
-自动刷新按到期账户投递，由调度器合并重复请求，单次整轮等待不再阻断下一个周期；不允许每个周期新增无限等待者。成功提交后的本地展示、通知评估和合并后的同步请求分别触发，不依赖所有账户终结。通知沿用账户/自然日去重，发送前复核账户启用、可见性、最新余额及授权状态。睡眠唤醒只对到期账户补一次请求，不重放睡眠期间全部周期；继续服从冷却。
-
-**验收**：可控时钟下 A 冷却 1 小时，B 在随后两个配置周期均刷新；三个原点等待退避时第四个健康原点可执行；同原点始终不提前请求；反复手动/定时/唤醒不重复网络操作或累计用量；删除、编辑、最后订阅者取消及非协作任务的旧结果继续被拒绝。成功账户的通知不被另一账户冷却无限拖延。
-
-### 18.3 P0-B：持久的存储故障状态，随后补恢复能力
-
-**现状入口**：`FileLocalRepository.init` 将未知高版本和解码失败归入 `corruptData`；`main.swift` 捕获后调用 `RelayStore.unavailable`，后者使用可写的内存 repository 且默认启动自动刷新。`refreshAll` 会清空 `globalErrorMessage`，可能让启动故障显示成普通空账户；此问题不等于磁盘原文件已被覆盖。
-
-**第一步拟改**：建立独立于临时刷新错误的存储状态，至少区分可用、无权限/不可读、内容损坏、版本不支持。故障态暂停自动刷新和同步，禁止会显示保存成功的账户/设置写入；首页持续说明“本地数据未能载入”，不走首次使用引导。提供重新读取入口；重新打开并完整加载成功后再恢复业务。未知新版本保留原文件，提示使用兼容版本，不按损坏数据重建。
-
-**第二步候选**：在 `FileLocalRepository` 内复用 `PrivateFileWriter` 保存有限数量、已验证可解码的非秘密本地备份；恢复前预览日期和账户/历史数量，保留当前原文件，用户确认后原子替换。备份不包含凭据，也不是 iCloud 同步的替代品。恢复成功前不自动同步；旧备份中的账户和 tombstone 必须经过既有冲突规则，不能静默复活已删除账户。凭据不恢复，按当前本机凭据实际存在性提示补录。
-
-备份保存失败的规则应明确：保护副本未成功时拒绝本次需要保护的写入，保留原文件并报告存储错误；主文件提交成功后，不把备份清理等后续失败伪装成主提交失败。保留代数和用户入口尚未确定，见 18.8。
-
-**验收**：截断 JSON、目录无权限、未知 schema、磁盘写入失败分别给出正确状态；自动刷新和点击刷新均不清除启动故障；失败恢复不改变原文件和现有内存投影；成功恢复后重启一致；备份及恢复流程不读取或复制凭据文件。
-
-### 18.4 P1-A：同步安全边界与主线程工作量
-
-**现状入口**：`FileSyncService.exchange/resolve` 在协调器报错且 accessor 未执行时直接操作文件，代码没有将该回退严格限定为测试普通目录。`exchange`、协调读写、解码合并和 `LocalRepository.commit` 均位于 MainActor 调用路径。已有历史读取索引不能消除全量编码、文件同步等待的成本。
-
-**优先拟改**：生产同步协调失败时保持失败/不可用状态并保留候选，不绕过协调直接写；测试通过注入协调执行方式覆盖普通目录 fixture，不让测试兼容回退成为生产行为。冲突决策还需验证“本地已合并、云端写回失败”后的状态和幂等重试，不能将部分完成显示为同步成功。
-
-**性能方案**：先记录同步协调等待、编解码、提交及界面响应耗时，分别测 1/10/50 账户及既有 5 MB 合成历史样本。若主线程阻塞达到第 16.7 节调查阈值，再将协调与文件工作放入串行后台执行器；MainActor 仅提取不可变非秘密快照和应用校验后的结果。后台期间本地发生编辑/删除时，通过进程内修订号拒绝旧结果、重新合并；同一同步任务在途合并触发，禁止用 detached task 直接共享现有 MainActor repository。数据 schema 暂不改变。
-
-**验收**：注入协调失败时无绕过写入；慢文件协调期间仍能打开菜单、查看缓存和关闭面板；云端写回失败后本地可用且状态诚实；并发编辑/删除不被后台旧快照覆盖。耗时改进必须有量测记录，不能由“使用 async”推定。双 Mac 仍未验证，不设为本轮出口。
-
-### 18.5 P1-B：解释历史覆盖，再考虑补取
-
-**现状入口**：`AccountService.addAccount` 可选回填 7 天，失败回退为空历史；`RefreshCoordinator.performRefresh` 明确仅保存当日，不重复回填。现有 adapter 已有 `fetchDailyUsage`，可复用能力，无需创建第二套供应商访问层。
-
-先在现有详情趋势说明位置显示已知日期覆盖范围及缺日，明确“未采集/查询失败/不支持”不能变成 0。按需补取作为候选：仅对供应商实际支持、用户明确选择的日期范围请求，服从既有原点冷却和取消规则；当天仍以快照口径为准。历史批次以 repository 原子批量提交，避免逐日重写全文件；重复补取不重复累计，失败保留旧值。
-
-workbuddy2api 仅有进程累计量，当前把增量归入获取当日；跨日离线或网关期间重启不能从累计值还原准确每日消费。应标注“观测增量”，不套用可查询历史供应商的补取承诺，也不倒推出精确账单。显示口径和补取范围需确认后细化。
-
-**验收**：首次回填失败后能解释缺日；离线数日重开不展示虚构完整趋势；补取取消、重复提交、跨时区和部分缺失均保留正确原生金额；DeepSeek 沿用 GMT+8 日期规则。
-
-### 18.6 P1-C：发布验收和可分享诊断
-
-优先用实际应用包验证已有能力：窗口隐藏/恢复和返回首页、登录项、全局快捷键、通知、睡眠唤醒、键盘及 VoiceOver、浅色/深色与减少透明度。已有 `.github/workflows/build.yml` 包含离线检查、GUI 只编译、打包与两次 checksum 复算；本轮没有查询该提交的远端 run，不宣称发布成功。
-
-下一次交付记录应关联 commit、CI run、版本和实际下载资产；完成下载校验及手动替换安装后的启动、账户和历史保留检查。继续按 ad-hoc 与手动安装路线，不把 SHA-256 当作开发者身份认证。
-
-可选增加用户主动生成的诊断预览与导出：版本/构建、系统版本、错误分类、任务数量、耗时、存储大小和同步阶段。复用 `AccountHealth`、`RepositoryPerformanceDiagnostics`；采用字段白名单，默认不含账户名、UUID、站点 URL、路径、原始错误文本、响应体或凭据，无后台上传。导出前可查看内容，失败时保留当前页面；用含伪造秘密的 fixture 验证导出不携带这些内容。
-
-### 18.7 其他产品方向与文档建议
-
-- 配置导入/导出：REQUIREMENT 已列为 P2。仅非秘密配置，导入前预览新增/冲突/缺凭据，复用同步安全投影与稳定账户 ID；不直接复制整个应用目录。
-- 月度预算提醒：可选新需求，优先基于可信完整消费及现有通知去重；部分历史不可显示精确超支/预计耗尽日期。阈值、币种、提醒频率需先定需求。
-- 更多站点：优先确认用户实际使用的站点与管理 API；OpenAI 兼容模型调用地址不能证明余额/账单接口兼容。继续走现有 adapter，不预设通用适配器可直接支持所有站点。
-- 维护文档：建议后续单独整理 AI_CONTEXT 的当前模块列表、调度/健康、下载完整性和设置分页事实；将旧环境失败与后续成功记录标明时序。DESIGN 早期类型草案与实际协议、REQUIREMENT 早期“仍未完成”与后续完成记录应建立明确取代关系。本轮只加阅读指引和本节，不改写长期上下文或需求。
-
-### 18.8 NEEDS_CONFIRMATION 与下一阶段入口
-
-| 事项 | 原因与影响 | 需要决定的内容 |
-| --- | --- | --- |
-| 网关远端管理边界 | REQUIREMENT 核心原则写“只读监控”，但 `WorkBuddy2APIAdapter.performSubAccountAction` 已发送启停 POST，UI 已有对应操作；实现存在不等于需求已确认 | 是否把 workbuddy2api 的有限启停管理正式列为例外；确认前不扩展或删除这些操作 |
-| 备份恢复产品策略 | 新增本地副本占用空间，恢复可能带回旧设置/账户并影响后续同步 | 是否纳入下一轮，以及保留代数、恢复确认和恢复后同步入口 |
-| 历史补取与网关统计说明 | 历史能力因供应商而异；网关累计量不能可靠拆回离线各日 | 补取 7/30 日范围和触发方式；是否采用“观测增量”说明 |
-| 可选产品扩展 | 导入导出、预算、诊断导出、更多供应商并非本轮已选需求 | 根据实际使用频率选择，不一次全部加入 |
-
-建议下一阶段先处理 P0-A 与 P0-B 的故障状态保护，再做 P1-A 的协调失败保护和性能量测；备份恢复与历史补取在产品选择确认后实施。独立验证任务可补齐真实应用包验收。每个实现阶段先补故障复现，再运行现有 `scripts/test-regressions.sh`、`scripts/test-contracts.sh` 和已核实构建命令；GUI 只编译、实际 GUI、真实供应商、远端发布和双 Mac 分别报告。
-
-本轮增量评估完成，存在上述未决事项，不能称所有扩展方案均已就绪；停留在设计阶段。
-
-
-## 19. 2026-10-10 可靠性加强实施
-
-用户在第 18 节评估后明确授权实现。本轮实现 P0-A、P0-B 的故障保护及 P1-A 的同步协调保护和经量测决定的性能改进；第 18 节保留为实施前评估。未确认的备份策略、历史补取、新产品功能和网关远端管理边界仍待确认，不改变 REQUIREMENT。此前不使用 Keychain/Developer ID/公证、跳过双 Mac 验收的选择保留。
-
-### 19.1 请求尝试与等待分离
-
-- `RefreshScheduler.AttemptResult` 区分终结和 `retry(at:)`，job 保留重试计数、订阅者、手动优先级及 `notBefore`。一次实际请求返回后，等待重试的 job 释放全局执行名额；原点冷却持续生效。同原点串行、全局最大 3 和提交前账户配置/取消校验保留。未结束的非协作取消请求仍占名额。
-- `RefreshCoordinator` 每次只执行一次尝试，错误分类不因等待重新标成限流；整次刷新最终失败只累计一次。取消等待恢复此前失败状态，不发送虚假失败结果。
-- 自动刷新逐账户投递。每账户最多一个定时订阅者；下一周期不等待上一整轮终结，定时/唤醒/激活按到期与去重规则合并，不回放睡眠期间所有周期。手动整轮刷新仍可等待结果，但不阻挡自动投递。
-- 成功账户立即更新本机展示，独立评估通知并合并触发异步同步。低余额通知在成功账户结束刷新后评估（同步关闭时也有效），授权返回后复核账户启用、可见性、阈值、最新余额、用户通知选项及自然日去重。
-
-### 19.2 启动失败可恢复、不可写入空替代库
-
-- `RecoverableLocalRepository` 在生产入口固定服务绑定身份。打开失败无可写内存后备，不修复、删除或替换原业务文件；重新打开时先完整读取账户、快照、历史和设置，再切换 backing。
-- `LocalRepositoryError` 区分不可读取、损坏、未知版本及普通写入不可用；高版本 schema 在解码其内容前拒绝，不按损坏数据重建。只有明确文件不存在才接受首次空状态，其他读取失败不被 `fileExists` 吞掉。
-- `RelayStore.storageAvailability` 独立于瞬时刷新错误。故障态暂停自动刷新和同步，刷新、时钟更新不能清除提示；增改账户、测活、凭据操作及业务设置写入均受保护。首页显示原因和“重新读取”，不显示首次使用引导；添加/刷新及设置控件相应不可操作。
-- 故障时打开的设置窗口不自动保存其默认草稿；读取恢复后也需重新打开窗口获得真实设置。恢复完整加载成功才恢复原有刷新/同步能力。
-- 本轮提供重新打开入口，不提供备份创建或备份恢复；不读取真实凭据做测试。
-
-### 19.3 同步协调保护及后台文件执行
-
-- 所有生产路径移除协调失败后的直接 accessor 回退。普通目录 fixture 必须显式注入测试协调方式。首次文件创建在父目录协调成功后进行，不在协调范围外创建空占位文件。
-- `SyncFileWorker` actor 串行执行文件协调、候选读取/版本检查、合并、编码与云端原子写入；只接收不可变非秘密数据，不共享 MainActor repository。普通同步和显式冲突处理均异步接入 UI。
-- 本轮用完整本地内容比较替代新增进程修订号：后台返回后，在 MainActor 上无悬挂地比较原本地快照与当前内容，只有一致才 `applyPreparedSyncData`。期间编辑/删除导致丢弃旧准备结果并重新合并。忽略 `exportedAt` 这种读取时间，保留账户、快照、历史、设置及 tombstone 的全部比较。
-- 读写拆为两个协调范围；写入前在协调范围内重新比较主文件及全部冲突副本的原始字节集合。远端变化需重新读取合并，不能覆盖旧候选；最多重试 3 次，持续变化报告失败并保留数据。
-- 同步期间触发合并为一个在途任务和一个待续标记。冲突处理先取消并等待在途普通同步，禁止并行覆盖；候选内容变化要求重新决策。原始报告只有远端写成功才清除。本地已提交但远端写失败仍报告失败，重试幂等。
-- `SyncMerge` 相同记录直接返回，避免在相同时间戳下对每条相同历史重复编码；文件仓库已校验的准备结果直接提交，避免主线程再次完整合并。本地原子写入仍在 MainActor，继续保留不可悬挂的提交边界及旧索引一致性；大样本实际提交耗时低于 200 ms 调查阈值，不在本轮再改持久化协议。
-- 后台文件准备和写入检查取消；写出使用既有非秘密安全投影，凭据不进入文件或 diagnostics。进程内分阶段耗时及 `RelayStore.projectionReloadMilliseconds` 不持久化、不同步、无自动上传。
-
-### 19.4 验证和性能证据
-
-验证针对本轮未提交工作区，基于 `1efd685`，不代表远端 CI、发布资产或实机验收。使用已核实 MacOSX26.5 SDK，部署目标未降级。
-
-新增故障回归覆盖三个原点同时冷却一小时、第四原点首次刷新、健康账户随后两个定时周期、重试预算和等待取消；存储损坏/不可读取/未知版本、错误不可被刷新清除、原文件保留、凭据写入保护、重新打开后持久化；协调失败无绕过/无占位文件、部分同步失败及幂等重试；后台协调阻塞期间 MainActor 可继续编辑，旧结果拒绝、删除不复活、远端变化重合并、取消不提交，以及显式冲突异步写失败/重试/旧候选拒绝。
-
-量测为临时普通目录与合成数据，未经过真实 iCloud 或 WindowServer。首次约 5 MB / 24,008 条历史同步总耗时约 1,194.53 ms，超过调查阈值；相同规模改进后一次测得总耗时 434.78 ms，其中后台读取/合并 193.00 ms、后台编码 109.35 ms、本地主线程提交 124.53 ms。1/10/50 账户（每账户 30 条）分别约 5.67/11.31/34.38 ms。单次样本受机器负载影响，不承诺固定倍数，也不能代表实际 iCloud 协调等待或 GUI 帧率。
-
-最终验证：离线 regressions（含图表）、三组 contracts、本地完整构建、GUI 检查只编译及 diff 检查通过。真实 GUI 会话探测返回 77（无 Quartz/WindowServer），不能记为 GUI 通过；真实供应商、双 Mac 和远端发布未执行。AI_CONTEXT 建议后续局部补入本节已落地的恢复/调度/异步同步模块事实，本轮不改写长期上下文。
-
-## 20. 2026-10-10 功能扩展实现设计
-
-本轮新增功能共享现有 `RelayStore` 和版本化 JSON，不引入后端或第三方依赖。`AccountConfiguration` 兼容增加 `monthlyBudget`、`groupName`、`isPinned`，缺失字段按无预算、无分组、未置顶解码；同步安全投影保留这些非秘密字段，并把凭据引用重写为账号 UUID。
-
-历史补齐由账户级服务调用已有 `ProviderAdapter.fetchDailyUsage`，通过账号凭据和账户独立汇率转换；只提交去重后的非今日记录，使用 `LocalRepository.commitDailyUsage` 一次性写入。运行状态保留在内存并支持取消；页面区分支持、未支持、缺失和已知日期。预算与模型分析只基于当前快照和已保存日聚合，混合币种或不完整数据保持未知。
-
-「同步」分页聚合 CSV 消费导出、非秘密配置 JSON 导入/导出、本机备份列表和预览恢复。导出/备份不读取凭据文件；导入先校验 schema、URL、数字范围和大小，再显示变更摘要；恢复使用当前同步内容指纹进行 compare-and-swap，过期预览拒绝提交，并保留本机凭据、iCloud 目录与本机同步开关。
-
-首页组织功能只改变投影排序和筛选：置顶优先、分组标题稳定排序、搜索匹配账号名/供应商/分组。筛选状态不参与汇总计算。模型面板显示消费排序、占比和单位 Token 成本，无法证明时显示未知原因。
-
-WidgetKit 暂不列入交付：当前工程只有 SwiftPM 可执行目标和手工 app 打包脚本，没有已核实的 Xcode extension target、共享 App Group 或扩展嵌入入口。下一阶段需要先建立可签名扩展目标、共享非秘密快照和独立小组件测试，再评估与现有 ad-hoc 打包策略的兼容性。
-
-验收重点是旧 JSON 解码、原子批量历史、任务取消/失败不落半批、CSV 公式注入转义、导入大小/字段边界、备份不含秘密和恢复并发 compare-and-swap；离线测试不能代替真实供应商、iCloud、GUI 或 WidgetKit 运行证据。
-
-## 21. 2026-10-10 六项功能实现收敛
-
-本轮已完成用户确认的六项功能并统一接入：
-
-- 账户详情提供 7/30 日覆盖率、缺失日期解释、供应商能力说明、手动历史补齐、进度和取消；回填按账户共享请求许可，过滤今天和无效记录，最后一次性提交。
-- 预算、分组、置顶字段使用兼容 Codable；预算通知只在新鲜且同原币种的当月消费可核实时触发，80%/100% 按账户、月份、币种、预算值去重并存本机；首页搜索、分组筛选、置顶排序不改变汇总口径。
-- 同步分页提供 CSV 消费导出、非秘密配置 JSON 导入/导出、五代本机备份及预览恢复。导入/恢复采用内容 compare-and-swap，先备份再原子替换，操作期间阻止账户写入；相同供应商和地址保留本机凭据引用，地址或供应商变化时清除旧快照和历史并使用新引用。同步合并也不会用跨设备 UUID 覆盖本机凭据映射。
-- 模型分析增加消费/Token/名称排序、Top 5、币种混合提示、未知消费/Token 处理、消费占比、百万 Token 单位成本和缓存读取率。
-
-新增离线回归覆盖 `TransferIntegrationChecks`、`FeaturePersistenceChecks`、`DataTransferChecks`、`HistoryBackfillChecks` 和 `ProductFeatureChecks`；`scripts/test-regressions.sh` 已纳入全部套件。回归、离线契约、SwiftPM 构建和窗口导航 build-only 均通过。本轮窗口导航仅执行 build-only，未运行实际 GUI 操作；真实供应商、iCloud 多设备、发布和 WidgetKit 扩展仍无运行证据。
-
-## 22. 2026-10-10 功能入口与本机备份目录调整
-
-按用户新的交互选择，预算、分组、置顶字段并入添加/编辑账户表单；通过 `AccountDraft` 和编辑参数在原账户提交路径一起保存，取消表单不保存。账号管理不再创建独立偏好编辑面板，首页仍提供置顶快捷动作。新增预算校验在保存或测活前完成，网关没有可靠月消费时不显示预算输入。
-
-「数据」分页拆分数据刷新、历史数据、月预算通知三个同级区块。首页搜索框与「已连接账号」标题同一行，分组筛选保留紧凑入口。
-
-本机备份目录由共享备份服务管理，选择保存在本机 security-scoped bookmark，备份正文不含目录授权。选择的父目录下创建 Relay 专属子目录，私有权限只作用于该子目录及备份文件，不修改所选父目录权限。切换目录会先复制并校验旧备份，再切换目录和删除旧原件；复制/校验失败保留旧数据与配置，清理失败保留原件并提示。自动/手动/恢复前备份使用统一当前目录。
-
-调整已落地。新增 `AccountFormPreferencesChecks` 验证添加/编辑偏好、原保存事务、非法输入保留及凭据回滚；备份目录测试验证切换、重启后书签、恢复默认、旧备份保留、父目录权限及无效授权拒绝。完整回归（含 24 项图表检查）、三个离线契约套件、SwiftPM 构建、窗口导航 build-only 和改动格式检查均通过。真实图形会话中的布局及原生目录选择器仍未操作验收。
-
-## 23. 2026-10-11 切换备份目录自动搬移
-
-按用户修正，选择新备份目录及恢复默认目录都会搬移旧位置的 Relay 备份文件。先复制全部服务自有命名的普通文件，为新复制文件保留修改日期，校验逐文件字节和源文件集合，再更新本机目录设置，最后删除已校验的旧原件。复制或校验失败回滚本次新副本，保留旧原件和原设置；同名不同内容拒绝覆盖。旧目录中的无关文件和目录本身不删除。清理失败保留有效新副本与旧原件，并向用户明确提示未清理数量。目录迁移与自动备份使用同一 actor，防止进程内并行写入。
-
-旧目录书签无效时不猜测源数据，须重新选择原目录恢复授权后再搬移；选择同一目录可更新授权而不移动文件。正常五代保留策略仍作用于之后的备份创建，迁移阶段不提前删除已有目标备份。
-
-
-本次设计范围是备份位置切换，不改变备份正文、恢复事务或凭据存储。`DataTransferPanel` 负责目录选择、操作期间禁用入口以及结果/错误显示；`LocalBackupService` 负责目录授权、源/目标检查、搬移与清理；目录书签和路径仅存本机偏好。选择新目录与恢复默认共用搬移流程，后续自动、手动和恢复前备份均使用切换后的目录。
-
-验收条件：成功切换后新目录可列出并读取全部搬移备份，旧自有原件已删除；复制/校验失败时目录配置不变且旧原件仍可读取；同名不同内容不覆盖；清理失败时新目录有效且提示剩余旧文件数；同目录重选只续授权；无关文件与所选父目录保持不变。迁移期间不执行五代裁剪，避免提前删除目标已有备份。迁移不是跨目录的单次原子事务，进程中断可能留下两处副本；不能据现有测试声称已验证断电或进程中断恢复。
-
-2026-10-11 核验：现有实现的完整离线回归通过，包含迁移复制失败、内容冲突、校验失败、清理失败及同目录/无关文件专项；离线契约、SwiftPM 构建、窗口导航 build-only 和改动格式检查通过。本轮按架构设计角色只核验现有代码并局部补齐本文，未继续修改业务实现。原生目录选择器及真实 SwiftUI 交互尚未验收；下一阶段入口是已登录图形会话中的选择新目录、恢复默认及失败提示操作验收。建议后续在 `AI_CONTEXT.md` 中补充备份服务和本机目录配置事实，本轮不改写长期上下文。
-
-
-## 24. 2026-10-11 本机备份日期显示调整
-
-用户要求本机数据备份按 `YYYYMMDD` 显示，例如 `20261011`，称为年月日紧凑日期格式。当前备份列表使用系统本地化的缩略日期与短时间，恢复预览使用本地化的完整日期与短时间；备份文件名另使用 Unix 秒级时间戳与 UUID。显示格式与文件命名是两个不同入口，本次按“显示”要求调整列表与恢复预览日期，不改文件命名及既有备份识别规则。
-
-在 `DataTransferPanel` 共用日期格式化入口，以公历、固定数字格式和系统当前时区将 `createdAt` 显示为八位年月日；Swift `DateFormatter` 模式使用 `yyyyMMdd`，不能照抄大写 `YYYY`（周年份）或 `DD`（年内第几天）。为区分同日多份备份，创建时间另以 `HH:mm:ss` 显示在次要信息中，日期主标识保持八位。两处显示均来自原 `createdAt`，排序、备份内容和恢复流程继续复用现有能力。
-
-验收：列表与恢复预览主日期均为八位数字；月份和日期补零；跨年日期按公历年份显示；切换系统语言不改变数字格式；同日多份备份仍可按次要时间区分；旧备份仍可列出、预览和恢复。显示变更已按用户“修改”的指令应用于列表和恢复预览；真实图形界面显示仍待操作验收。
+| 损坏库恢复 | 首页故障提示 → `StorageRecoveryView` → `RelayStore` → `RecoverableLocalRepository` → `FileLocalRepository.recover` | 仅可读损坏库；复核原字节及备份，协调替换前保留 `relay-damaged-UUID.json`。未知版本不降级，重新分配凭据引用并关闭同步；保留或协调失败拒绝替换。 |
+| 新增账户提交 | `AccountService` 准备网络数据/历史 → 保存新凭据 → `LocalRepository.commitNewAccount` | 业务数据一次提交；跨文件仍需补偿，补偿失败报告。进程中断可能留下未引用凭据，不宣称两个文件原子提交。 |
+| 请求跳转 | `HTTPClient` 默认 ephemeral 会话 + `ProviderRedirectDelegate` → `ProviderRedirectPolicy` | 每跳比较原请求来源、端口、方法；跨站/降级/用户信息拒绝，同来源保留认证。loopback 例外不扩大。 |
+| 搬移恢复 | `LocalBackupService` 本机 `.relay-backup-migration.json` → 同步页显式重试 | 清单含目录/bookmark/阶段/文件名/hash。目录选择以私有原子 `.relay-backup-selection.json` 为提交标记，`relay.localBackupSelection`/旧键只作兼容提示。双方内容重新核验后清理，修改或授权失效保持待处理；期间暂停五代裁剪。 |
+| 通知状态 | `NotificationStatusService` / `NotificationStatusPanel`，嵌入低余额与预算区 | 检查系统授权/横幅状态，固定示例测试不消费去重；展示提交失败，不声称系统接受就是已展示。 |
+| 消费总览 | 首页入口 → `ConsumptionOverviewView` / `ConsumptionOverviewService` | 按供应商日历、原币日记录统计本月/上月及覆盖，不重复累加月快照；已结束自然日的完整同币同长度同期且上期非零才显示环比。 |
+| 脱敏诊断 | 设置关于 → `DiagnosticExportPanel` → 白名单 `RelayDiagnosticReport` | 预览固定内容后主动保存，无账号名、UUID、URL、路径、原始错误或凭据，不上传；存储故障时关于页仍可用。 |
+| 备份摘要 | 既有同步页 → `LocalBackupService.summary` | 有效份数、容量、最近日期与待处理状态，支持打开目录、重试及重新授权。 |
+| 导入差异 | `ConfigurationDiffService` → 既有确认 sheet | 逐字段前后值、设置变化、历史清除及重填凭据提示；现有 CAS 保留，同步开关保留本机。 |
+| 批量整理 | 既有账户管理 → `RelayStore.organizeAccounts` → repository 一次替换 | 仅真实父账户 ID，失败无半批；停用取消刷新，删除不并入批量操作。 |
+
+### 13.2 验证与下一阶段
+
+`StrengtheningChecks` 用临时数据验证独立损坏库恢复、原件保留、过期拒绝、版本保护、单次账户提交及补偿失败、搬移清理失败后重新创建服务重试、批量状态、消费覆盖与币种隔离、导入差异、跳转策略及诊断白名单。另用子进程在复制和清理阶段直接退出、不执行回滚，验证重启后的恢复；仍不等于断电或原生目录授权验收。系统通知、目录选择和 UI 仍需图形会话；供应商真实请求和 Release 安装升级另行验收。
+
+更多供应商需确认管理 API；OpenAI 模型接口兼容不等于账单兼容。WidgetKit 保持 `PROPOSED`/当前非目标，未建立扩展 target、App Group 和签名嵌入。
+
+真实双 Mac 按用户决定跳过本轮，不增加阻塞，也不标通过；后续按 [双机验证说明](verification/icloud-multidevice.md) 单独记录。

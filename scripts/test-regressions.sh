@@ -28,6 +28,7 @@ swiftc -swift-version 5 -D DEBUG -parse-as-library \
   "$ROOT/Tests/DataTransferChecks.swift" \
   "$ROOT/Tests/HistoryBackfillChecks.swift" \
   "$ROOT/Tests/ProductFeatureChecks.swift" \
+  "$ROOT/Tests/StrengtheningChecks.swift" \
   "$ROOT/Tests/RegressionChecks.swift" -o "$WORK/relay-regressions"
 "$WORK/relay-regressions"
 

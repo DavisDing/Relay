@@ -23,6 +23,11 @@ private final class FormPreferencesRepository: LocalRepository {
     var writes = 0
     func fetchAccounts() throws -> [AccountConfiguration] { try underlying.fetchAccounts() }
     func account(id: UUID) throws -> AccountConfiguration? { try underlying.account(id: id) }
+    func commitNewAccount(_ account: AccountConfiguration, snapshot: ProviderSnapshot, history: [DailyUsageRecord]) throws {
+        if failAccountSave { throw FormPreferencesFailure.injected }
+        writes += 1
+        try underlying.commitNewAccount(account, snapshot: snapshot, history: history)
+    }
     func upsertAccount(_ account: AccountConfiguration) throws {
         if failAccountSave { throw FormPreferencesFailure.injected }
         writes += 1

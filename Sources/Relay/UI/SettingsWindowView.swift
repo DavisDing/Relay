@@ -111,7 +111,7 @@ public struct SettingsWindowView: View {
             Divider().opacity(0.3)
 
             selectedSettingsPage
-                .disabled(!store.storageAvailability.isAvailable)
+                .disabled(!store.storageAvailability.isAvailable && selectedTab != .about)
                 .frame(maxHeight: .infinity)
                 .relayGlassTile(cornerRadius: 14)
                 .padding(.horizontal, 16)
@@ -223,6 +223,7 @@ public struct SettingsWindowView: View {
             )
         case .about:
             SettingsAboutPage(
+                store: store,
                 updateState: updateState,
                 isDownloadingUpdate: $isDownloadingUpdate,
                 updateStatusMessage: $updateStatusMessage,

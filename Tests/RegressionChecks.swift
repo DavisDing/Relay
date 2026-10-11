@@ -120,6 +120,10 @@ private final class RejectingRepository: LocalRepository {
     var rejectWrites = false
     func fetchAccounts() throws -> [AccountConfiguration] { try base.fetchAccounts() }
     func account(id: UUID) throws -> AccountConfiguration? { try base.account(id: id) }
+    func commitNewAccount(_ account: AccountConfiguration, snapshot: ProviderSnapshot, history: [DailyUsageRecord]) throws {
+        if rejectWrites { throw LocalRepositoryError.unavailable }
+        try base.commitNewAccount(account, snapshot: snapshot, history: history)
+    }
     func upsertAccount(_ account: AccountConfiguration) throws {
         if rejectWrites { throw LocalRepositoryError.unavailable }
         try base.upsertAccount(account)
@@ -168,7 +172,11 @@ struct RegressionChecks {
     @MainActor static func main() async {
         // Flush each group so a failure retains all preceding test results.
         setbuf(stdout, nil)
-        do { try await run() }
+        do {
+            if CommandLine.arguments.count == 4, CommandLine.arguments[1] == "--backup-crash-fixture" {
+                try await StrengtheningChecks.crashFixture(root: URL(fileURLWithPath: CommandLine.arguments[2]), stage: CommandLine.arguments[3])
+            } else { try await run() }
+        }
         catch {
             fputs("FAILED: \(error)\n", stderr)
             exit(1)
@@ -183,6 +191,7 @@ struct RegressionChecks {
         try await RefreshSchedulingChecks.run()
         try RepositoryPerformanceChecks.run()
         try await StorageRecoveryChecks.run()
+        try await StrengtheningChecks.run()
         try await SyncSafetyChecks.run()
         try await AccountFormPreferencesChecks.run()
         try await TransferIntegrationChecks.run()

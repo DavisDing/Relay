@@ -159,6 +159,8 @@ enum DataTransferChecks {
         catch BackupDirectoryError.invalidDirectory {}
         try check(defaults.object(forKey: LocalBackupService.bookmarkPreferenceKey) == nil, "Invalid selection does not persist")
         try await service.selectDirectory(firstParent)
+        try manager.removeItem(at: fallback.appendingPathComponent(".relay-backup-selection.json"))
+        defaults.removeObject(forKey: "relay.localBackupSelection")
         defaults.set(Data("broken".utf8), forKey: LocalBackupService.bookmarkPreferenceKey)
         do { _ = try await service.list(); throw DataTransferCheckFailure(description: "Broken bookmark fell back silently") }
         catch BackupDirectoryError.bookmarkUnavailable {}

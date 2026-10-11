@@ -118,7 +118,7 @@ public final class RelayStore: ObservableObject {
     }
 
     public static func production() throws -> RelayStore {
-        let repository = RecoverableLocalRepository { try FileLocalRepository() }
+        let repository = RecoverableLocalRepository(recoveryFileURL: try FileLocalRepository.defaultFileURL()) { try FileLocalRepository() }
         let credentialStore = FileCredentialStore()
         let rateService = RateService()
         return RelayStore(
@@ -131,7 +131,7 @@ public final class RelayStore: ObservableObject {
 
     /// The same service identity can reopen storage after a startup failure.
     public static func unavailable(_ error: Error) -> RelayStore {
-        RelayStore(repository: RecoverableLocalRepository(error: error, open: { try FileLocalRepository() }),
+        RelayStore(repository: RecoverableLocalRepository(error: error, recoveryFileURL: try? FileLocalRepository.defaultFileURL(), open: { try FileLocalRepository() }),
                    credentialStore: FileCredentialStore(), adapters: .production())
     }
 
@@ -149,6 +149,36 @@ public final class RelayStore: ObservableObject {
             storageAvailability = recoverable.availability
             repositoryErrorMessage = storageAvailability.message
             globalErrorMessage = storageAvailability.message
+        }
+    }
+
+    public func previewStorageRecovery(_ entry: LocalBackupEntry) async throws -> StorageRecoveryPreview {
+        guard let recoverable = repository as? RecoverableLocalRepository, !isApplyingTransferredData else { throw LocalRepositoryError.unavailable }
+        let original = try recoverable.recoveryOriginal()
+        let backup = try await backupService.preview(entry)
+        return StorageRecoveryPreview(backup: backup, originalBytes: original)
+    }
+
+    public func restoreDamagedStorage(_ preview: StorageRecoveryPreview) async throws {
+        guard let recoverable = repository as? RecoverableLocalRepository, !storageAvailability.isAvailable,
+              !isApplyingTransferredData, activeAccountMutations == 0 else { throw DataTransferError.operationInProgress }
+        isApplyingTransferredData = true
+        defer { isApplyingTransferredData = false }
+        refreshLoopTask?.cancel(); refreshCoordinator.cancelAll()
+        let pending = syncReloadTask; pending?.cancel(); syncReloadTask = nil
+        await pending?.value
+        let reread = try await backupService.preview(preview.backup.entry)
+        guard reread.data.hasSameContent(as: preview.backup.data), reread.data.exportedAt == preview.backup.data.exportedAt else {
+            throw DataTransferError.stalePreview
+        }
+        try recoverable.recover(reread.data, expectedOriginal: preview.originalBytes)
+        storageAvailability = recoverable.availability
+        reloadFromRepository(synchronize: false)
+        transferRevision += 1
+        // Restart only after the guard is released, without an immediate cloud upload.
+        Task { @MainActor [weak self] in
+            self?.startAutomaticRefresh()
+            if self?.automaticallyRefresh == true { self?.startPresentationUpdates() }
         }
     }
 
@@ -486,6 +516,62 @@ public final class RelayStore: ObservableObject {
         reloadFromRepository(synchronize: false)
         transferRevision += 1
         // Restoration is local. The next normal synchronization still uses conflict protection.
+    }
+
+    public func consumptionOverview() -> [ConsumptionOverviewRow] {
+        ConsumptionOverviewService.rows(accounts: detailConfigurations, history: detailHistory.values.flatMap { $0 }, at: presentationDate, calendar: calendar)
+    }
+
+    public func diagnosticReport() -> RelayDiagnosticReport {
+        let performance = (repository as? FileLocalRepository)?.performanceDiagnostics ?? (repository as? RecoverableLocalRepository)?.performanceDiagnostics
+        let issues = Dictionary(grouping: accountHealthStates.values.compactMap(\.issue), by: \.rawValue).mapValues(\.count)
+        let storage: String
+        switch storageAvailability {
+        case .available: storage = "available"
+        case .unavailable(let error):
+            switch error {
+            case .unavailable: storage = "unavailable"
+            case .unreadable: storage = "unreadable"
+            case .corruptData: storage = "corrupt"
+            case .unsupportedVersion: storage = "unsupported-version"
+            }
+        }
+        // These values originate from the bundle/system, never account input.
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development"
+        let os = ProcessInfo.processInfo.operatingSystemVersion
+        return RelayDiagnosticReport(applicationVersion: version, systemVersion: "\(os.majorVersion).\(os.minorVersion).\(os.patchVersion)",
+            storageState: storage, accountCount: detailConfigurations.count, historyCount: detailHistory.values.reduce(0) { $0 + $1.count },
+            activeRefreshCount: accountHealthStates.values.filter { $0.phase.isActive }.count, issueCounts: issues,
+            projectionMilliseconds: projectionReloadMilliseconds, localFileBytes: performance?.fileBytes,
+            localLoadMilliseconds: performance?.reloadMilliseconds, localCommitMilliseconds: performance?.commitMilliseconds,
+            lastCommitSucceeded: performance?.lastCommitSucceeded, syncMilliseconds: FileSyncService.performanceDiagnostics.totalMilliseconds,
+            syncStatus: syncStatus.rawValue, backupHasError: backupErrorMessage != nil)
+    }
+
+    public func organizeAccounts(_ ids: Set<UUID>, group: String? = nil, changeGroup: Bool = false,
+                                 hidden: Bool? = nil, enabled: Bool? = nil) throws {
+        try requireStorage()
+        guard activeAccountMutations == 0, !syncResolutionInProgress else { throw DataTransferError.operationInProgress }
+        let normalized = group?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard (normalized?.count ?? 0) <= 40 else { throw DataTransferError.invalidAccounts }
+        let current = try repository.syncData()
+        guard !ids.isEmpty, ids.isSubset(of: Set(current.accounts.map(\.id))) else { throw DataTransferError.stalePreview }
+        let now = Date()
+        let changed = current.accounts.map { original -> AccountConfiguration in
+            guard ids.contains(original.id) else { return original }
+            var account = original
+            if changeGroup { account.groupName = normalized?.isEmpty == false ? normalized : nil }
+            if let hidden { account.isHidden = hidden }
+            if let enabled { account.isEnabled = enabled }
+            account.updatedAt = Date(timeIntervalSince1970: max(floor(now.timeIntervalSince1970), original.updatedAt.timeIntervalSince1970 + 1))
+            return account
+        }
+        let candidate = RelaySyncData(accounts: changed, snapshots: current.snapshots, dailyUsage: current.dailyUsage,
+            settings: current.settings, settingsUpdatedAt: current.settingsUpdatedAt, deletedAccountIDs: current.deletedAccountIDs)
+        guard try repository.replaceNonsecretData(candidate, expected: current) else { throw DataTransferError.stalePreview }
+        if enabled == false { for id in ids { refreshCoordinator.cancel(accountID: id) } }
+        globalErrorMessage = nil
+        reloadFromRepository()
     }
 
     public var accountConfigurations: [AccountConfiguration] { detailConfigurations }
@@ -876,7 +962,9 @@ public final class RelayStore: ObservableObject {
                 guard let self else { return }
                 defer { self.pendingBudgetNotificationIDs.remove(event.key.accountID) }
                 let center = UNUserNotificationCenter.current()
-                guard (try? await center.requestAuthorization(options: [.alert, .sound])) == true,
+                let granted = (try? await center.requestAuthorization(options: [.alert, .sound])) == true
+                await NotificationStatusService.shared.refresh()
+                guard granted,
                       UserDefaults.standard.bool(forKey: "budgetNotificationsEnabled"),
                       !self.isApplyingTransferredData,
                       let current = self.nextBudgetEvent(for: event.key.accountID, at: Date()), current.key == event.key else { return }
@@ -886,11 +974,12 @@ public final class RelayStore: ObservableObject {
                 content.sound = .default
                 do {
                     try await center.add(UNNotificationRequest(identifier: current.notificationIdentifier, content: content, trigger: nil))
+                    NotificationStatusService.shared.recordSuccess()
                     self.budgetAlertState.markDelivered(current)
                     let provider = self.accountConfiguration(id: current.key.accountID)?.providerKind ?? .pipio
                     self.budgetAlertState.retain(month: BudgetService.monthKey(at: Date(), calendar: BudgetService.calendar(for: provider, fallback: self.calendar)), accountID: current.key.accountID)
                     if let bytes = try? JSONEncoder().encode(self.budgetAlertState) { UserDefaults.standard.set(bytes, forKey: "relay-budget-alert-state") }
-                } catch { /* Keep the threshold eligible for a later successful refresh. */ }
+                } catch { NotificationStatusService.shared.recordFailure() }
             }
         }
     }
@@ -916,6 +1005,7 @@ public final class RelayStore: ObservableObject {
             guard let self else { return }
             let center = UNUserNotificationCenter.current()
             let granted = (try? await center.requestAuthorization(options: [.alert, .sound])) ?? false
+            await NotificationStatusService.shared.refresh()
             guard granted else {
                 self.pendingLowBalanceNotificationIDs.subtract(pending.map(\.1))
                 return
@@ -940,9 +1030,11 @@ public final class RelayStore: ObservableObject {
                 )
                 do {
                     try await center.add(request)
+                    NotificationStatusService.shared.recordSuccess()
                     UserDefaults.standard.set(today.timeIntervalSince1970, forKey: lowBalanceNotificationKey(for: id))
                 } catch {
                     self.pendingLowBalanceNotificationIDs.remove(id)
+                    NotificationStatusService.shared.recordFailure()
                 }
             }
             self.pendingLowBalanceNotificationIDs.subtract(pending.map(\.1))

@@ -99,6 +99,7 @@ struct SettingsGeneralPage: View {
             Toggle("低余额系统通知", isOn: $lowBalanceNotificationsEnabled)
                 .toggleStyle(.checkbox)
 
+            NotificationStatusPanel()
             Divider().opacity(0.4)
 
             VStack(alignment: .leading, spacing: 8) {

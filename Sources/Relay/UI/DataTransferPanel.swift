@@ -11,6 +11,8 @@ struct DataTransferPanel: View {
     @State private var selectedAccountID: UUID?
     @State private var configurations: [AccountConfiguration] = []
     @State private var backupEntries: [LocalBackupEntry] = []
+    @State private var backupSummary: BackupSummary?
+    @State private var pendingMigration = false
     @State private var backupDirectoryPath: String?
     @State private var importPreview: ConfigurationImportPreview?
     @State private var backupPreview: LocalBackupPreview?
@@ -65,9 +67,24 @@ struct DataTransferPanel: View {
                 HStack {
                     Button("选择备份目录…") { chooseBackupDirectory() }
                     Button("恢复默认目录") { resetBackupDirectory() }
+                    Button("打开目录") { openBackupDirectory() }
                 }
                 Text("目录设置仅保存在本机。切换时会搬移旧备份，校验成功后删除旧目录原文件。所选文件夹中使用 RelayBackups 子目录。")
                     .font(.system(size: 10)).foregroundStyle(.secondary)
+            }
+            if let summary = backupSummary {
+                Text("有效备份 \(summary.count) 份 · \(ByteCountFormatter.string(fromByteCount: summary.totalBytes, countStyle: .file))")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+                Text(summary.latestDate.map { "最近成功：" + backupDateText($0, format: "yyyyMMdd HH:mm:ss") } ?? "尚无成功备份")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+            }
+            if pendingMigration {
+                Text("备份搬移尚未完成，有效副本已保留。")
+                    .font(.system(size: 10)).foregroundStyle(.orange)
+                HStack {
+                    Button("重试搬移处理") { retryMigration() }
+                    Button("重新授权搬移目录…") { authorizeMigration() }
+                }
             }
             if backupEntries.isEmpty {
                 Text("尚无可用备份").font(.system(size: 11)).foregroundStyle(.secondary)
@@ -108,8 +125,23 @@ struct DataTransferPanel: View {
                 .font(.footnote).foregroundStyle(.secondary)
             ScrollView {
                 VStack(alignment: .leading) {
-                    ForEach(preview.archive.accounts) { account in
-                        Text("\(account.displayName) · \(account.providerKind.rawValue)")
+                    if let current = expectedImportData {
+                        ForEach(ConfigurationDiffService.accounts(preview, current: current)) { diff in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(diff.name + (diff.isNew ? " · 新增" : " · 已有账号")).fontWeight(.semibold)
+                                ForEach(diff.changes) { change in
+                                    Text("\(change.title)：\(change.before) → \(change.after)").font(.caption)
+                                }
+                                if diff.changes.isEmpty { Text("配置字段无变化").font(.caption).foregroundStyle(.secondary) }
+                                if diff.clearsHistory { Text("供应商或站点改变：将清除原快照与历史").font(.caption).foregroundStyle(.orange) }
+                                if diff.needsCredential { Text("需要重新填写本机凭据").font(.caption).foregroundStyle(.orange) }
+                            }.padding(.bottom, 8)
+                        }
+                        ForEach(ConfigurationDiffService.settings(preview, current: current)) { change in
+                            Text("\(change.title)：\(change.before) → \(change.after)").font(.caption)
+                        }
+                        Text("同步开关保留本机设置；目录授权、通知与快捷键不导入。")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }.frame(maxHeight: 140)
@@ -277,13 +309,44 @@ struct DataTransferPanel: View {
         }
     }
 
+    private func openBackupDirectory() {
+        Task {
+            do {
+                let url = try await backups.currentDirectoryURL()
+                guard NSWorkspace.shared.open(url) else { throw BackupDirectoryError.invalidDirectory }
+            } catch { report(error) }
+        }
+    }
+    private func retryMigration() {
+        isBusy = true
+        Task {
+            defer { isBusy = false }
+            do {
+                let warning = try await backups.retryPendingMigration()
+                message = warning ?? "未完成的备份搬移已处理。"; isError = warning != nil
+                await loadBackups()
+            } catch { report(error) }
+        }
+    }
+    private func authorizeMigration() {
+        let picker = NSOpenPanel(); picker.canChooseFiles = false; picker.canChooseDirectories = true
+        picker.title = "选择未完成搬移的原目录或新目录的父文件夹"
+        guard picker.runModal() == .OK, let url = picker.url else { return }
+        Task {
+            do { try await backups.authorizePendingMigration(url); message = "授权已更新，请重试搬移处理。"; isError = false }
+            catch { report(error) }
+        }
+    }
+
     private func reloadBackups() { Task { await loadBackups() } }
     private func loadBackups() async {
+        pendingMigration = await backups.hasPendingMigration()
         do {
             backupDirectoryPath = try await backups.currentDirectoryURL().path
             backupEntries = try await backups.list()
+            backupSummary = try await backups.summary()
         } catch {
-            backupEntries = []; backupDirectoryPath = nil
+            backupEntries = []; backupDirectoryPath = nil; backupSummary = nil
             report(error)
         }
     }

@@ -13,14 +13,16 @@ public enum StorageAvailability: Equatable, Sendable {
 }
 
 /// Keeps services bound to one repository identity while retrying a failed open.
-/// There is no writable empty fallback, and no repair or replacement of disk data.
+/// There is no writable empty fallback. Recovery requires an explicit validated backup and original-file comparison.
 @MainActor
 public final class RecoverableLocalRepository: LocalRepository {
     private var backing: (any LocalRepository)?
+    private let recoveryFileURL: URL?
     private let open: @MainActor () throws -> any LocalRepository
     public private(set) var availability: StorageAvailability
 
-    public init(open: @escaping @MainActor () throws -> any LocalRepository) {
+    public init(recoveryFileURL: URL? = nil, open: @escaping @MainActor () throws -> any LocalRepository) {
+        self.recoveryFileURL = recoveryFileURL
         self.open = open
         do {
             backing = try Self.validated(open())
@@ -30,9 +32,27 @@ public final class RecoverableLocalRepository: LocalRepository {
         }
     }
 
-    public init(error: Error, open: @escaping @MainActor () throws -> any LocalRepository) {
+    public init(error: Error, recoveryFileURL: URL? = nil, open: @escaping @MainActor () throws -> any LocalRepository) {
+        self.recoveryFileURL = recoveryFileURL
         self.open = open
         availability = .unavailable(Self.classify(error))
+    }
+
+    public func recoveryOriginal() throws -> Data {
+        guard availability == .unavailable(.corruptData), let recoveryFileURL else { throw LocalRepositoryError.unavailable }
+        return try FileLocalRepository.recoveryOriginal(at: recoveryFileURL)
+    }
+
+    @discardableResult
+    public func recover(_ backup: RelaySyncData, expectedOriginal: Data) throws -> URL {
+        guard availability == .unavailable(.corruptData), let recoveryFileURL else { throw LocalRepositoryError.unavailable }
+        let preserved = try FileLocalRepository.recover(backup, at: recoveryFileURL, expectedOriginal: expectedOriginal)
+        try retryOpening()
+        return preserved
+    }
+
+    public var performanceDiagnostics: RepositoryPerformanceDiagnostics? {
+        (backing as? FileLocalRepository)?.performanceDiagnostics
     }
 
     public func retryOpening() throws {
@@ -70,6 +90,9 @@ public final class RecoverableLocalRepository: LocalRepository {
     public func fetchAccounts() throws -> [AccountConfiguration] { try requireBacking().fetchAccounts() }
     public func account(id: UUID) throws -> AccountConfiguration? { try requireBacking().account(id: id) }
     public func upsertAccount(_ account: AccountConfiguration) throws { try requireBacking().upsertAccount(account) }
+    public func commitNewAccount(_ account: AccountConfiguration, snapshot: ProviderSnapshot, history: [DailyUsageRecord]) throws {
+        try requireBacking().commitNewAccount(account, snapshot: snapshot, history: history)
+    }
     public func deleteAccount(id: UUID) throws { try requireBacking().deleteAccount(id: id) }
     public func snapshot(accountID: UUID) throws -> ProviderSnapshot? { try requireBacking().snapshot(accountID: accountID) }
     public func upsertSnapshot(_ snapshot: ProviderSnapshot) throws { try requireBacking().upsertSnapshot(snapshot) }

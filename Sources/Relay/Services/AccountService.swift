@@ -87,45 +87,31 @@ public final class AccountService {
             ? DeepSeekUsageService.historyCalendar
             : calendar
 
+        var history: [DailyUsageRecord]
+        do {
+            history = try await adapter.fetchDailyUsage(for: account, credential: draft.credential, rate: rate,
+                endingAt: snapshot.fetchedAt, days: 7, calendar: historyCalendar)
+        } catch is CancellationError { throw CancellationError() }
+        catch { history = [] }
+        try Task.checkCancellation()
+        let today = historyCalendar.startOfDay(for: snapshot.fetchedAt)
+        history = history.filter { $0.accountID == account.id && historyCalendar.startOfDay(for: $0.day) < today }
+        // Normalize duplicate provider days before the one business-data commit.
+        history = Array(Dictionary(history.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest }).values)
+        if account.providerKind != .workbuddy2api {
+            history.append(DailyUsageRecord(accountID: account.id, day: today, spend: snapshot.todaySpend, updatedAt: snapshot.fetchedAt))
+        }
         try await credentialStore.save(draft.credential, reference: account.credentialReference)
         do {
-            try repository.upsertAccount(account)
-            try repository.upsertSnapshot(snapshot)
-            // The first verified snapshot must seed the trend history as well;
-            // otherwise a newly added account shows no current-day data until
-            // the next scheduled refresh.
-            if account.providerKind != .workbuddy2api {
-                try repository.upsertDailyUsage(DailyUsageRecord(
-                    accountID: account.id,
-                    day: historyCalendar.startOfDay(for: snapshot.fetchedAt),
-                    spend: snapshot.todaySpend,
-                    updatedAt: snapshot.fetchedAt
-                ))
-            }
-            // Backfill the last seven days for providers with a configured
-            // history source. DeepSeek uses the optional platform userToken;
-            // without it the adapter makes no platform request.
-            let history = (try? await adapter.fetchDailyUsage(
-                for: account,
-                credential: draft.credential,
-                rate: rate,
-                endingAt: snapshot.fetchedAt,
-                days: 7,
-                calendar: historyCalendar
-            )) ?? []
-            // Today's snapshot is authoritative for the current local day.
-            // Never let a historical range response replace it.
-            let today = historyCalendar.startOfDay(for: snapshot.fetchedAt)
-            for record in history where historyCalendar.startOfDay(for: record.day) != today {
-                try repository.upsertDailyUsage(record)
-            }
-            await rateService.seed(snapshot.rate)
-            return account
+            try Task.checkCancellation()
+            try repository.commitNewAccount(account, snapshot: snapshot, history: history)
         } catch {
-            try? await credentialStore.delete(reference: account.credentialReference)
-            try? repository.deleteAccount(id: account.id)
+            do { try await credentialStore.delete(reference: account.credentialReference) }
+            catch { throw AccountServiceError.credentialRollbackFailed }
             throw error
         }
+        await rateService.seed(snapshot.rate)
+        return account
     }
 
     /// Performs the same live provider checks as account creation without writing

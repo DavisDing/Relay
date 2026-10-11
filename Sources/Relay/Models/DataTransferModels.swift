@@ -83,3 +83,15 @@ struct DataTransferActions {
     let importConfiguration: (ConfigurationImportPreview, RelaySyncData) async throws -> Void
     let restoreBackup: (LocalBackupPreview, RelaySyncData) async throws -> Void
 }
+
+public struct StorageRecoveryPreview: Sendable {
+    public let backup: LocalBackupPreview
+    let originalBytes: Data
+}
+
+public struct BackupSummary: Sendable {
+    public let count: Int
+    public let totalBytes: Int64
+    public let latestDate: Date?
+    public let pendingMigration: Bool
+}
