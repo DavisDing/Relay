@@ -24,7 +24,7 @@
 
 - `MainPopoverView`：总览、搜索、分组、置顶排序和账户入口。
 - `AccountAddModalView` / `AccountEditModalView`：账户字段、预算、分组、置顶和凭据编辑。
-- `AccountDetailContainerView` / `AccountDetailView`：账户实时投影、固定近 7 日趋势和按日模型明细。
+- `AccountDetailContainerView` / `AccountDetailView`：账户实时投影、固定近 7 日趋势、按日模型明细及明确口径的网关累计模型。
 - `SettingsDataPage`：刷新、历史保留、月预算通知。
 - `SettingsSyncPage` + `DataTransferPanel`：iCloud 普通文件同步、CSV、配置导入导出和本机备份。
 - `RelayMenuBarController`：菜单栏状态、Popover 和辅助窗口导航。
@@ -137,23 +137,23 @@ UI 不拼供应商 URL、不解码供应商 JSON、不持有长期凭据。关�
 
 预算展示校验同月、同币和有效数值；通知另要求 fresh。Pipio 使用本机日历，DeepSeek 使用 UTC+8 公历。80% 和 100% 通知按账户、月份、币种和预算值持久化去重。
 
-`DailyModelUsageService` 按账户 ID 和供应商真实日期选择日模型，初始当天，`AdaptiveLineChart.onSelect` 回传稳定记录 ID 后切换日期。Pipio 回填同时读取该日看板模型桶；DeepSeek 从平台按日、按模型用量/费用桶归集，今日快照使用当天模型而非月度模型。旧 Pipio 同日快照可以回退；旧 DeepSeek 月度快照不按日复用。当前 workbuddy2api 已采集累计模型统计，但详情页仍只显示按日不支持提示；下述累计展示方案为 `PROPOSED`，尚未实施。
+`DailyModelUsageService` 按账户 ID 和供应商真实日期选择日模型，初始当天，`AdaptiveLineChart.onSelect` 回传稳定记录 ID 后切换日期。Pipio 回填同时读取该日看板模型桶；DeepSeek 从平台按日、按模型用量/费用桶归集，今日快照使用当天模型而非月度模型。旧 Pipio 同日快照可以回退；旧 DeepSeek 月度快照不按日复用。workbuddy2api 模型展示改用明确标记的网关进程累计口径，详情页不再仅显示按日不支持提示；其累计模型仍不参与日模型选择。
 
 模型面板每行五列为模型名、总 Token、缓存占比、费用/百万 Token、当日消费。表头与数据行共享列宽：模型名占行宽 2/5，右侧四列等宽，表头和数值在各自单元格内居中，列间距统一 4pt；单行截断，悬停与辅助文本保留完整值。保留排序和 Top 5，消费占比移至悬停。模型分析按消费降序、Token 降序或名称稳定排序，同额按名称，未知消费排最后；免费和未知行保留。消费占比要求列表中金额已知、同币种且总额大于零，不将其宣称为未知请求范围的完整占比；混币消费排序先按币种分组，不比较不同币种原始数字。单位成本按各行可确认消费/正 Token 数计算，百万 Token 为单位。总 Token 优先服务商总数，否则按可确认输入、缓存读取/写入和输出计一次；缓存读取率按完整输入组成汇总分子/分母，未满足条件保持未知。显示用 K/M/B/T/P/E 缩写，悬停与辅助功能保留完整数值。
 
 低余额/预算通知需用户开启和系统授权；发送前重查账户启用、可见性、最新快照、阈值和本机去重状态，单账户成功不等待其他账户长退避。
 
-### 不支持日模型的供应商：累计展示（PROPOSED）
+### 不支持日模型的供应商：累计展示（IMPLEMENTED）
 
 **目标与范围**：按本次用户要求，workbuddy2api 在“模型消耗分析”展示已有累计模型统计。按供应商统计能力选择口径；Pipio/DeepSeek 缺少某日明细仍提示未知，不自动替换为累计数据。复用现有面板、排序与 Top 5，不新增请求、存储版本或依赖，不修改日消费、预算、趋势和 CSV 的统计口径。其他供应商只有确认累计接口及统计范围后才能接入。
 
-**已核实数据流**：`WorkBuddy2APIAdapter.stats` 读取 `/v1/stats`，将 `models` 保存为 `ProviderSnapshot.modelUsages`，进程起点保存在 `workBuddyStats.since`。`RelayStore.accountDetail(for:)` 按父网关 ID 读取完整详情快照，子账户也使用父网关模型。现有投影把 nil 转为空数组，不能据此判断统计不可用或确实为空。适配器用 `MoneyValue(.cny)` 承载 `credit`；这是现有积分存储方式，展示不能解释为人民币。
+**已核实数据流**：`WorkBuddy2APIAdapter.stats` 读取 `/v1/stats`，将 `models` 保存为 `ProviderSnapshot.modelUsages`，进程起点保存在 `workBuddyStats.since`。`RelayStore.accountDetail(for:)` 按父网关 ID 读取完整详情快照，子账户也使用父网关模型。原有模型投影把 nil 转为空数组，无法区分统计不可用与确实为空；新增可选累计投影保留这一区别。适配器用 `MoneyValue(.cny)` 承载 `credit`；这是现有积分存储方式，展示不能解释为人民币。
 
 **修改入口与职责**：
 
-- `AccountDetailData` / `RelayStore.accountDetail(for:)`：增加可选累计模型投影及可选进程起点，保留 nil 与空数组差别；从现有 `detailSnapshots` 按 `parentAccountID ?? accountID` 读取，避免使用只含启用账户的首页快照集合。读取失败继续保留最后完整投影和既有读取错误。
+- `AccountDetailData` / `RelayStore.accountDetail(for:)`：提供可选 `cumulativeModelUsages` 与 `modelStatsSince`，保留 nil 与空数组差别；从现有 `detailSnapshots` 按 `parentAccountID ?? accountID` 读取，避免使用只含启用账户的首页快照集合。读取失败继续保留最后完整投影和既有读取错误。
 - `AccountDetailContainerView` / `AccountDetailView`：传递累计投影；workbuddy2api 使用累计分支，Pipio/DeepSeek 继续使用 `DailyModelUsageService`。日模型服务对网关仍返回 nil，不把累计数据写入日模型记录。
-- `ModelAnalysisPanel`：增加明确展示口径（日消费 / 进程累计积分），集中控制标题标记、两列名称、数值格式、空状态、悬停及辅助文本；复用 `ModelAnalysisService` 的排序、占比和单位成本计算，不依据存储币种推断展示单位。
+- `ModelAnalysisPanel`：使用 `ModelAnalysisScope` 明确展示口径（日消费 / 进程累计积分），集中控制标题标记、两列名称、数值格式、空状态、悬停及辅助文本；复用 `ModelAnalysisService` 的排序、占比和单位成本计算，不依据存储币种推断展示单位。
 
 **页面与交互**：
 
@@ -164,7 +164,7 @@ UI 不拼供应商 URL、不解码供应商 JSON、不持有长期凭据。关�
 
 **必要状态与异常**：模型列表为 nil 时显示“暂未获取网关累计模型统计，请刷新账户。”；已知空数组显示“网关暂无累计模型记录。”。刷新整体失败保留既有完整投影并显示原有健康状态。可选 `/v1/stats` 不可用而 `/status` 成功时，以当前模型列表的 nil 提示统计不可用；现有刷新协调器可能保留旧 `workBuddyStats` 作为增量基线，但它不含模型列表，不能据此伪造可用累计明细或新的统计时间。成功读取新进程后使用新列表及新起点，不跨进程累加模型。
 
-**验收与回归（NOT_EXECUTED）**：
+**验收与回归**（离线与编译分别验证，真实界面 `NOT_EXECUTED`）：
 
 1. 有统计的网关打开详情即可看到进程累计模型；点选任意趋势日期后内容和累计标签保持一致，正常刷新后同步更新。
 2. 两个不同网关相互隔离；同一网关父/子账户显示相同网关累计范围并明确归属，停用账户详情仍可读取已有完整快照。
@@ -172,7 +172,15 @@ UI 不拼供应商 URL、不解码供应商 JSON、不持有长期凭据。关�
 4. 变更 `since` 后仅显示新进程统计；积分列、单位成本、悬停和辅助文本不出现人民币符号或“当日消费”。排序、Top 5、长模型名与数值居中保持既有行为。
 5. Pipio/DeepSeek 默认当天、点击日期切换及历史缺失语义保持原样。实现后运行相关详情投影/模型回归和 GUI build-only；实际行布局、趋势交互与辅助文本须在图形会话验收，编译不代替界面通过。
 
-**文档衔接**：REQUIREMENT 4.4 / AC-015 目前笼统描述按日模型，应在实施阶段同步限定为“支持日模型的供应商”，增加网关进程累计例外；AI_CONTEXT 的 UI 约定在实现后更新为两种明确口径。本阶段仅完成设计，不把累计展示写成长期实现事实；下一阶段入口为上述详情投影与模型面板。
+**文档衔接**：REQUIREMENT 4.4 / AC-015 与 AI_CONTEXT 的 UI 约定已区分日模型和网关累计口径。`AccountDetailRefreshChecks` 覆盖父/子投影、停用缓存、刷新失败、nil/空数组、进程变化和网关隔离；真实布局、趋势交互与供应商对账仍需对应环境验收。
+
+### workbuddy2api 日志按日汇总（PROPOSED / NEEDS_CONFIRMATION）
+
+用户说明所用原作者仓库已转私有；当前 Relay 仅有已核实的 `/status` 与可选 `/v1/stats` 读取，尚未取得该部署版本的日志接口或文件契约。公开分支不能作为私有版本的接口依据，本轮不猜测日志 URL、不读取容器终端日志，也不改变现有累计展示。
+
+后续可在实际版本提供可访问的结构化请求日志时，按请求时间和模型归集为 `DailyUsageRecord.modelUsages`。接入前确认：日志来源与只读认证、时间戳和时区、请求唯一 ID/稳定游标、分页、保留范围及重启后的持久性；Token、缓存 Token、积分、最终状态和子账户归属各自缺失时保持未知。日志只有模型/时间时只能统计请求量，不能补造 Token 或积分。普通运行日志包含重试、流式片段时不能直接当作完整请求消费。
+
+拟数据流为“可选日志读取 → 有界分页完整性与去重复核 → 供应商日历/模型聚合 → 原子提交日记录 → 按能力选择日模型展示”。不得存储提示词、响应正文、认证信息或原始日志；模型聚合复用现有本地、备份和同步结构。网关日志和子账户日志按实际范围标记；缺少归属不分摊子账户。需选定日志日历、与现有观测增量的来源优先级及迁移规则，避免同一请求双计。日志范围完整才写已知空日；分页缺口/过期/请求失败保留未知或最后完整数据，取消不提交半批。先验收跨午夜、重复/乱序、分页失败、重启、缺字段及日志过期，再开放回填；不能通过累计快照还原离线日模型。
 
 ## 7. 同步、导入导出与备份
 
