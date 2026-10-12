@@ -1,17 +1,27 @@
 import SwiftUI
 
-/// One aligned row per model, using the selected provider day's aggregates.
+public enum ModelAnalysisScope {
+    case dailySpend
+    case processCredits
+}
+
+/// One aligned row per model, with an explicit reporting scope and unit.
 public struct ModelAnalysisPanel: View {
     public let items: [ModelUsageItem]?
     public let dateLabel: String
+    public let scope: ModelAnalysisScope
+    public let processSince: Date?
     public let unavailableMessage: String
     @State private var sort: ModelAnalysisSort = .spend
     @State private var topFive = false
 
     public init(items: [ModelUsageItem]?, dateLabel: String = "今日",
+                scope: ModelAnalysisScope = .dailySpend, processSince: Date? = nil,
                 unavailableMessage: String = "该日期暂无可用模型明细。") {
         self.items = items
         self.dateLabel = dateLabel
+        self.scope = scope
+        self.processSince = processSince
         self.unavailableMessage = unavailableMessage
     }
 
@@ -23,10 +33,18 @@ public struct ModelAnalysisPanel: View {
                 Spacer(minLength: 2)
                 if let items, !items.isEmpty {
                     Picker("排序", selection: $sort) {
-                        ForEach(ModelAnalysisSort.allCases) { Text($0.rawValue).tag($0) }
+                        ForEach(ModelAnalysisSort.allCases) {
+                            Text(scope == .processCredits && $0 == .spend ? "积分" : $0.rawValue).tag($0)
+                        }
                     }.labelsHidden().frame(width: 65).controlSize(.mini)
                     Toggle("Top 5", isOn: $topFive).toggleStyle(.checkbox).font(.system(size: 10))
                 }
+            }
+            if scope == .processCredits {
+                Text("网关全部模型累计，不随趋势日期切换")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+                    .help(processScopeDetail)
+                    .accessibilityLabel(processScopeDetail)
             }
             if let items, !items.isEmpty {
                 let analysis = ModelAnalysisService.analyze(items, sort: sort, topFive: topFive)
@@ -34,12 +52,14 @@ public struct ModelAnalysisPanel: View {
                     Text("模型").frame(maxWidth: .infinity, alignment: .leading)
                     column("总 Token")
                     column("缓存占比")
-                    column("费用/百万")
-                    column("当日消费")
+                    column(unitCostTitle)
+                    column(spendTitle)
                 }
                 .font(.system(size: 9, weight: .medium)).foregroundStyle(.secondary)
                 .padding(.horizontal, 7)
-                .help("费用/百万：当日消费 ÷ 当日总 Token × 100 万；未知值显示 --。")
+                .help(scope == .processCredits
+                    ? "积分/百万：本进程累计积分 ÷ 本进程总 Token × 100 万；未知值显示 --。"
+                    : "费用/百万：当日消费 ÷ 当日总 Token × 100 万；未知值显示 --。")
                 ForEach(analysis.rows) { row in
                     ModelUsageColumns {
                         Text(row.item.modelName).font(.system(size: 11, weight: .medium))
@@ -50,21 +70,42 @@ public struct ModelAnalysisPanel: View {
                             .accessibilityLabel("总 Token：\(row.item.tokens)")
                         column(row.item.cacheHitRate.map(RelayNumberFormatter.percent) ?? "--")
                             .accessibilityLabel("缓存占比：" + (row.item.cacheHitRate.map(RelayNumberFormatter.percent) ?? "未知"))
-                        column(row.costPerMillionTokens.map { RelayNumberFormatter.money($0.amount, currency: $0.currency) } ?? "--")
-                            .help("百万 Token 平均费用：" + (row.costPerMillionTokens.map { RelayNumberFormatter.money($0.amount, currency: $0.currency) } ?? "未知"))
-                        column(row.item.cost.map { RelayNumberFormatter.money($0, currency: row.item.currency) } ?? "--")
-                            .help("当日消费：" + (row.item.cost.map { RelayNumberFormatter.money($0, currency: row.item.currency) } ?? "未知")
-                                + "；" + (row.spendShare.map { "已获取模型消费占比：" + RelayNumberFormatter.percent($0) } ?? "已获取模型消费占比未知"))
+                        let unitCost = row.costPerMillionTokens.map { amountText($0.amount, currency: $0.currency) }
+                        let spend = row.item.cost.map { amountText($0, currency: row.item.currency) }
+                        column(unitCost ?? "--")
+                            .help(unitCostTitle + "：" + (unitCost ?? "未知"))
+                            .accessibilityLabel(unitCostTitle + "：" + (unitCost ?? "未知"))
+                        column(spend ?? "--")
+                            .help(spendTitle + "：" + (spend ?? "未知")
+                                + "；" + shareTitle + (row.spendShare.map { "：" + RelayNumberFormatter.percent($0) } ?? "未知"))
+                            .accessibilityLabel(spendTitle + "：" + (spend ?? "未知"))
                     }
                     .font(.system(size: 10)).monospacedDigit()
                     .padding(.horizontal, 7).padding(.vertical, 7)
                     .background(.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 7))
                 }
             } else {
-                Text(items == nil ? unavailableMessage : "该日期没有模型消耗记录。")
+                Text(items == nil ? unavailableMessage : scope == .processCredits
+                    ? "网关暂无累计模型记录。" : "该日期没有模型消耗记录。")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
             }
         }
+    }
+
+    private var unitCostTitle: String { scope == .processCredits ? "积分/百万" : "费用/百万" }
+    private var spendTitle: String { scope == .processCredits ? "累计积分" : "当日消费" }
+    private var shareTitle: String {
+        scope == .processCredits ? "已获取模型累计积分占比" : "已获取模型消费占比"
+    }
+    private var processScopeDetail: String {
+        let explanation = "网关全部模型的进程累计统计；网关重启后重新累计，不随趋势日期切换。"
+        guard let processSince else { return explanation }
+        return explanation + "统计起点：" + processSince.formatted(date: .numeric, time: .shortened)
+    }
+    private func amountText(_ amount: Decimal, currency: Currency) -> String {
+        guard !amount.isNaN, amount >= 0 else { return "--" }
+        return scope == .processCredits ? RelayNumberFormatter.decimal(amount)
+            : RelayNumberFormatter.money(amount, currency: currency)
     }
 
     private func column(_ text: String) -> some View {

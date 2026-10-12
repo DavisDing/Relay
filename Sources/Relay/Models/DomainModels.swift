@@ -125,6 +125,9 @@ public struct AccountDetailData: Sendable {
     public let spendPoints: [DailySpendPoint]
     public let modelUsages: [ModelUsageItem]
     public let deepSeekUsageReport: DeepSeekUsageReport?
+    /// Gateway-wide process totals; nil is unavailable, [] is known empty.
+    public let cumulativeModelUsages: [ModelUsageItem]?
+    public let modelStatsSince: Date?
 }
 
 /// Absence means removal only after a successful repository read.

@@ -74,6 +74,7 @@ enum AccountDetailRefreshChecks {
     @MainActor static func run() async throws {
         for kind in [ProviderKind.pipio, .deepseek] { try await monetaryAccount(kind) }
         try await gatewayAccount()
+        try gatewayModelCoverage()
         try repositoryReadFailures()
         print("PASSED: live detail projections, successful/failed refresh, recovery, unknown metrics, DeepSeek usage, hidden/disabled gateway children and repository read failure recovery")
     }
@@ -178,9 +179,16 @@ enum AccountDetailRefreshChecks {
         try check(updated.account.disabled && updated.account.manualDisabled && updated.account.cooling && updated.account.lastUpdated == now,
                   "Refresh gateway status and timestamp")
         try check(updated.modelUsages.first?.cost == 3 && updated.spendPoints.last?.amount == 2, "Gateway models and history come from parent")
+        let parentDetail = try requireDetail(store, parent.id.uuidString)
+        try check(updated.cumulativeModelUsages?.first?.cost == 3
+                  && parentDetail.cumulativeModelUsages?.first?.cost == 3
+                  && updated.modelStatsSince == now.addingTimeInterval(-3600),
+                  "Parent and child share explicitly cumulative gateway models and epoch")
         await store.refreshAll()
         let failed = try requireDetail(store, oldChild.id)
         try check(failed.account.availablePoints == 125, "Gateway failure retains credits")
+        try check(failed.cumulativeModelUsages?.first?.cost == 3 && failed.modelStatsSince == updated.modelStatsSince,
+                  "Failed refresh retains complete cumulative model projection")
         guard case .error = failed.account.status else { throw DetailRefreshFailure(message: "Gateway error reaches child detail") }
         store.setHidden(accountID: parent.id, hidden: true)
         try check(store.dashboardAccounts.isEmpty, "Hidden gateway stays excluded from home")
@@ -192,6 +200,7 @@ enum AccountDetailRefreshChecks {
         let disabled = try requireDetail(store, oldChild.id)
         try check(!disabled.account.isEnabled && disabled.account.availablePoints == 125 && disabled.modelUsages.first?.cost == 4,
                   "Disabled gateway retains full cached child detail")
+        try check(disabled.cumulativeModelUsages?.first?.cost == 4, "Disabled gateway cumulative models use full detail cache")
         guard case .warning("网关已停用") = disabled.account.status else {
             throw DetailRefreshFailure(message: "Disabled gateway status reaches child")
         }
@@ -200,6 +209,47 @@ enum AccountDetailRefreshChecks {
         guard case .removed = store.accountDetailState(for: oldChild.id) else {
             throw DetailRefreshFailure(message: "Removed gateway child must not retain stale data")
         }
+    }
+
+    @MainActor private static func gatewayModelCoverage() throws {
+        let repository = InMemoryLocalRepository()
+        let first = AccountConfiguration(displayName: "Unavailable models", providerKind: .workbuddy2api,
+                                         siteOrigin: URL(string: "https://first.invalid")!)
+        let second = AccountConfiguration(displayName: "Empty models", providerKind: .workbuddy2api,
+                                          siteOrigin: URL(string: "https://second.invalid")!)
+        let now = Date()
+        func snapshot(_ account: AccountConfiguration, models: [ModelUsageSummary]?, since: Date) -> ProviderSnapshot {
+            ProviderSnapshot(accountID: account.id, balance: nil, todaySpend: nil, monthSpend: nil, requestCount: nil,
+                modelUsages: models, capabilities: [], freshness: .fresh, fetchedAt: now,
+                rate: AccountRate(accountID: account.id, source: .providerNativeCurrency, nativeCurrency: .cny),
+                workBuddyStats: WorkBuddyStatsSnapshot(since: since, total: WorkBuddyStatsCounter(credit: 10)))
+        }
+        for account in [first, second] { try repository.upsertAccount(account) }
+        try repository.upsertSnapshot(snapshot(first, models: nil, since: now.addingTimeInterval(-3600)))
+        try repository.upsertSnapshot(snapshot(second, models: [], since: now))
+        let store = RelayStore(repository: repository, credentialStore: InMemoryCredentialStore(),
+                               adapters: ProviderAdapterRegistry(adapters: []), automaticallyRefresh: false)
+        let unavailable = try requireDetail(store, first.id.uuidString)
+        let empty = try requireDetail(store, second.id.uuidString)
+        try check(unavailable.cumulativeModelUsages == nil && unavailable.modelStatsSince == nil,
+                  "Retained stats baseline does not manufacture model coverage or a current epoch")
+        try check(empty.cumulativeModelUsages?.isEmpty == true && empty.modelStatsSince == now,
+                  "Known empty gateway models are distinct from unavailable models")
+        let zero = ModelUsageSummary(modelName: "new-process", tokenCount: 0, requestCount: nil,
+                                     spend: MoneyValue(amount: 0, currency: .cny))
+        try repository.upsertSnapshot(snapshot(first, models: [zero], since: now))
+        store.updateTemporalPresentation(at: now)
+        let restarted = try requireDetail(store, first.id.uuidString)
+        try check(restarted.cumulativeModelUsages?.first?.modelName == "new-process"
+                  && restarted.cumulativeModelUsages?.first?.cost == 0 && restarted.modelStatsSince == now,
+                  "New process replaces cumulative models and preserves real zero points")
+        let analysis = ModelAnalysisService.analyze(restarted.cumulativeModelUsages ?? [])
+        try check(analysis.rows.first?.costPerMillionTokens == nil, "Zero tokens do not produce a unit cost")
+        try check(try requireDetail(store, second.id.uuidString).cumulativeModelUsages?.isEmpty == true,
+                  "Gateway epochs and model lists stay isolated")
+        try check(DailyModelUsageService.models(accountID: first.id, provider: .workbuddy2api, day: now,
+                      records: [], snapshot: try repository.snapshot(accountID: first.id)) == nil,
+                  "Cumulative models never become daily model details")
     }
 
     @MainActor private static func repositoryReadFailures() throws {

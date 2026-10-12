@@ -19,6 +19,8 @@ struct AccountDetailContainerView: View {
                 account: data.account,
                 spendPoints: data.spendPoints,
                 modelUsages: data.modelUsages,
+                cumulativeModelUsages: data.cumulativeModelUsages,
+                modelStatsSince: data.modelStatsSince,
                 deepSeekUsageReport: data.deepSeekUsageReport,
                 dataErrorMessage: state.errorMessage,
                 health: historyID.map { store.health(for: $0) },
@@ -49,6 +51,8 @@ public struct AccountDetailView: View {
     public let account: AccountModel
     public let spendPoints: [DailySpendPoint]
     public let modelUsages: [ModelUsageItem]
+    public let cumulativeModelUsages: [ModelUsageItem]?
+    public let modelStatsSince: Date?
     public let deepSeekUsageReport: DeepSeekUsageReport?
     public let dataErrorMessage: String?
     public let health: AccountHealth?
@@ -66,6 +70,8 @@ public struct AccountDetailView: View {
         account: AccountModel,
         spendPoints: [DailySpendPoint] = [],
         modelUsages: [ModelUsageItem] = [],
+        cumulativeModelUsages: [ModelUsageItem]? = nil,
+        modelStatsSince: Date? = nil,
         deepSeekUsageReport: DeepSeekUsageReport? = nil,
         dataErrorMessage: String? = nil,
         health: AccountHealth? = nil,
@@ -78,6 +84,8 @@ public struct AccountDetailView: View {
         self.account = account
         self.spendPoints = spendPoints
         self.modelUsages = modelUsages
+        self.cumulativeModelUsages = cumulativeModelUsages
+        self.modelStatsSince = modelStatsSince
         self.deepSeekUsageReport = deepSeekUsageReport
         self.dataErrorMessage = dataErrorMessage
         self.health = health
@@ -110,8 +118,10 @@ public struct AccountDetailView: View {
                         DeepSeekUsageSection(report: deepSeekUsageReport)
                     }
                     ModelAnalysisPanel(items: selectedModelItems, dateLabel: selectedModelDateLabel,
+                        scope: account.kind == .workbuddy2api ? .processCredits : .dailySpend,
+                        processSince: modelStatsSince,
                         unavailableMessage: account.kind == .workbuddy2api
-                            ? "网关只提供进程累计模型统计，暂不支持按日模型明细。"
+                            ? "暂未获取网关累计模型统计，请刷新账户。"
                             : historyCalendar.isDateInToday(selectedModelDate)
                                 ? "当天暂无可用模型明细，请刷新账户。"
                                 : "该日期暂无可用模型明细，可在编辑账户中回填历史。")
@@ -369,6 +379,7 @@ public struct AccountDetailView: View {
     }
 
     private var selectedModelDateLabel: String {
+        if account.kind == .workbuddy2api { return "进程累计" }
         if historyCalendar.isDateInToday(selectedModelDate) { return "今日" }
         let formatter = DateFormatter()
         formatter.calendar = historyCalendar; formatter.timeZone = historyCalendar.timeZone
@@ -377,6 +388,7 @@ public struct AccountDetailView: View {
     }
 
     private var selectedModelItems: [ModelUsageItem]? {
+        if account.kind == .workbuddy2api { return cumulativeModelUsages }
         guard let id = historyAccountID else { return nil }
         let models = DailyModelUsageService.models(accountID: id, provider: account.kind,
             day: selectedModelDate, records: historyRecords ?? [], snapshot: budgetSnapshot,

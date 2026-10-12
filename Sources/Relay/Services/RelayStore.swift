@@ -625,12 +625,15 @@ public final class RelayStore: ObservableObject {
                 amount: spend.amount
             )
         }
-        let models = detailSnapshots.first(where: { $0.accountID == snapshotID })?.modelUsages
+        let snapshot = detailSnapshots.first(where: { $0.accountID == snapshotID })
+        let models = snapshot?.modelUsages.map { ModelUsageItem.items(from: $0, currency: account.currency) }
         return AccountDetailData(
             account: account,
             spendPoints: points,
-            modelUsages: models.map { ModelUsageItem.items(from: $0, currency: account.currency) } ?? [],
-            deepSeekUsageReport: deepSeekUsageReport(for: snapshotID)
+            modelUsages: models ?? [],
+            deepSeekUsageReport: deepSeekUsageReport(for: snapshotID),
+            cumulativeModelUsages: account.kind == .workbuddy2api ? models : nil,
+            modelStatsSince: account.kind == .workbuddy2api && models != nil ? snapshot?.workBuddyStats?.since : nil
         )
     }
 
