@@ -121,6 +121,7 @@ git diff --check
 - 共享原生材质由 `RelayVisualStyle` 管理：页面 `regularMaterial`、卡片 `thinMaterial`、嵌套状态 `ultraThinMaterial`。
 - 快捷键仅支持“显示/隐藏面板”和“刷新全部账户”，由 `GlobalShortcutService` 封装 Carbon `RegisterEventHotKey`，可分别留空；登录项使用 `SMAppService.mainApp`，需要实际应用包/系统环境证据。
 - 更新、打包流程分别见 `UpdateService`、[CI 与发布说明](CI_RELEASE.md)；workflow 存在不等于当前提交已发布。
+- DMG 文件图标使用正式 ICNS，嵌入 UDIF 文件内容并读回核验，完成后生成最终 checksum；不依赖 Finder 扩展属性。专项 `scripts/test-dmg-icon.sh` 验证数据复制后的图标和映像完整性，不代表 Finder 或真实发布下载已验收。
 
 ## 维护规则
 

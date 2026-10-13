@@ -252,6 +252,8 @@ UI 不拼供应商 URL、不解码供应商 JSON、不持有长期凭据。关�
 
 `.github/workflows/build.yml` 定义 main/tag 发布：回归、契约、GUI build-only、打包、checksum 复核、上传 ZIP/DMG/metadata/checksum，再创建 Release；PR 构建不等于发布。使用 ad-hoc、手动 Gatekeeper 放行，不采用 Developer ID/公证。SHA-256 不认证发布者身份；更详细流程见 [CI_RELEASE](CI_RELEASE.md)。
 
+DMG 文件图标由 `scripts/set-dmg-icon.swift` 复用 `Resources/AppIcon.icns`，嵌入 UDIF 的 `icns/-16455` 资源。脚本读回验证相同字节并核对原有磁盘资源；失败拒绝继续。图标嵌入发生在最终 checksum 之前，不修改已签名的应用包，不依赖发布流程可能丢弃的 Finder 扩展属性。`scripts/test-dmg-icon.sh` 验证仅复制数据字节后的图标保留、映像完整性和非法输入保护；Finder 实际展示及真实发布下载仍须对应环境验收。
+
 ## 11. 验证设计
 
 离线测试采用独立 Swift 脚本和临时 fixture，不使用真实供应商凭据：

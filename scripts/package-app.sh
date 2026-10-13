@@ -120,6 +120,10 @@ hdiutil create \
     -ov \
     -format UDZO \
     "$dmg_path" >/dev/null
+# Keep the custom file icon inside the DMG bytes, rather than a local Finder
+# resource fork which GitHub uploads and browser downloads would discard.
+swift -module-cache-path "$dmg_staging/module-cache" \
+    "$root_dir/scripts/set-dmg-icon.swift" "$icon_path" "$dmg_path"
 cleanup_dmg_staging
 trap - EXIT
 

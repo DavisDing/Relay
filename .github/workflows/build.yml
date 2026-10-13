@@ -44,6 +44,9 @@ jobs:
       - name: Compile GUI navigation checks (no GUI pass claimed)
         run: scripts/test-window-navigation.sh --build-only
 
+      - name: Verify embedded DMG file icon survives download
+        run: scripts/test-dmg-icon.sh
+
       - name: Build and package
         env:
           RELAY_VERSION: ${{ steps.version.outputs.marketing_version }}

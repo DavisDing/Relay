@@ -30,6 +30,10 @@ CI 构建使用 GitHub Actions 的 `xcode-27` arm64 runner，因为 `Package.swi
 
 正式图标位于 `Resources/AppIcon.icns`；`Resources/AppIcon.png` 是 1024×1024 透明底母图，不随应用分发。`scripts/package-app.sh` 检查 ICNS 格式，将图标复制到 `Relay.app/Contents/Resources/AppIcon.icns`，并写入 `CFBundleIconFile=AppIcon.icns`，随后对完整应用包签名。应用图标不替换菜单栏按钮或页面内的功能图标。
 
+DMG 文件本身复用同一图标。`scripts/set-dmg-icon.swift` 通过 `hdiutil udifrez` 将 `icns`（ID `-16455`）嵌入 UDIF 文件内容，随后读回比对图标并确认既有磁盘资源未改变；不依赖文件扩展属性或本机 Finder 资源分叉。嵌入失败会停止打包，最终 ZIP/DMG 校验值在图标嵌入完成后生成。已发布的旧 DMG 不会因此自动改变。
+
+`scripts/test-dmg-icon.sh` 创建临时 DMG，按文件字节复制模拟发布下载，确认图标仍匹配、映像校验通过，非法图标输入被拒绝且映像未改变；CI 在打包前运行。本项不代替 Finder 的实际显示验收。现有 hdiutil 路线沿用打包工具；macOS 27 提示其已弃用，但当前系统仍提供这些命令。
+
 ## 本地打包
 
 在 macOS 上执行：
