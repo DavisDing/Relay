@@ -58,6 +58,50 @@ struct WindowNavigationContractChecks {
             controller.close()
         }
         let popover: NSPopover = try field("popover", in: controller)
+        let statusItem: NSStatusItem = try field("statusItem", in: controller)
+        guard let button = statusItem.button else {
+            throw NavigationCheckFailure(message: "Missing status button")
+        }
+        func latchStatusButton() {
+            button.state = .on
+            button.highlight(true)
+        }
+        func statusButtonIsReleased() -> Bool {
+            button.state == .off && !button.isHighlighted
+        }
+        // Inject a retained press into the actual AppKit button. Dispatch its
+        // action rather than calling toggle(), so the mouse-action path is covered.
+        // This does not replace manual mouse tracking / visual verification.
+        latchStatusButton()
+        try check(!statusButtonIsReleased(), "Retained-press fixture is active")
+        try check(button.sendAction(button.action, to: button.target), "Status button has a working action")
+        try check(!popover.isShown, "Status action waits for native button tracking to finish")
+        try await eventually("status action opens home and releases its press") {
+            popover.isShown && statusButtonIsReleased()
+        }
+        latchStatusButton()
+        try check(button.sendAction(button.action, to: button.target), "Status button can toggle home closed")
+        try await eventually("second status action closes home and releases its press") {
+            !popover.isShown && statusButtonIsReleased()
+        }
+        controller.toggle()
+        try await eventually("home is ready for native close") { popover.isShown }
+        latchStatusButton()
+        popover.close()
+        try await eventually("native popover close releases the status button") {
+            !popover.isShown && statusButtonIsReleased()
+        }
+        latchStatusButton()
+        controller.close()
+        try check(statusButtonIsReleased(), "Closing an already hidden panel releases its press")
+        controller.toggle()
+        try await eventually("home is ready for focus loss") { popover.isShown }
+        latchStatusButton()
+        NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: NSApp)
+        try await eventually("focus loss hides home and releases the status button") {
+            !popover.isShown && statusButtonIsReleased()
+        }
+        print("PASSED: injected status-button press releases after action dispatch, native close and focus loss")
         guard let host = popover.contentViewController as? NSHostingController<MainPopoverView> else {
             throw NavigationCheckFailure(message: "Missing dashboard host")
         }
@@ -78,8 +122,10 @@ struct WindowNavigationContractChecks {
         controller.toggle()
         try await eventually("menu-bar anchor can show home") { popover.isShown }
         for (name, open) in routes {
+            latchStatusButton()
             open()
             try await eventually("opening \(name) displays its window") { try currentWindow()?.isVisible == true }
+            try check(statusButtonIsReleased(), "Opening \(name) releases the status button")
             guard let window = try currentWindow() else { throw NavigationCheckFailure(message: "No \(name) window") }
             try check(window.styleMask.contains(.borderless), "\(name) uses the shared borderless panel shell")
             try check(!window.styleMask.contains(.titled), "\(name) does not show a native title bar")
@@ -94,17 +140,23 @@ struct WindowNavigationContractChecks {
 
             // Hiding is not closing: preserve each route's exact window and content.
             let contentView = window.contentView
+            latchStatusButton()
             controller.close()
             try await settle()
+            try check(statusButtonIsReleased(), "Hiding \(name) releases the status button")
             try check(!window.isVisible && !popover.isShown, "Hiding \(name) does not return home")
             try check(try currentWindow() === window, "Hiding \(name) retains the page")
+            latchStatusButton()
             controller.toggle()
             try await eventually("reopening \(name) restores its window") { window.isVisible }
+            try check(statusButtonIsReleased(), "Restoring \(name) releases the status button")
             try check(try currentWindow() === window && window.contentView === contentView && !popover.isShown,
                       "Reopening \(name) preserves the window and hosted content")
 
+            latchStatusButton()
             window.performClose(nil)
             try await eventually("native close of \(name) returns home") { try currentWindow() == nil && popover.isShown }
+            try check(statusButtonIsReleased(), "Returning home from \(name) releases the status button")
             try check(!window.isVisible, "Closed \(name) does not remain visible")
 
             // SwiftUI close/cancel/done callbacks use NSWindowController.close().

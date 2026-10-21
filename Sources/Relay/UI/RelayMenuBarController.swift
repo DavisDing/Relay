@@ -38,7 +38,7 @@ private struct RelayAuxiliaryPanel<Content: View>: View {
 }
 
 @MainActor
-public final class RelayMenuBarController: NSObject, NSWindowDelegate {
+public final class RelayMenuBarController: NSObject, NSWindowDelegate, NSPopoverDelegate {
     private let store: RelayStore
     private let statusItem: NSStatusItem
     private let popover: NSPopover
@@ -89,6 +89,7 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
         // which made the settings and account forms appear unclickable.
         popover.behavior = .applicationDefined
         popover.animates = false
+        popover.delegate = self
         popover.contentSize = NSSize(width: RelayVisualStyle.panelWidth, height: 520)
         popover.contentViewController = NSHostingController(
             rootView: MainPopoverView(
@@ -129,6 +130,7 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
     }
 
     public func toggle() {
+        defer { resetStatusItemHighlight() }
         pendingDashboardReturn = nil
         guard let button = statusItem.button else { return }
         // Restore the existing hosting controller, including SwiftUI form state.
@@ -157,17 +159,40 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
     }
 
     public func close() {
+        defer { resetStatusItemHighlight() }
         pendingDashboardReturn = nil
         if popover.isShown { popover.performClose(nil) }
         auxiliaryWindowController?.window?.orderOut(nil)
     }
 
     @objc private func handleStatusItemClick(_ sender: Any?) {
-        if NSApp.currentEvent?.type == .rightMouseUp {
-            showContextMenu()
-        } else {
-            toggle()
+        let isContextMenu = NSApp.currentEvent?.type == .rightMouseUp
+        resetStatusItemHighlight()
+        // Let native button tracking finish before activating a window or
+        // entering the context menu's nested event loop. Capture the event now:
+        // NSApp.currentEvent may have changed when this block runs.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            if isContextMenu {
+                self.showContextMenu()
+            } else {
+                self.toggle()
+            }
         }
+    }
+
+    private func resetStatusItemHighlight() {
+        guard let button = statusItem.button else { return }
+        button.state = .off
+        button.highlight(false)
+    }
+
+    public func popoverDidShow(_ notification: Notification) {
+        resetStatusItemHighlight()
+    }
+
+    public func popoverDidClose(_ notification: Notification) {
+        resetStatusItemHighlight()
     }
 
     private func installDismissMonitors() {
@@ -213,6 +238,7 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate {
     }
 
     private func showContextMenu() {
+        defer { resetStatusItemHighlight() }
         close()
         let menu = NSMenu()
         menu.autoenablesItems = false
