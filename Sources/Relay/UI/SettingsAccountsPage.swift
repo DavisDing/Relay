@@ -11,31 +11,28 @@ struct SettingsAccountsPage: View {
     let onEditAccount: ((AccountModel) -> Void)?
 
     private var managedAccounts: [AccountModel] {
-        store.accounts.filter { $0.parentAccountID == nil }
+        let parents = Dictionary(uniqueKeysWithValues: store.accounts.filter { $0.parentAccountID == nil }.map { ($0.id, $0) })
+        return AccountOrganizationService.manualOrder(store.accountConfigurations).compactMap { parents[$0.id.uuidString] }
     }
 
     var body: some View {
-        SettingsPageScroll {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("账号管理")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(.secondary)
-                Text("可删除、停用或隐藏已添加的服务商账号。隐藏只影响首页和汇总展示，不删除历史数据；WordBuddy2Api 网关账号也在这里管理。")
-                    .font(.system(size: 10))
-                    .foregroundColor(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+        let accounts = managedAccounts
+        return SettingsPageScroll {
+            SettingsSection("账号顺序与管理") {
+                SettingsHint("使用 ↑ ↓ 调整并立即保存顺序；首页仍置顶优先、按服务商分组。网关子账户跟随父账户。")
 
-                if !managedAccounts.isEmpty {
+                if !accounts.isEmpty {
                     HStack {
+                        Text("已选 \(selected.count) 项").font(.system(size: 10)).foregroundStyle(.secondary)
+                        Spacer(minLength: 0)
                         Button("全选") { selected = Set(managedAccounts.compactMap { UUID(uuidString: $0.id) }) }
                         Button("取消选择") { selected.removeAll() }.disabled(selected.isEmpty)
-                        Text("已选 \(selected.count) 项").font(.caption).foregroundStyle(.secondary)
                     }.buttonStyle(RelayTextButtonStyle())
                     if !selected.isEmpty {
                         HStack {
                             TextField("目标分组，留空取消", text: $groupName).relayFormField()
                             Button("移动分组") { applyBatch(group: groupName, changeGroup: true) }
-                                .buttonStyle(RelayTextButtonStyle())
+                                .buttonStyle(RelaySecondaryCapsuleButtonStyle())
                         }
                     }
                     if let batchMessage { Text(batchMessage).font(.caption).foregroundStyle(.secondary) }
@@ -47,15 +44,15 @@ struct SettingsAccountsPage: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
-                if managedAccounts.isEmpty {
+                if accounts.isEmpty {
                     Text("暂无已添加账号")
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.vertical, 8)
                 } else {
-                    ForEach(managedAccounts) { account in
-                        accountManagementRow(account)
+                    ForEach(Array(accounts.enumerated()), id: \.element.id) { item in
+                        accountManagementRow(item.element, index: item.offset, count: accounts.count)
                     }
                 }
             }
@@ -75,6 +72,9 @@ struct SettingsAccountsPage: View {
             }
         }
         .animation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.9), value: selected.isEmpty)
+        .onChange(of: store.accounts.map(\.id)) { _, _ in
+            selected.formIntersection(Set(managedAccounts.compactMap { UUID(uuidString: $0.id) }))
+        }
     }
 
     private func batchAction(_ title: String, icon: String, action: @escaping () -> Void) -> some View {
@@ -91,16 +91,13 @@ struct SettingsAccountsPage: View {
     }
 
     @ViewBuilder
-    private func accountManagementRow(_ account: AccountModel) -> some View {
+    private func accountManagementRow(_ account: AccountModel, index: Int, count: Int) -> some View {
         HStack(spacing: 9) {
             if let id = UUID(uuidString: account.id) {
                 Toggle("选择\(account.name)", isOn: Binding(get: { selected.contains(id) }, set: {
                     if $0 { selected.insert(id) } else { selected.remove(id) }
                 })).labelsHidden().toggleStyle(.checkbox)
             }
-            Image(systemName: account.kind == .workbuddy2api ? "point.3.connected.trianglepath.dotted" : "person.crop.circle")
-                .foregroundStyle(.secondary)
-                .frame(width: 20)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(account.name)
@@ -113,16 +110,15 @@ struct SettingsAccountsPage: View {
                         .padding(.vertical, 2)
                         .background(.secondary.opacity(0.12), in: Capsule())
                 }
-                Text(account.isHidden ? "已隐藏 · \(account.baseURL)" : account.baseURL)
+                Text([account.isHidden ? "已隐藏" : nil, account.isEnabled ? nil : "已停用", account.baseURL].compactMap { $0 }.joined(separator: " · "))
                     .font(.system(size: 9))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Spacer(minLength: 6)
-            if !account.isEnabled {
-                Text("已停用")
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(.orange)
+            HStack(spacing: 2) {
+                orderButton(account, index: index, count: count, offset: -1, icon: "arrow.up", title: "上移")
+                orderButton(account, index: index, count: count, offset: 1, icon: "arrow.down", title: "下移")
             }
             Menu {
                 if let id = UUID(uuidString: account.id) {
@@ -159,6 +155,26 @@ struct SettingsAccountsPage: View {
         .padding(.horizontal, 9)
         .padding(.vertical, 8)
         .relayInsetSurface(cornerRadius: 9)
+    }
+
+    private func orderButton(_ account: AccountModel, index: Int, count: Int, offset: Int, icon: String, title: String) -> some View {
+        Button { move(account, offset: offset) } label: { Image(systemName: icon) }
+            .buttonStyle(RelayCircularIconButtonStyle())
+            .disabled(!(0..<count).contains(index + offset))
+            .help(title)
+            .accessibilityLabel("\(title)\(account.name)")
+            .accessibilityValue("第 \(index + 1) 项，共 \(count) 项")
+    }
+
+    private func move(_ account: AccountModel, offset: Int) {
+        var ids = managedAccounts.compactMap { UUID(uuidString: $0.id) }
+        guard let id = UUID(uuidString: account.id), let index = ids.firstIndex(of: id),
+              ids.indices.contains(index + offset) else { return }
+        ids.swapAt(index, index + offset)
+        do {
+            try store.reorderAccounts(ids)
+            batchMessage = "账号顺序已保存。"
+        } catch { batchMessage = error.localizedDescription }
     }
     private func applyBatch(group: String? = nil, changeGroup: Bool = false, hidden: Bool? = nil, enabled: Bool? = nil) {
         do {

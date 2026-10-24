@@ -42,7 +42,7 @@ struct SettingsAboutPage: View {
 
             Divider().opacity(0.4)
 
-            VStack(alignment: .leading, spacing: 10) {
+            SettingsSection("应用信息") {
                 aboutInfoRow(title: "版本", value: appVersionText, systemImage: "tag")
                 latestVersionRow
                 aboutInfoRow(title: "系统要求", value: "macOS 27.0 或更高版本", systemImage: "laptopcomputer")
@@ -58,13 +58,9 @@ struct SettingsAboutPage: View {
                         .lineLimit(1)
                 }
             }
-            .padding(12)
-            .relayInsetSurface(cornerRadius: 12)
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("应用更新")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(.secondary)
+            Divider().opacity(0.4)
+            SettingsSection("应用更新") {
                 if case .failed(let message) = updateState.status {
                     Text(message)
                         .font(.system(size: 11))
@@ -82,9 +78,8 @@ struct SettingsAboutPage: View {
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(12)
-            .relayInsetSurface(cornerRadius: 12)
 
+            Divider().opacity(0.4)
             DiagnosticExportPanel(store: store)
             Text("© 2026 Relay · 开源项目")
                 .font(.system(size: 10))

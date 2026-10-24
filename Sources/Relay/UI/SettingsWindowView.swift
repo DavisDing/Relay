@@ -185,27 +185,32 @@ public struct SettingsWindowView: View {
                 baseCurrency: $baseCurrency,
                 lowBalanceThreshold: $lowBalanceThreshold,
                 lowBalanceNotificationsEnabled: $lowBalanceNotificationsEnabled,
-                launchAtLoginEnabled: $launchAtLoginEnabled,
-                launchAtLoginError: $launchAtLoginError
+                onManagePermissions: { selectedTab = .shortcuts }
             )
         case .data:
             SettingsDataPage(
                 refreshIntervalMinutes: $refreshIntervalMinutes,
-                historyRetention: $historyRetention
+                historyRetention: $historyRetention,
+                onManagePermissions: { selectedTab = .shortcuts }
             )
         case .shortcuts:
             SettingsShortcutsPage(
                 showGlobalShortcutSettings: $showGlobalShortcutSettings,
+                launchAtLoginEnabled: $launchAtLoginEnabled,
+                launchAtLoginError: $launchAtLoginError,
+                enableICloudFileSync: $enableICloudFileSync,
+                iCloudDirectoryURL: $iCloudDirectoryURL,
+                iCloudDirectoryError: $iCloudDirectoryError,
                 initialGlobalShortcutConfiguration: initialGlobalShortcutConfiguration,
                 onApplyGlobalShortcut: onApplyGlobalShortcut
             )
         case .sync:
             SettingsSyncPage(
                 enableICloudFileSync: $enableICloudFileSync,
-                iCloudDirectoryURL: $iCloudDirectoryURL,
-                iCloudDirectoryError: $iCloudDirectoryError,
+                iCloudDirectoryURL: iCloudDirectoryURL,
                 showSyncConflict: $showSyncConflict,
                 syncConflictActionError: $syncConflictActionError,
+                onManagePermissions: { selectedTab = .shortcuts },
                 syncStatus: store.syncStatus,
                 syncConflictReport: store.syncConflictReport,
                 onResolveSyncConflict: onResolveSyncConflict,

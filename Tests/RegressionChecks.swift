@@ -191,6 +191,7 @@ struct RegressionChecks {
         try await RefreshSchedulingChecks.run()
         try RepositoryPerformanceChecks.run()
         try await StorageRecoveryChecks.run()
+        try AccountOrderingChecks.run()
         try await StrengtheningChecks.run()
         try await SyncSafetyChecks.run()
         try await AccountFormPreferencesChecks.run()

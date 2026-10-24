@@ -47,6 +47,7 @@ public struct SyncConflictView: View {
             HStack {
                 Spacer()
                 Button("关闭", action: onDismiss)
+                    .buttonStyle(RelaySecondaryCapsuleButtonStyle())
                     .keyboardShortcut(.cancelAction)
             }
         }
@@ -102,14 +103,14 @@ public struct SyncConflictView: View {
                 }
             }
 
-            HStack(spacing: 8) {
+            SettingsActionRow {
                 Button("保留本机") { onDecision(.keepLocal) }
                 Button("保留远端") { onDecision(.keepRemote) }
                 if report.mergedData != nil {
                     Button("接受合并结果") { onDecision(.acceptMerged) }
                 }
             }
-            .buttonStyle(.borderedProminent)
+
         }
     }
 

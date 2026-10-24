@@ -87,8 +87,80 @@ struct SettingsPageScroll<Content: View>: View {
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 16, content: content)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
+        }
+        .font(.system(size: 12))
+        .controlSize(.small)
+        .buttonStyle(RelaySecondaryCapsuleButtonStyle())
+    }
+}
+
+/// A compact hierarchy shared by all settings pages, without nested glass cards.
+@MainActor
+struct SettingsSection<Content: View>: View {
+    let title: String
+    @ViewBuilder let content: () -> Content
+
+    init(_ title: String, @ViewBuilder content: @escaping () -> Content) {
+        self.title = title
+        self.content = content
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .accessibilityAddTraits(.isHeader)
+            content()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+@MainActor
+struct SettingsHint: View {
+    let text: String
+    init(_ text: String) { self.text = text }
+    var body: some View {
+        Text(text)
+            .font(.system(size: 10))
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+@MainActor
+struct SettingsActionRow<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+    var body: some View {
+        HStack(spacing: 8) {
+            Spacer(minLength: 0)
+            content()
+        }
+        .buttonStyle(RelaySecondaryCapsuleButtonStyle())
+    }
+}
+
+@MainActor
+struct SettingsToggleRow: View {
+    let title: String
+    var detail: String? = nil
+    @Binding var isOn: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.system(size: 12, weight: .medium))
+                if let detail { SettingsHint(detail) }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Toggle(title, isOn: $isOn)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.mini)
         }
     }
 }

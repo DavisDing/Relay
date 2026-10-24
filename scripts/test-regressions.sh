@@ -22,6 +22,7 @@ swiftc -swift-version 5 -D DEBUG -parse-as-library \
   "$ROOT/Tests/SyncSafetyChecks.swift" \
   "$ROOT/Tests/RepositoryPerformanceChecks.swift" \
   "$ROOT/Tests/AccountFormPreferencesChecks.swift" \
+  "$ROOT/Tests/AccountOrderingChecks.swift" \
   "$ROOT/Tests/TransferIntegrationChecks.swift" \
   "$ROOT/Tests/FeaturePersistenceChecks.swift" \
   "$ROOT/Tests/BackupMigrationChecks.swift" \

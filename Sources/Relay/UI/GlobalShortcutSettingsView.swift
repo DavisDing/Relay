@@ -53,85 +53,72 @@ public struct GlobalShortcutSettingsView: View {
     }
 
     public var body: some View {
-        Form {
-            Section {
-                Text("快捷键只在打包为 .app 的 Relay 中注册。SwiftPM 命令行环境、未配置或注册失败时不会显示为已启用。")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-
+        VStack(alignment: .leading, spacing: 12) {
+            Text("全局快捷键").font(.system(size: 16, weight: .semibold))
+            SettingsHint("仅在打包的 Relay.app 中注册。未配置或注册失败时不会显示为已启用。")
             shortcutSection(
-                title: "显示/隐藏面板",
-                action: .togglePopover,
-                enabled: $toggleEnabled,
-                keyCode: $toggleKeyCode,
-                command: $toggleCommand,
-                shift: $toggleShift,
-                option: $toggleOption,
-                control: $toggleControl
+                title: "显示 / 隐藏面板", enabled: $toggleEnabled, keyCode: $toggleKeyCode,
+                command: $toggleCommand, shift: $toggleShift, option: $toggleOption, control: $toggleControl
             )
-
+            Divider().opacity(0.4)
             shortcutSection(
-                title: "刷新全部账户",
-                action: .refreshAll,
-                enabled: $refreshEnabled,
-                keyCode: $refreshKeyCode,
-                command: $refreshCommand,
-                shift: $refreshShift,
-                option: $refreshOption,
-                control: $refreshControl
+                title: "刷新全部账户", enabled: $refreshEnabled, keyCode: $refreshKeyCode,
+                command: $refreshCommand, shift: $refreshShift, option: $refreshOption, control: $refreshControl
             )
-
             if let statusMessage {
                 Label(statusMessage, systemImage: statusIsError ? "exclamationmark.triangle" : "checkmark.circle")
-                    .foregroundStyle(statusIsError ? .red : .green)
-                    .font(.footnote)
+                    .foregroundStyle(statusIsError ? Color.red : Color.secondary)
+                    .font(.system(size: 11))
+                    .fixedSize(horizontal: false, vertical: true)
             }
-
-            HStack {
-                Spacer()
-                Button("取消", action: onCancel)
-                    .keyboardShortcut(.cancelAction)
+            SettingsActionRow {
+                Button("取消", action: onCancel).keyboardShortcut(.cancelAction)
                 Button("应用并注册", action: apply)
+                    .buttonStyle(RelayPrimaryCapsuleButtonStyle())
                     .keyboardShortcut(.defaultAction)
             }
         }
-        .formStyle(.grouped)
-        .padding()
-        .frame(minWidth: 420)
+        .font(.system(size: 12))
+        .controlSize(.small)
+        .padding(20)
+        .frame(width: 420)
         .relayPanelSurface(cornerRadius: RelayVisualStyle.panelCornerRadius)
     }
 
-    @ViewBuilder
     private func shortcutSection(
-        title: String,
-        action: GlobalShortcutAction,
-        enabled: Binding<Bool>,
-        keyCode: Binding<String>,
-        command: Binding<Bool>,
-        shift: Binding<Bool>,
-        option: Binding<Bool>,
-        control: Binding<Bool>
+        title: String, enabled: Binding<Bool>, keyCode: Binding<String>,
+        command: Binding<Bool>, shift: Binding<Bool>, option: Binding<Bool>, control: Binding<Bool>
     ) -> some View {
-        Section(title) {
-            Toggle("启用此快捷键", isOn: enabled)
-            TextField("虚拟 key code（0–127）", text: keyCode)
-                .textFieldStyle(.roundedBorder)
-                .disabled(!enabled.wrappedValue)
-
+        SettingsSection(title) {
+            SettingsToggleRow(title: "启用此快捷键", isOn: enabled)
             HStack {
-                Toggle("⌘", isOn: command)
-                Toggle("⇧", isOn: shift)
-                Toggle("⌥", isOn: option)
-                Toggle("⌃", isOn: control)
+                Text("虚拟键码 · 0–127")
+                Spacer()
+                TextField("键码", text: keyCode)
+                    .relayFormField()
+                    .frame(width: 72)
+                    .multilineTextAlignment(.trailing)
+                    .accessibilityLabel("\(title)的虚拟键码")
             }
-            .toggleStyle(.button)
             .disabled(!enabled.wrappedValue)
-
-            Text(action == .togglePopover ? "触发 togglePopover" : "触发 refreshAll")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                Text("修饰键")
+                Spacer()
+                modifierButton("⌘", name: "Command", isOn: command)
+                modifierButton("⇧", name: "Shift", isOn: shift)
+                modifierButton("⌥", name: "Option", isOn: option)
+                modifierButton("⌃", name: "Control", isOn: control)
+            }
+            .disabled(!enabled.wrappedValue)
         }
+    }
+
+    private func modifierButton(_ symbol: String, name: String, isOn: Binding<Bool>) -> some View {
+        Button { isOn.wrappedValue.toggle() } label: { Text(symbol) }
+            .buttonStyle(RelayCircularIconButtonStyle(diameter: 28, isSelected: isOn.wrappedValue))
+            .accessibilityLabel(name)
+            .accessibilityValue(isOn.wrappedValue ? "已选中" : "未选中")
+            .accessibilityAddTraits(isOn.wrappedValue ? .isSelected : [])
     }
 
     private func apply() {

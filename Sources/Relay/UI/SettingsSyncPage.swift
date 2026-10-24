@@ -1,14 +1,13 @@
 import SwiftUI
-import AppKit
 
 @MainActor
 struct SettingsSyncPage: View {
     @State private var isResolving = false
     @Binding var enableICloudFileSync: Bool
-    @Binding var iCloudDirectoryURL: URL?
-    @Binding var iCloudDirectoryError: String?
+    let iCloudDirectoryURL: URL?
     @Binding var showSyncConflict: Bool
     @Binding var syncConflictActionError: String?
+    let onManagePermissions: () -> Void
     let syncStatus: SyncStatus
     let syncConflictReport: SyncConflictReport?
     let onResolveSyncConflict: ((SyncConflictDecision) async -> String?)?
@@ -17,25 +16,22 @@ struct SettingsSyncPage: View {
 
     var body: some View {
         SettingsPageScroll {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("同步状态")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(.secondary)
-                HStack {
-                    Image(systemName: syncStatus == .failed || syncStatus == .conflicted ? "exclamationmark.triangle" : "checkmark.icloud")
-                        .foregroundColor(syncStatus == .failed || syncStatus == .conflicted ? .orange : .secondary)
-                    Text(syncStatus.title)
-                        .font(.system(size: 11, weight: .medium))
-                    Spacer()
-                    if syncConflictReport != nil {
-                        Button("查看详情…") { showSyncConflict = true }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                    }
+            SettingsSection("iCloud 同步") {
+                SettingsToggleRow(title: "启用文件同步", isOn: $enableICloudFileSync)
+                    .disabled(iCloudDirectoryURL == nil && !enableICloudFileSync)
+                HStack(spacing: 6) {
+                    Image(systemName: syncStatus == .failed || syncStatus == .conflicted ? "exclamationmark.triangle" : "icloud")
+                        .foregroundStyle(syncStatus == .failed || syncStatus == .conflicted ? Color.orange : Color.secondary)
+                    Text(syncStatus.title).font(.system(size: 11))
                 }
-                Text("同步异常不会阻断本机账号数据；冲突候选在用户决策前保留。")
-                    .font(.system(size: 10))
-                    .foregroundColor(.secondary)
+                SettingsHint(iCloudDirectoryURL.map { "目录：" + $0.lastPathComponent } ?? "请先在「快捷键」页授权同步目录。")
+                SettingsHint("同步账户配置与聚合记录，不含凭据；异常不影响本机数据。")
+                SettingsActionRow {
+                    if syncConflictReport != nil {
+                        Button("冲突详情…") { showSyncConflict = true }
+                    }
+                    Button("目录权限…", action: onManagePermissions)
+                }
             }
             .sheet(isPresented: $showSyncConflict) {
                 VStack(alignment: .leading, spacing: 8) {
@@ -68,81 +64,13 @@ struct SettingsSyncPage: View {
                 }
             }
 
-            Divider().opacity(0.4)
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("多设备配置同步 (iCloud Drive 文件同步)")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(.secondary)
-
-                Toggle(isOn: $enableICloudFileSync) {
-                    Text("启用 iCloud Drive 文件同步")
-                        .font(.system(size: 12, weight: .medium))
-                }
-                .toggleStyle(.checkbox)
-                .disabled(iCloudDirectoryURL == nil && !enableICloudFileSync)
-
-                HStack(spacing: 8) {
-                    Button(iCloudDirectoryURL == nil ? "选择同步文件夹…" : "更换同步文件夹…") {
-                        chooseICloudDirectory()
-                    }
-                    if let iCloudDirectoryURL {
-                        Text(iCloudDirectoryURL.lastPathComponent)
-                            .font(.system(size: 11))
-                            .foregroundColor(.secondary)
-                            .lineLimit(1)
-                    } else {
-                        Text("尚未选择")
-                            .font(.system(size: 11))
-                            .foregroundColor(.secondary)
-                    }
-                }
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("📁 请在系统目录选择器中确认 iCloud Drive/Documents/Relay 文件夹")
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                    Text("🔒 安全承诺: 仅同步非敏感元数据与聚合快照，Token 绝不同步！")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundColor(.green)
-                    if let iCloudDirectoryError {
-                        Text(iCloudDirectoryError)
-                            .font(.system(size: 10))
-                            .foregroundColor(.red)
-                    }
-                }
-                .padding(8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .relayInsetSurface(cornerRadius: 8)
-            }
-
             if let backupErrorMessage {
                 Text(backupErrorMessage).font(.footnote).foregroundStyle(.red)
             }
             if let transferActions {
-                DataTransferPanel(actions: transferActions)
+                DataTransferPanel(actions: transferActions, onManagePermissions: onManagePermissions)
             }
         }
     }
 
-    private func chooseICloudDirectory() {
-        let panel = NSOpenPanel()
-        panel.title = "选择 Relay iCloud 同步文件夹"
-        panel.message = "请选择 iCloud Drive/Documents/Relay 文件夹。Relay 只会在此文件夹中写入不含凭据的同步文件。"
-        panel.prompt = "选择"
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-
-        do {
-            try FileSyncService.setSyncDirectory(url)
-            iCloudDirectoryURL = FileSyncService.configuredDirectoryURL()
-            iCloudDirectoryError = nil
-            if iCloudDirectoryURL != nil {
-                enableICloudFileSync = true
-            }
-        } catch {
-            iCloudDirectoryError = error.localizedDescription
-        }
-    }}
+}

@@ -4,6 +4,15 @@ import Foundation
 /// store's complete dashboard projection. Gateway children inherit metadata
 /// from their top-level parent and remain attached to that parent.
 public enum AccountOrganizationService {
+    /// Settings edits the underlying order, independently of home pin/provider grouping.
+    public static func manualOrder(_ accounts: [AccountConfiguration]) -> [AccountConfiguration] {
+        accounts.sorted {
+            if $0.sortOrder != $1.sortOrder { return $0.sortOrder < $1.sortOrder }
+            if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
+            return $0.id.uuidString < $1.id.uuidString
+        }
+    }
+
     public static func normalizedGroup(_ group: String?) -> String? {
         guard let value = group?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
         return value

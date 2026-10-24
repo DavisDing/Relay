@@ -574,6 +574,33 @@ public final class RelayStore: ObservableObject {
         reloadFromRepository()
     }
 
+    /// Persist the complete parent-account order in one compare-and-swap transaction.
+    /// No credential, pin, group, history, or enabled/hidden state is changed.
+    public func reorderAccounts(_ orderedIDs: [UUID]) throws {
+        try requireStorage()
+        guard activeAccountMutations == 0, !syncResolutionInProgress else { throw DataTransferError.operationInProgress }
+        let current = try repository.syncData()
+        guard orderedIDs.count == current.accounts.count,
+              Set(orderedIDs).count == orderedIDs.count,
+              Set(orderedIDs) == Set(current.accounts.map(\.id)) else { throw DataTransferError.stalePreview }
+        guard orderedIDs != AccountOrganizationService.manualOrder(current.accounts).map(\.id) else { return }
+        let positions = Dictionary(uniqueKeysWithValues: orderedIDs.enumerated().map { ($0.element, $0.offset) })
+        let now = floor(Date().timeIntervalSince1970)
+        let changed = current.accounts.map { original -> AccountConfiguration in
+            guard let position = positions[original.id], original.sortOrder != position else { return original }
+            var account = original
+            account.sortOrder = position
+            account.updatedAt = Date(timeIntervalSince1970: max(now, original.updatedAt.timeIntervalSince1970 + 1))
+            return account
+        }
+        let candidate = RelaySyncData(schemaVersion: current.schemaVersion, accounts: changed,
+            snapshots: current.snapshots, dailyUsage: current.dailyUsage, settings: current.settings,
+            settingsUpdatedAt: current.settingsUpdatedAt, deletedAccountIDs: current.deletedAccountIDs)
+        guard try repository.replaceNonsecretData(candidate, expected: current) else { throw DataTransferError.stalePreview }
+        globalErrorMessage = nil
+        reloadFromRepository()
+    }
+
     public var accountConfigurations: [AccountConfiguration] { detailConfigurations }
 
     public func accountConfiguration(id: UUID) -> AccountConfiguration? {

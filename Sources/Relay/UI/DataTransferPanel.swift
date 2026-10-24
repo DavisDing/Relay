@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 @MainActor
 struct DataTransferPanel: View {
     let actions: DataTransferActions
+    let onManagePermissions: () -> Void
     private let backups: LocalBackupService
     @State private var startDate = Calendar.current.date(byAdding: .day, value: -29, to: Date()) ?? Date()
     @State private var endDate = Date()
@@ -22,83 +23,87 @@ struct DataTransferPanel: View {
     @State private var message: String?
     @State private var isError = false
 
-    init(actions: DataTransferActions, backups: LocalBackupService = .shared) {
+    init(actions: DataTransferActions, onManagePermissions: @escaping () -> Void, backups: LocalBackupService = .shared) {
         self.actions = actions
+        self.onManagePermissions = onManagePermissions
         self.backups = backups
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 16) {
             Divider().opacity(0.4)
-            Text("消费记录导出").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
-            HStack {
-                DatePicker("开始", selection: $startDate, displayedComponents: .date)
-                DatePicker("结束", selection: $endDate, displayedComponents: .date)
-            }
-            Picker("账号", selection: $selectedAccountID) {
-                Text("全部账号").tag(Optional<UUID>.none)
-                ForEach(configurations) { account in Text(account.displayName).tag(Optional(account.id)) }
-            }
-            Button("导出 CSV…") { exportUsage() }
-            Text("仅导出已有记录；未知消费留空。不同币种分别保留，不合并金额。")
-                .font(.system(size: 10)).foregroundStyle(.secondary)
-
-            Divider().opacity(0.4)
-            Text("配置导入与导出").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
-            HStack {
-                Button("导出配置…") { exportConfiguration() }
-                Button("导入配置…") { chooseConfiguration() }
-            }
-            Text("包含账号配置和设置，不含 Token、Cookie、用户凭据或消费历史。已有账号凭据保留，新账号需重新填写。")
-                .font(.system(size: 10)).foregroundStyle(.secondary)
-
-            Divider().opacity(0.4)
-            HStack {
-                Text("本机数据备份").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
-                Spacer()
-                Button("立即备份") { createBackup() }
-                Button("刷新") { reloadBackups() }
-            }
-            Text("运行期间每日自动备份一次，可随时手动备份；保留最近 5 份，包括账号、设置和消费记录。恢复前会先备份当前数据，并保留本机凭据。")
-                .font(.system(size: 10)).foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: 6) {
-                Text(backupDirectoryPath ?? "备份目录不可用，请重新选择或恢复默认目录")
-                    .font(.system(size: 10)).foregroundStyle(.secondary).textSelection(.enabled)
-                HStack {
-                    Button("选择备份目录…") { chooseBackupDirectory() }
-                    Button("恢复默认目录") { resetBackupDirectory() }
-                    Button("打开目录") { openBackupDirectory() }
+            SettingsSection("本机备份") {
+                if let summary = backupSummary {
+                    Text("\(summary.count) 份有效备份 · \(ByteCountFormatter.string(fromByteCount: summary.totalBytes, countStyle: .file))")
+                        .font(.system(size: 11, weight: .medium))
+                    SettingsHint(summary.latestDate.map { "最近成功：" + backupDateText($0, format: "yyyyMMdd HH:mm:ss") } ?? "尚无成功备份")
                 }
-                Text("目录设置仅保存在本机。切换时会搬移旧备份，校验成功后删除旧目录原文件。所选文件夹中使用 RelayBackups 子目录。")
-                    .font(.system(size: 10)).foregroundStyle(.secondary)
-            }
-            if let summary = backupSummary {
-                Text("有效备份 \(summary.count) 份 · \(ByteCountFormatter.string(fromByteCount: summary.totalBytes, countStyle: .file))")
-                    .font(.system(size: 10)).foregroundStyle(.secondary)
-                Text(summary.latestDate.map { "最近成功：" + backupDateText($0, format: "yyyyMMdd HH:mm:ss") } ?? "尚无成功备份")
-                    .font(.system(size: 10)).foregroundStyle(.secondary)
-            }
-            if pendingMigration {
-                Text("备份搬移尚未完成，有效副本已保留。")
-                    .font(.system(size: 10)).foregroundStyle(.orange)
-                HStack {
-                    Button("重试搬移处理") { retryMigration() }
-                    Button("重新授权搬移目录…") { authorizeMigration() }
+                SettingsHint("运行期间每日自动备份，保留最近 5 份。含配置与消费记录，不含凭据；恢复前先备份当前数据。")
+                SettingsActionRow {
+                    Button("刷新列表") { reloadBackups() }
+                    Button("立即备份") { createBackup() }
                 }
-            }
-            if backupEntries.isEmpty {
-                Text("尚无可用备份").font(.system(size: 11)).foregroundStyle(.secondary)
-            }
-            ForEach(backupEntries) { entry in
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(backupDateText(entry.createdAt, format: "yyyyMMdd")).font(.system(size: 11))
-                        Text("\(backupDateText(entry.createdAt, format: "HH:mm:ss")) · \(entry.accountCount) 个账号 · \(entry.historyCount) 条记录")
-                            .font(.system(size: 10)).foregroundStyle(.secondary)
+                if pendingMigration {
+                    Text("搬移待处理，有效副本已保留。")
+                        .font(.system(size: 10)).foregroundStyle(.orange)
+                    SettingsActionRow {
+                        Button("目录权限…", action: onManagePermissions)
+                        Button("重试搬移") { retryMigration() }
                     }
-                    Spacer()
-                    Button("预览恢复…") { previewBackup(entry) }
                 }
+                DisclosureGroup("备份列表与目录") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        SettingsHint(backupDirectoryPath ?? "目录不可用，请前往「快捷键」重新授权。")
+                            .textSelection(.enabled)
+                        SettingsActionRow {
+                            Button("目录权限…", action: onManagePermissions)
+                            Button("打开目录") { openBackupDirectory() }
+                                .disabled(backupDirectoryPath == nil)
+                        }
+                        if backupEntries.isEmpty { SettingsHint("尚无可用备份。") }
+                        ForEach(backupEntries) { entry in
+                            Divider().opacity(0.4)
+                            HStack(spacing: 8) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(backupDateText(entry.createdAt, format: "yyyyMMdd")).font(.system(size: 11))
+                                    SettingsHint("\(backupDateText(entry.createdAt, format: "HH:mm:ss")) · \(entry.accountCount) 个账号")
+                                    SettingsHint("\(entry.historyCount) 条记录")
+                                }
+                                Spacer(minLength: 0)
+                                Button("预览恢复…") { previewBackup(entry) }
+                            }
+                        }
+                    }.padding(.top, 8)
+                }
+                .font(.system(size: 11, weight: .medium))
+            }
+
+            Divider().opacity(0.4)
+            SettingsSection("配置迁移") {
+                SettingsHint("仅迁移账户配置和设置，不含凭据或消费历史；导入前可预览差异。")
+                SettingsActionRow {
+                    Button("导出配置…") { exportConfiguration() }
+                    Button("导入配置…") { chooseConfiguration() }
+                }
+            }
+
+            Divider().opacity(0.4)
+            SettingsSection("消费记录") {
+                DisclosureGroup("导出 CSV") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        DatePicker("开始", selection: $startDate, displayedComponents: .date)
+                        DatePicker("结束", selection: $endDate, displayedComponents: .date)
+                        Picker("账号", selection: $selectedAccountID) {
+                            Text("全部账号").tag(Optional<UUID>.none)
+                            ForEach(configurations) { account in Text(account.displayName).tag(Optional(account.id)) }
+                        }
+                        SettingsHint("仅导出已有记录，未知留空，不同币种不合并。")
+                        SettingsActionRow {
+                            Button("导出 CSV…") { exportUsage() }
+                        }
+                    }.padding(.top, 8)
+                }
+                .font(.system(size: 11, weight: .medium))
             }
             if isBusy { ProgressView().controlSize(.small) }
             if let message {
@@ -149,9 +154,9 @@ struct DataTransferPanel: View {
             if isError, let message { Text(message).font(.footnote).foregroundStyle(.red) }
             HStack {
                 Spacer()
-                Button("取消") { importPreview = nil }.disabled(isBusy)
+                Button("取消") { importPreview = nil }.disabled(isBusy).buttonStyle(RelaySecondaryCapsuleButtonStyle())
                 Button("确认导入") { confirmImport(preview) }
-                    .disabled(isBusy).buttonStyle(.borderedProminent)
+                    .disabled(isBusy).buttonStyle(RelayPrimaryCapsuleButtonStyle(isLoading: isBusy))
             }
         }.padding(20).frame(width: 420).relayInitialFocus()
     }
@@ -180,8 +185,8 @@ struct DataTransferPanel: View {
             if isError, let message { Text(message).font(.footnote).foregroundStyle(.red) }
             HStack {
                 Spacer()
-                Button("取消") { backupPreview = nil }.disabled(isBusy)
-                Button("确认恢复") { restore(preview) }.disabled(isBusy).buttonStyle(.borderedProminent)
+                Button("取消") { backupPreview = nil }.disabled(isBusy).buttonStyle(RelaySecondaryCapsuleButtonStyle())
+                Button("确认恢复") { restore(preview) }.disabled(isBusy).buttonStyle(RelayPrimaryCapsuleButtonStyle(isLoading: isBusy))
             }
         }.padding(20).frame(width: 420).relayInitialFocus()
     }
@@ -277,38 +282,6 @@ struct DataTransferPanel: View {
         } catch { report(error) }
     }
 
-    private func chooseBackupDirectory() {
-        let panel = NSOpenPanel()
-        panel.title = "选择 Relay 备份文件夹"
-        panel.message = "Relay 将在此文件夹中建立 RelayBackups 子目录。现有备份将搬移到新目录，校验成功后清理原文件。"
-        panel.prompt = "选择"
-        panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.allowsMultipleSelection = false
-        guard panel.runModal() == .OK, let parent = panel.url else { return }
-        isBusy = true
-        Task {
-            do {
-                let warning = try await backups.selectDirectory(parent)
-                backupPreview = nil; expectedBackupData = nil
-                message = warning ?? "备份已搬移，目录已切换。"; isError = warning != nil
-                await loadBackups()
-            } catch { report(error) }
-            isBusy = false
-        }
-    }
-
-    private func resetBackupDirectory() {
-        isBusy = true
-        Task {
-            do {
-                let warning = try await backups.resetDirectory()
-                backupPreview = nil; expectedBackupData = nil
-                message = warning ?? "备份已搬移到默认目录。"; isError = warning != nil
-                await loadBackups()
-            } catch { report(error) }
-            isBusy = false
-        }
-    }
-
     private func openBackupDirectory() {
         Task {
             do {
@@ -325,19 +298,9 @@ struct DataTransferPanel: View {
                 let warning = try await backups.retryPendingMigration()
                 message = warning ?? "未完成的备份搬移已处理。"; isError = warning != nil
                 await loadBackups()
-            } catch { report(error) }
+            } catch { report(error); await loadBackups() }
         }
     }
-    private func authorizeMigration() {
-        let picker = NSOpenPanel(); picker.canChooseFiles = false; picker.canChooseDirectories = true
-        picker.title = "选择未完成搬移的原目录或新目录的父文件夹"
-        guard picker.runModal() == .OK, let url = picker.url else { return }
-        Task {
-            do { try await backups.authorizePendingMigration(url); message = "授权已更新，请重试搬移处理。"; isError = false }
-            catch { report(error) }
-        }
-    }
-
     private func reloadBackups() { Task { await loadBackups() } }
     private func loadBackups() async {
         pendingMigration = await backups.hasPendingMigration()

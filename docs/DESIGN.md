@@ -26,7 +26,9 @@
 - `AccountAddModalView` / `AccountEditModalView`：账户字段、预算、分组、置顶和凭据编辑。
 - `AccountDetailContainerView` / `AccountDetailView`：账户实时投影、固定近 7 日趋势、按日模型明细及明确口径的网关累计模型。
 - `SettingsDataPage`：刷新、历史保留、月预算通知。
-- `SettingsSyncPage` + `DataTransferPanel`：iCloud 普通文件同步、CSV、配置导入导出和本机备份。
+- `SettingsSyncPage` + `DataTransferPanel`：iCloud 普通文件同步、备份摘要/恢复、配置迁移；备份列表与 CSV 筛选使用折叠区，错误和搬移待处理状态不折叠。
+- `SettingsShortcutsPage` + `SettingsBackupDirectoryPanel`：全局快捷键、通知权限/测试、登录项、iCloud 与备份目录选择/重新授权；复用原文件同步/备份服务。
+- `SettingsPageLayout`：统一 12pt 正文、10pt 说明、紧凑分组、右侧 mini 开关及右对齐 28pt 胶囊操作行。设置内快捷键、导入/恢复及诊断 sheet 沿用同一控件体系。
 - `RelayMenuBarController`：菜单栏状态、Popover 和辅助窗口导航。
 
 UI 不拼供应商 URL、不解码供应商 JSON、不持有长期凭据。关闭辅助页返回首页；外部隐藏保留页面状态。
@@ -38,7 +40,7 @@ UI 不拼供应商 URL、不解码供应商 JSON、不持有长期凭据。关�
 - `RefreshScheduler`：账户请求去重、全局并发、同源串行、手动优先和取消。
 - `RefreshCoordinator`：执行单次请求、退避、能力补充、历史批量提交和刷新原子事务。
 - `DashboardAggregator`：基于可比较金额和数据完整性生成总览，不将未知视为零。
-- `AccountOrganizationService`：搜索、分组筛选、置顶和稳定排序的纯投影。
+- `AccountOrganizationService`：搜索、分组筛选、置顶和稳定排序的纯投影；`manualOrder` 按 sortOrder/createdAt/UUID 稳定排列设置列表。`RelayStore.reorderAccounts` 校验完整且唯一的父账户 ID 集合，一次 CAS 保存连续 sortOrder，仅为发生排名变化的账户推进 updatedAt；失败不发布新顺序，首页置顶与服务商分组语义不变。
 - `BudgetService`：月预算币种、月份、80/100% 阈值和本机去重状态。
 - `ModelAnalysisService`：模型消费、Token、占比、单位成本和未知原因。
 - `AccountHealth`：运行期健康摘要，不持久化秘密。
@@ -201,6 +203,8 @@ UI 不拼供应商 URL、不解码供应商 JSON、不持有长期凭据。关�
 
 ### 本机备份
 
+备份创建、摘要、列表/恢复及重试搬移位于同步页；目录选择、恢复默认和搬移重新授权集中于快捷键页。原搬移、校验、书签和失败保护不变。
+
 `LocalBackupService` 是共享 actor，自动/手动/恢复前备份和目录迁移串行执行。运行期间每日按本机日历检查备份，正常创建保留最近 5 份；默认位于 `~/Library/Application Support/Relay/Backups`。
 
 它只处理 `relay-backup-*.json` 普通文件，不读取凭据。所选父目录内的 `RelayBackups` 子目录获得私有权限；父目录、无关文件和凭据目录不改权限。
@@ -258,7 +262,8 @@ DMG 文件图标由 `scripts/set-dmg-icon.swift` 复用 `Resources/AppIcon.icns`
 
 离线测试采用独立 Swift 脚本和临时 fixture，不使用真实供应商凭据：
 
-- `scripts/test-regressions.sh`：业务、刷新、存储、同步、账户偏好、备份、历史、预算、模型和图表回归。
+- `scripts/test-regressions.sh`：业务、刷新、存储、同步、账户偏好/排序、备份、历史、预算、模型和图表回归。
+- `scripts/test-account-ordering.sh`：完整 ID 集合校验、旧排序稳定性、单次写入、失败/CAS 保留、元数据隔离、置顶优先、配置/备份/同步载荷兼容及落盘重开；不代替真实上下移按钮交互验收。
 - `scripts/test-contracts.sh`：DeepSeek 用量、快捷键、同步冲突和 GUI 会话保护。
 - `scripts/test-window-navigation.sh --build-only`：编译 GUI 导航检查，不操作 WindowServer。
 - `swift build`：SwiftPM 应用构建；本机已核实的隔离 HOME/缓存/MacOSX26.5 SDK 命令见 AI_CONTEXT；部署目标仍为 macOS 27，发布 runner 配置为 xcode-27。
@@ -315,7 +320,7 @@ DMG 文件图标由 `scripts/set-dmg-icon.swift` 复用 `Resources/AppIcon.icns`
 | 新增账户提交 | `AccountService` 准备网络数据/历史 → 保存新凭据 → `LocalRepository.commitNewAccount` | 业务数据一次提交；跨文件仍需补偿，补偿失败报告。进程中断可能留下未引用凭据，不宣称两个文件原子提交。 |
 | 请求跳转 | `HTTPClient` 默认 ephemeral 会话 + `ProviderRedirectDelegate` → `ProviderRedirectPolicy` | 每跳比较原请求来源、端口、方法；跨站/降级/用户信息拒绝，同来源保留认证。loopback 例外不扩大。 |
 | 搬移恢复 | `LocalBackupService` 本机 `.relay-backup-migration.json` → 同步页显式重试 | 清单含目录/bookmark/阶段/文件名/hash。目录选择以私有原子 `.relay-backup-selection.json` 为提交标记，`relay.localBackupSelection`/旧键只作兼容提示。双方内容重新核验后清理，修改或授权失效保持待处理；期间暂停五代裁剪。 |
-| 通知状态 | `NotificationStatusService` / `NotificationStatusPanel`，嵌入低余额与预算区 | 检查系统授权/横幅状态，固定示例测试不消费去重；展示提交失败，不声称系统接受就是已展示。 |
+| 通知状态 | `NotificationStatusService` / `NotificationStatusPanel`，集中于快捷键分页的通知权限区 | 检查系统授权/横幅状态，固定示例测试不消费去重；展示提交失败，不声称系统接受就是已展示。 |
 | 消费总览 | 首页今日总消耗卡片 → `ConsumptionOverviewView` / `ConsumptionOverviewService` | 按供应商日历、原币日记录统计当日、本月/上月及覆盖，不重复累加月快照；已结束自然日的完整同币同长度同期且上期非零才显示环比。 |
 | 脱敏诊断 | 设置关于 → `DiagnosticExportPanel` → 白名单 `RelayDiagnosticReport` | 预览固定内容后主动保存，无账号名、UUID、URL、路径、原始错误或凭据，不上传；存储故障时关于页仍可用。 |
 | 备份摘要 | 既有同步页 → `LocalBackupService.summary` | 有效份数、容量、最近日期与待处理状态，支持打开目录、重试及重新授权。 |

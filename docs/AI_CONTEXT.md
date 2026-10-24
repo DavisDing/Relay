@@ -64,7 +64,7 @@ RelayStore / AccountService / RefreshScheduler / RefreshCoordinator
 
 - 备份搬移清单、授权与阶段仅留本机，未完成时保留有效文件，支持显式重试；完成前不执行五代裁剪。
 - 首页点击“今日总消耗”卡片打开当日/月度及分组已记录消费总览，按原币/供应商日历统计覆盖，已结束自然日的完整可比同期数据才显示环比。
-- 低余额/月预算设置显示系统授权与测试通知；测试不占真实去重，提交失败可见。
+- 系统通知授权与测试集中在设置「快捷键」页；低余额/月预算业务开关仍在「常规」/「数据」。测试不占真实去重，提交失败可见。
 - 关于页支持白名单脱敏诊断预览及主动导出，无账号名、ID、站点、路径、原始错误或凭据，不上传。
 - 同步页有备份份数/容量/最近成功及导入字段差异；账户管理支持原子批量分组、隐藏和启停，删除单独确认。
 
@@ -74,7 +74,8 @@ RelayStore / AccountService / RefreshScheduler / RefreshCoordinator
 - 详情趋势固定近 7 日，不提供历史范围选择；历史 7/30 日回填在账户编辑页，有进度/取消。Pipio/DeepSeek 模型初始当天，点击趋势日期读取该日日模型，单行五列展示；旧明细缺失不冒充已知。workbuddy2api 展示父网关进程累计模型与积分单位，不随趋势日期切换，子账户同样标明网关范围；累计列表保留 nil 与空数组差别，不写入日模型。
 - 页面、设置分页与 sheet 通过中性初始响应者避免自动聚焦搜索/文本/趋势；用户点击、Tab 和辅助操作仍可聚焦。
 - 预算、分组、置顶在添加/编辑账户表单中保存；首页提供搜索、分组筛选和置顶排序，筛选不改变汇总口径。
-- 设置「数据」分页把数据刷新、历史数据、月预算通知作为同级区块；设置「同步」分页承载导入、导出和本机备份。
+- 设置「数据」分页把刷新、历史、月预算通知作为同级区块；设置「同步」分页按 iCloud、备份、配置迁移与消费导出分组，备份列表和 CSV 筛选折叠。通知权限、登录项、同步/备份目录选择及重新授权集中在「快捷键」分页，其他页只提供跳转入口。所有设置页复用紧凑分组与右对齐胶囊操作行，普通开关统一右侧 mini switch，集合选择保留复选框。
+- 「账管」提供上下移排序，立即通过完整 ID 集合校验和 repository CAS 写入已有 sortOrder；首尾禁用，失败不落半批。首页仍保留置顶优先与服务商分组，网关子账户跟随父账户；不新增存储字段。
 - 关闭设置、添加账户、编辑账户和账户详情返回首页；保存失败留在原页，点击外部隐藏保留未提交内容。设置内 sheet 返回父页面，退出 Relay 仍退出程序。
 - 本机备份列表和恢复预览主日期显示 `yyyyMMdd`，时间以 `HH:mm:ss` 作为次要信息。
 
@@ -102,6 +103,7 @@ swift build --scratch-path /tmp/relay-build
 
 ```bash
 SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk scripts/test-regressions.sh
+SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk scripts/test-account-ordering.sh
 SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk scripts/test-contracts.sh
 SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk scripts/test-provider-redirects.sh
 SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk scripts/test-window-navigation.sh --build-only
