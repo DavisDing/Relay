@@ -68,9 +68,9 @@ struct SettingsAccountsPage: View {
                     batchAction("停用", icon: "pause.circle") { applyBatch(enabled: false) }
                     batchAction("启用", icon: "play.circle") { applyBatch(enabled: true) }
                 }
-                .padding(8)
+                .padding(4)
                 .relayFloatingBarSurface()
-                .padding(12)
+                .padding(8)
                 .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
             }
         }
@@ -79,12 +79,12 @@ struct SettingsAccountsPage: View {
 
     private func batchAction(_ title: String, icon: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            VStack(spacing: 6) {
-                Image(systemName: icon).font(.system(size: 22, weight: .regular))
-                Text(title).font(.system(size: 12))
+            VStack(spacing: 3) {
+                Image(systemName: icon).font(.system(size: 16, weight: .regular))
+                Text(title).font(.system(size: 10))
             }
             .foregroundStyle(.primary)
-            .frame(maxWidth: .infinity, minHeight: 52)
+            .frame(maxWidth: .infinity, minHeight: 36)
         }
         .buttonStyle(RelayCardButtonStyle())
         .accessibilityLabel("\(title)选中的 \(selected.count) 个账户")
@@ -104,7 +104,7 @@ struct SettingsAccountsPage: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(account.name)
-                        .font(.system(size: 14, weight: .medium))
+                        .font(.system(size: 12, weight: .medium))
                         .lineLimit(1)
                     Text(account.kind.displayName)
                         .font(.system(size: 9))
@@ -146,7 +146,7 @@ struct SettingsAccountsPage: View {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.secondary)
-                    .frame(width: 32, height: 40)
+                    .frame(width: 24, height: 24)
                     .contentShape(Rectangle())
             }
             .menuStyle(.borderlessButton)
@@ -156,10 +156,9 @@ struct SettingsAccountsPage: View {
             .accessibilityHint(UUID(uuidString: account.id).map { store.health(for: $0).detail } ?? "")
             .accessibilityValue(account.isEnabled ? (account.isHidden ? "已启用，已隐藏" : "已启用") : (account.isHidden ? "已停用，已隐藏" : "已停用"))
         }
-        .frame(minHeight: 56)
-        .padding(.horizontal, 12)
+        .padding(.horizontal, 9)
         .padding(.vertical, 8)
-        .relayInsetSurface(cornerRadius: 14)
+        .relayInsetSurface(cornerRadius: 9)
     }
     private func applyBatch(group: String? = nil, changeGroup: Bool = false, hidden: Bool? = nil, enabled: Bool? = nil) {
         do {

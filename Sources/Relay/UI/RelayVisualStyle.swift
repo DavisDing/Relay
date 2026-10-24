@@ -12,24 +12,33 @@ public enum RelayVisualStyle {
     public static let panelWidth: CGFloat = 360
     public static let auxiliaryPanelCornerRadius: CGFloat = 20
 
-    // MARK: - Radius Ladder (8 / 12~16 / 20~24 / Capsule)
+    /// Desktop density follows the original 360pt menu-bar panel, rather than
+    /// the touch-target dimensions of the mobile design reference.
+    public static let buttonHeight: CGFloat = 28
+    public static let iconButtonDiameter: CGFloat = 24
+    public static let inputHeight: CGFloat = 28
+    public static let navigationHeight: CGFloat = 32
+    public static let buttonFontSize: CGFloat = 12
+    public static let bodyFontSize: CGFloat = 12
+
+    // MARK: - Radius Ladder (8 / 10 / 12 / 20 / 24 / Capsule)
     public static let radiusSmall: CGFloat = 8
-    public static let radiusMedium: CGFloat = 14
-    public static let radiusCard: CGFloat = 16
+    public static let radiusMedium: CGFloat = 10
+    public static let radiusCard: CGFloat = 12
     public static let radiusPanel: CGFloat = 20
     public static let radiusLarge: CGFloat = 24
-    public static let radiusFAB: CGFloat = 28
+    public static let radiusFAB: CGFloat = 20
 
     /// Preserved alias for card corner radius across existing components.
     public static let cardCornerRadius: CGFloat = radiusCard
     /// Preserved alias for main panel corner radius.
     public static let panelCornerRadius: CGFloat = radiusPanel
 
-    // MARK: - Grid Spacing Tokens (8dp Grid)
-    public static let spacingTight: CGFloat = 8
-    public static let spacingStandard: CGFloat = 16
-    public static let spacingSection: CGFloat = 24
-    public static let spacingLoose: CGFloat = 32
+    // MARK: - Compact Desktop Spacing
+    public static let spacingTight: CGFloat = 6
+    public static let spacingStandard: CGFloat = 12
+    public static let spacingSection: CGFloat = 16
+    public static let spacingLoose: CGFloat = 24
 
     // MARK: - Colors & Accents
     public static let accentColor: Color = Color(red: 10 / 255, green: 132 / 255, blue: 255 / 255) // #0A84FF
@@ -184,7 +193,7 @@ private struct RelayFloatingBarModifier: ViewModifier {
 
 // MARK: - Capsule & Interactive Button Styles
 
-/// Primary pill capsule button (48~52dp, inverted monochrome, 96% spring scale on press).
+/// Compact desktop capsule with inverted monochrome and 96% press feedback.
 public struct RelayPrimaryCapsuleButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.colorScheme) private var colorScheme
@@ -192,7 +201,7 @@ public struct RelayPrimaryCapsuleButtonStyle: ButtonStyle {
     public let height: CGFloat
     public let isLoading: Bool
 
-    public init(height: CGFloat = 48, isLoading: Bool = false) {
+    public init(height: CGFloat = RelayVisualStyle.buttonHeight, isLoading: Bool = false) {
         self.height = height
         self.isLoading = isLoading
     }
@@ -202,7 +211,7 @@ public struct RelayPrimaryCapsuleButtonStyle: ButtonStyle {
         let backgroundFill = colorScheme == .dark ? Color.white : Color.black
         let foreground = colorScheme == .dark ? Color.black : Color.white
 
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             if isLoading {
                 ProgressView()
                     .controlSize(.small)
@@ -212,9 +221,10 @@ public struct RelayPrimaryCapsuleButtonStyle: ButtonStyle {
                 configuration.label
             }
         }
-        .font(.system(size: 16, weight: .semibold))
+        .font(.system(size: RelayVisualStyle.buttonFontSize, weight: .semibold))
         .foregroundColor(foreground)
-        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 12)
+        .frame(minWidth: 56)
         .frame(height: height)
         .background(backgroundFill)
         .clipShape(Capsule())
@@ -227,7 +237,7 @@ public struct RelayPrimaryCapsuleButtonStyle: ButtonStyle {
     }
 }
 
-/// Secondary frosted glass capsule button (48~52dp, backdrop blur + 1px subtle stroke).
+/// Compact, content-width frosted glass capsule.
 public struct RelaySecondaryCapsuleButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.colorScheme) private var colorScheme
@@ -235,7 +245,7 @@ public struct RelaySecondaryCapsuleButtonStyle: ButtonStyle {
     public let height: CGFloat
     public let isLoading: Bool
 
-    public init(height: CGFloat = 48, isLoading: Bool = false) {
+    public init(height: CGFloat = RelayVisualStyle.buttonHeight, isLoading: Bool = false) {
         self.height = height
         self.isLoading = isLoading
     }
@@ -243,7 +253,7 @@ public struct RelaySecondaryCapsuleButtonStyle: ButtonStyle {
     public func makeBody(configuration: Configuration) -> some View {
         let isPressed = configuration.isPressed
 
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             if isLoading {
                 ProgressView().controlSize(.small)
                 Text("处理中…")
@@ -251,9 +261,10 @@ public struct RelaySecondaryCapsuleButtonStyle: ButtonStyle {
                 configuration.label
             }
         }
-            .font(.system(size: 16, weight: .medium))
+            .font(.system(size: RelayVisualStyle.buttonFontSize, weight: .medium))
             .foregroundColor(configuration.role == .destructive ? RelayVisualStyle.destructiveColor : .primary)
-            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 12)
+            .frame(minWidth: 56)
             .frame(height: height)
             .background {
                 RelayMaterialBackground(material: .thinMaterial, cornerRadius: height / 2,
@@ -278,7 +289,7 @@ public struct RelaySecondaryCapsuleButtonStyle: ButtonStyle {
     }
 }
 
-/// 40~44dp circular icon button with linear styling and press feedback.
+/// Desktop circular icon button with linear styling and press feedback.
 public struct RelayCircularIconButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.colorScheme) private var colorScheme
@@ -286,7 +297,7 @@ public struct RelayCircularIconButtonStyle: ButtonStyle {
     public let diameter: CGFloat
     public let isSelected: Bool
 
-    public init(diameter: CGFloat = 42, isSelected: Bool = false) {
+    public init(diameter: CGFloat = RelayVisualStyle.iconButtonDiameter, isSelected: Bool = false) {
         self.diameter = diameter
         self.isSelected = isSelected
     }
@@ -295,7 +306,7 @@ public struct RelayCircularIconButtonStyle: ButtonStyle {
         let isPressed = configuration.isPressed
 
         configuration.label
-            .font(.system(size: 18, weight: .regular))
+            .font(.system(size: 12, weight: .regular))
             .symbolVariant(isSelected ? .fill : .none)
             .foregroundColor(isSelected ? RelayVisualStyle.accentColor : .primary)
             .frame(width: diameter, height: diameter)
@@ -331,10 +342,10 @@ public struct RelayTextButtonStyle: ButtonStyle {
 
     public func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 14, weight: .medium))
+            .font(.system(size: RelayVisualStyle.buttonFontSize, weight: .medium))
             .foregroundStyle(configuration.role == .destructive ? RelayVisualStyle.destructiveColor : RelayVisualStyle.accentColor)
-            .padding(.horizontal, 8)
-            .frame(minHeight: 40)
+            .padding(.horizontal, 6)
+            .frame(minHeight: RelayVisualStyle.buttonHeight)
             .background(configuration.isPressed ? RelayVisualStyle.accentColor.opacity(0.1) : .clear, in: Capsule())
             .contentShape(Capsule())
             .opacity(isEnabled ? 1 : 0.3)
@@ -365,11 +376,11 @@ private struct RelayFormFieldModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
             .textFieldStyle(.plain)
-            .font(.system(size: 14))
+            .font(.system(size: RelayVisualStyle.bodyFontSize))
             .focused($isFocused)
-            .padding(.horizontal, 12)
-            .frame(minHeight: 44)
-            .modifier(RelayInputSurfaceModifier(isFocused: isFocused, cornerRadius: 12))
+            .padding(.horizontal, 8)
+            .frame(minHeight: RelayVisualStyle.inputHeight)
+            .modifier(RelayInputSurfaceModifier(isFocused: isFocused, cornerRadius: RelayVisualStyle.radiusSmall))
             .opacity(isEnabled ? 1 : 0.5)
     }
 }
@@ -379,7 +390,7 @@ struct RelaySearchField: View {
     @FocusState private var isFocused: Bool
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
             TextField("搜索账号", text: $text)
                 .textFieldStyle(.plain)
@@ -387,14 +398,14 @@ struct RelaySearchField: View {
                 .accessibilityLabel("搜索账号、服务商或分组")
             if !text.isEmpty {
                 Button { text = "" } label: { Image(systemName: "xmark") }
-                    .buttonStyle(RelayCircularIconButtonStyle(diameter: 24))
+                    .buttonStyle(RelayCircularIconButtonStyle(diameter: 20))
                     .accessibilityLabel("清除搜索")
             }
         }
-        .font(.system(size: 13))
-        .padding(.horizontal, 12)
-        .frame(height: 40)
-        .modifier(RelayInputSurfaceModifier(isFocused: isFocused, cornerRadius: 20))
+        .font(.system(size: 11))
+        .padding(.horizontal, 8)
+        .frame(height: RelayVisualStyle.inputHeight)
+        .modifier(RelayInputSurfaceModifier(isFocused: isFocused, cornerRadius: RelayVisualStyle.inputHeight / 2))
     }
 }
 

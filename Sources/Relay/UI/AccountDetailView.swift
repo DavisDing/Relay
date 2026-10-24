@@ -101,7 +101,7 @@ public struct AccountDetailView: View {
             header
 
             ScrollView(.vertical, showsIndicators: true) {
-                LazyVStack(alignment: .leading, spacing: 16) {
+                LazyVStack(alignment: .leading, spacing: 12) {
                     if account.kind == .workbuddy2api {
                         creditDetails
                         trendSection
@@ -132,16 +132,16 @@ public struct AccountDetailView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .layoutPriority(1)
 
-            VStack(spacing: 8) {
+            HStack(spacing: 8) {
                 Text(compactFooterText)
-                    .font(.system(size: 12))
+                    .font(.system(size: 10))
                     .foregroundStyle(dataErrorMessage == nil ? Color.secondary : Color.red)
                     .help(footerDetailText)
                     .accessibilityLabel(footerDetailText)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                HStack(spacing: 8) {
+                Spacer(minLength: 6)
+                HStack(spacing: 6) {
                     if accountWebsiteURL != nil {
                         Button(action: openAccountWebsite) {
                             Label("官网", systemImage: "safari")
@@ -151,12 +151,12 @@ public struct AccountDetailView: View {
                     Button("返回首页", action: onClose)
                         .buttonStyle(RelayPrimaryCapsuleButtonStyle())
                 }
-                .padding(8)
-                .relayFloatingBarSurface(cornerRadius: 32)
+                .padding(4)
+                .relayFloatingBarSurface()
             }
             .padding(.horizontal, 16)
             .padding(.top, 8)
-            .padding(.bottom, 16)
+            .padding(.bottom, 8)
         }
         .frame(width: RelayVisualStyle.panelWidth, height: 520)
         .relayPanelSurface(cornerRadius: RelayVisualStyle.panelCornerRadius)
@@ -220,7 +220,7 @@ public struct AccountDetailView: View {
             Button(action: onClose) {
                 Image(systemName: "chevron.left")
             }
-            .buttonStyle(RelayCircularIconButtonStyle(diameter: 40))
+            .buttonStyle(RelayCircularIconButtonStyle())
             .help("返回首页")
             .accessibilityLabel("返回首页")
             Circle()
@@ -242,7 +242,7 @@ public struct AccountDetailView: View {
                 .padding(.vertical, 3)
                 .background(.secondary.opacity(0.14), in: RoundedRectangle(cornerRadius: 4))
         }
-        .frame(minHeight: 56)
+        .frame(minHeight: 34)
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
     }
@@ -445,24 +445,24 @@ private struct MetricCard: View {
     let accentColor: Color
 
     var body: some View {
-        VStack(alignment: .center, spacing: 8) {
+        VStack(alignment: .center, spacing: 4) {
             Text(title)
-                .font(.system(size: 12))
+                .font(.system(size: 10))
                 .foregroundStyle(.secondary)
             Text(value)
-                .font(.system(size: 20, weight: .semibold))
+                .font(.system(size: 16, weight: .semibold))
                 .monospacedDigit()
                 .foregroundStyle(accentColor)
                 .lineLimit(1)
                 .minimumScaleFactor(0.72)
             Text(subTitle)
-                .font(.system(size: 11))
+                .font(.system(size: 9))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
         .multilineTextAlignment(.center)
         .frame(maxWidth: .infinity, alignment: .center)
-        .padding(16)
-        .relayGlassTile()
+        .padding(9)
+        .relayGlassTile(cornerRadius: 10)
     }
 }

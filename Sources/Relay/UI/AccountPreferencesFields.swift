@@ -12,14 +12,14 @@ struct AccountPreferencesFields: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("分组与预算").font(.system(size: 12, weight: .semibold))
             VStack(alignment: .leading, spacing: 4) {
-                Text("分组名称").font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary)
+                Text("分组名称").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
                 TextField("可选，例如：生产、开发", text: $groupName).relayFormField()
             }
-            Toggle("置顶账号", isOn: $isPinned).font(.system(size: 14))
-                .toggleStyle(.switch).controlSize(.small)
+            Toggle("置顶账号", isOn: $isPinned).font(.system(size: 12))
+                .toggleStyle(.switch).controlSize(.mini)
             if provider != .workbuddy2api {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("每月预算").font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary)
+                    Text("每月预算").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
                     HStack(spacing: 8) {
                         TextField("留空关闭预算", text: $monthlyBudget).relayFormField()
                         Picker("预算币种", selection: $budgetCurrency) {

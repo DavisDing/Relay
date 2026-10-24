@@ -38,25 +38,25 @@ public struct AccountAddModalView: View {
     }
 
     public var body: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 12) {
             HStack(spacing: 8) {
                 Button(action: onDismiss) { Image(systemName: "chevron.left") }
-                    .buttonStyle(RelayCircularIconButtonStyle(diameter: 40))
+                    .buttonStyle(RelayCircularIconButtonStyle())
                     .help("返回首页")
                     .accessibilityLabel("返回首页")
                 Text("添加服务商账号")
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.system(size: 16, weight: .semibold))
                 Spacer()
             }
-            .frame(height: 56)
+            .frame(height: RelayVisualStyle.navigationHeight)
             .padding(.horizontal, 20)
             .padding(.top, 8)
 
             ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 12) {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("账号显示名称")
-                            .font(.system(size: 13, weight: .medium))
+                            .font(.system(size: 12, weight: .medium))
                             .foregroundColor(.secondary)
                         TextField("例如：主力生产、备用开发", text: $accountName)
                             .relayFormField()
@@ -64,7 +64,7 @@ public struct AccountAddModalView: View {
 
                     VStack(alignment: .leading, spacing: 6) {
                         Text("服务商平台")
-                            .font(.system(size: 13, weight: .medium))
+                            .font(.system(size: 12, weight: .medium))
                             .foregroundColor(.secondary)
                         Picker("", selection: $selectedProvider) {
                             ForEach(ProviderKind.supportedCases, id: \.self) { provider in
@@ -125,14 +125,20 @@ public struct AccountAddModalView: View {
                 .buttonStyle(RelaySecondaryCapsuleButtonStyle(isLoading: isTesting))
                 .disabled(isTesting || isSaving)
 
+                Spacer(minLength: 4)
+
+                Button("取消", action: onDismiss)
+                    .buttonStyle(RelayTextButtonStyle())
+                    .keyboardShortcut(.cancelAction)
+
                 Button("保存到本机", action: saveAccount)
                     .buttonStyle(RelayPrimaryCapsuleButtonStyle(isLoading: isSaving))
                     .disabled(isTesting || isSaving || accountName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-            .padding(8)
-            .relayFloatingBarSurface(cornerRadius: 32)
+            .padding(4)
+            .relayFloatingBarSurface()
             .padding(.horizontal, 16)
-            .padding(.bottom, 16)
+            .padding(.bottom, 12)
         }
         .frame(width: RelayVisualStyle.panelWidth, height: 520)
         .relayPanelSurface(cornerRadius: RelayVisualStyle.panelCornerRadius)
@@ -148,7 +154,7 @@ public struct AccountAddModalView: View {
             labeledField("Pipio User ID（纯数字）", text: $pipioUserId, placeholder: "例如：10283")
             VStack(alignment: .leading, spacing: 4) {
                 Text("Pipio 管理 Token（仅本机保存）")
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: 12, weight: .medium))
                     .foregroundColor(.secondary)
                 SecureField("sk-••••••••••••••••", text: $pipioToken)
                     .relayFormField()
@@ -163,7 +169,7 @@ public struct AccountAddModalView: View {
         VStack(alignment: .leading, spacing: 12) {
             labeledField("网关地址（本机 HTTP 或远端 HTTPS）", text: $workbuddyBaseURL, placeholder: "http://localhost:7863")
             VStack(alignment: .leading, spacing: 4) {
-                Text("网关 API Key（仅本机保存）").font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary)
+                Text("网关 API Key（仅本机保存）").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
                 SecureField("Bearer API Key", text: $workbuddyApiKey).relayFormField()
             }
             Text("从 /status 读取内部账号积分；管理操作需要网关启用 admin.enabled。")
@@ -175,7 +181,7 @@ public struct AccountAddModalView: View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("DeepSeek API Base URL")
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: 12, weight: .medium))
                     .foregroundColor(.secondary)
                 TextField("https://api.deepseek.com", text: $deepseekBaseURL)
                     .relayFormField()
@@ -186,7 +192,7 @@ public struct AccountAddModalView: View {
             }
             VStack(alignment: .leading, spacing: 4) {
                 Text("DeepSeek API Key（仅本机保存）")
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: 12, weight: .medium))
                     .foregroundColor(.secondary)
                 SecureField("sk-••••••••••••••••", text: $deepseekApiKey)
                     .relayFormField()
@@ -196,7 +202,7 @@ public struct AccountAddModalView: View {
             }
             VStack(alignment: .leading, spacing: 4) {
                 Text("DeepSeek 平台 userToken（可选）")
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: 12, weight: .medium))
                     .foregroundColor(.secondary)
                 SecureField("填写后获取历史用量和消费", text: $deepseekUserToken)
                     .relayFormField()
@@ -210,7 +216,7 @@ public struct AccountAddModalView: View {
     private func labeledField(_ title: String, text: Binding<String>, placeholder: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.system(size: 13, weight: .medium))
+                .font(.system(size: 12, weight: .medium))
                 .foregroundColor(.secondary)
             TextField(placeholder, text: text)
                 .relayFormField()

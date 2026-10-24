@@ -89,22 +89,22 @@ public struct AccountEditModalView: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
                 Button(action: onDismiss) { Image(systemName: "chevron.left") }
-                    .buttonStyle(RelayCircularIconButtonStyle(diameter: 40))
+                    .buttonStyle(RelayCircularIconButtonStyle())
                     .help("返回首页")
                     .accessibilityLabel("返回首页")
-                Text("编辑账号").font(.system(size: 17, weight: .semibold))
+                Text("编辑账号").font(.system(size: 16, weight: .semibold))
                 Spacer()
             }
-            .frame(height: 56)
+            .frame(height: RelayVisualStyle.navigationHeight)
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 12) {
                     if account.kind == .workbuddy2api {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("网关地址").font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary)
+                            Text("网关地址").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
                             TextField("http://localhost:7863", text: $gatewayURL).relayFormField()
                         }
                     } else {
@@ -112,12 +112,12 @@ public struct AccountEditModalView: View {
                     }
 
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("显示名称").font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary)
+                        Text("显示名称").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
                         TextField("账号名称", text: $displayName).relayFormField()
                     }
 
                     if account.kind != .workbuddy2api { VStack(alignment: .leading, spacing: 6) {
-                        Text("低余额阈值（账户原生币种）").font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary)
+                        Text("低余额阈值（账户原生币种）").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
                         TextField("20", text: $threshold).relayFormField()
                     } }
 
@@ -164,6 +164,7 @@ public struct AccountEditModalView: View {
             }
 
             HStack(spacing: 8) {
+                Spacer(minLength: 4)
                 Button("取消", action: onDismiss)
                     .buttonStyle(RelaySecondaryCapsuleButtonStyle())
                     .keyboardShortcut(.cancelAction)
@@ -175,8 +176,8 @@ public struct AccountEditModalView: View {
                 .buttonStyle(RelayPrimaryCapsuleButtonStyle(isLoading: isSaving))
                 .disabled(isSaving)
             }
-            .padding(8)
-            .relayFloatingBarSurface(cornerRadius: 32)
+            .padding(4)
+            .relayFloatingBarSurface()
         }
         .padding(20)
         .frame(width: RelayVisualStyle.panelWidth)

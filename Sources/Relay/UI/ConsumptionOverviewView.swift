@@ -8,7 +8,7 @@ struct ConsumptionOverviewView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("消费总览").font(.system(size: 17, weight: .semibold))
+                Text("消费总览").font(.system(size: 16, weight: .semibold))
                 Spacer()
                 Button("完成", action: onClose)
                     .buttonStyle(RelayTextButtonStyle())
@@ -30,7 +30,7 @@ struct ConsumptionOverviewView: View {
                             Text(amounts(group.amounts))
                             Text(daily ? "已记录 \(group.knownDays)/\(group.expectedDays) 个账户的当日消费" : "已记录 \(group.knownDays)/\(group.expectedDays) 个账户日")
                                 .font(.caption).foregroundStyle(.secondary)
-                        }.frame(maxWidth: .infinity, alignment: .leading).padding(16).relayGlassTile()
+                        }.frame(maxWidth: .infinity, alignment: .leading).padding(10).relayGlassTile(cornerRadius: 10)
                     }
                     Text("账户明细").font(.subheadline.bold())
                     ForEach(rows) { row in
@@ -53,7 +53,7 @@ struct ConsumptionOverviewView: View {
                                     Text("同口径完整数据不足，暂不显示环比").font(.caption).foregroundStyle(.secondary)
                                 }
                             }
-                        }.frame(maxWidth: .infinity, alignment: .leading).padding(16).relayGlassTile()
+                        }.frame(maxWidth: .infinity, alignment: .leading).padding(10).relayGlassTile(cornerRadius: 10)
                     }
                 }
             }

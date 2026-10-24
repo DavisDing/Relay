@@ -48,13 +48,13 @@ struct SettingsTabBar: View {
                 } label: {
                     VStack(spacing: 4) {
                         Image(systemName: tab.systemImage)
-                            .font(.system(size: 18, weight: .regular))
+                            .font(.system(size: 16, weight: .regular))
                             .symbolVariant(selectedTab == tab ? .fill : .none)
                         Text(tab.title)
-                            .font(.system(size: 11, weight: selectedTab == tab ? .semibold : .regular))
+                            .font(.system(size: 10, weight: selectedTab == tab ? .semibold : .regular))
                             .lineLimit(1)
                     }
-                    .frame(maxWidth: .infinity, minHeight: 52)
+                    .frame(maxWidth: .infinity, minHeight: 44)
                     .foregroundStyle(selectedTab == tab ? Color.primary : Color.secondary)
                     .background(
                         selectedTab == tab ? Color.primary.opacity(0.06) : Color.clear,
@@ -74,8 +74,8 @@ struct SettingsTabBar: View {
                 .accessibilityLabel(tab.title)
             }
         }
-        .padding(4)
-        .relayInsetSurface(cornerRadius: 16)
+        .padding(2)
+        .relayInsetSurface(cornerRadius: 12)
         .padding(.horizontal, 16)
     }
 }
@@ -86,8 +86,9 @@ struct SettingsPageScroll<Content: View>: View {
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 24, content: content)
-                .padding(16)
+            VStack(alignment: .leading, spacing: 16, content: content)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
         }
     }
 }

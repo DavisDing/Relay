@@ -55,7 +55,7 @@ struct SettingsDataPage: View {
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundColor(.secondary)
                 Toggle("月预算达到 80% / 100% 时通知", isOn: $budgetNotificationsEnabled)
-                    .toggleStyle(.switch).controlSize(.small)
+                    .toggleStyle(.switch).controlSize(.mini)
                 NotificationStatusPanel()
                 Text("预算按账户原币计算；未知、币种不同或过期的月消费不会触发通知。")
                     .font(.system(size: 10))

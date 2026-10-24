@@ -121,7 +121,7 @@ git diff --check
 - 历史默认 1 年，当前选项为一月、半年、一年、永久；低余额默认阈值 20，未知余额不提醒。
 - 菜单栏使用系统单色闪电，仅显示可核实今日消费数字；固定宽度为 70pt，未知消费只保留入口图标。
 - 共享原生材质由 `RelayVisualStyle` 管理：页面 `regularMaterial`、卡片 `thinMaterial`、嵌套状态 `ultraThinMaterial`。
-- `RelayVisualStyle` 同时管理 8pt 间距阶梯、16pt 卡片、48pt 主/次胶囊按钮、40pt 图标按钮与搜索框、输入聚焦描边和悬浮操作区。深色面板/卡片以黑色与 `#1C1C1E` 为底；减少透明度使用实色回退，减少动态效果关闭按压缩放与弹性过渡。实际图形界面验收仍需单独执行。
+- `RelayVisualStyle` 以替换前的 macOS UI 为尺寸参考：28pt 主/次胶囊按钮及搜索/表单输入，24pt 图标按钮，32pt 导航基准高度，12pt 按钮/正文。首页汇总金额 20pt、详情指标金额 16pt，卡片内边距 9～11pt，首页/详情底栏恢复单行排布；窗口外框保持原尺寸。它同时管理输入聚焦描边和紧凑悬浮操作区。深色面板/卡片以黑色与 `#1C1C1E` 为底；减少透明度使用实色回退，减少动态效果关闭按压缩放与弹性过渡。实际图形界面验收仍需单独执行。
 - 快捷键仅支持“显示/隐藏面板”和“刷新全部账户”，由 `GlobalShortcutService` 封装 Carbon `RegisterEventHotKey`，可分别留空；登录项使用 `SMAppService.mainApp`，需要实际应用包/系统环境证据。
 - 更新、打包流程分别见 `UpdateService`、[CI 与发布说明](CI_RELEASE.md)；workflow 存在不等于当前提交已发布。
 - DMG 文件图标使用正式 ICNS，嵌入 UDIF 文件内容并读回核验，完成后生成最终 checksum；不依赖 Finder 扩展属性。专项 `scripts/test-dmg-icon.sh` 验证数据复制后的图标和映像完整性，不代表 Finder 或真实发布下载已验收。

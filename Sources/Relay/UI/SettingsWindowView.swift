@@ -90,19 +90,19 @@ public struct SettingsWindowView: View {
         VStack(spacing: 0) {
             ZStack {
                 Text("设置")
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.system(size: 16, weight: .semibold))
 
                 HStack {
                     Button(action: onClose) {
                         Image(systemName: "chevron.left")
                     }
-                    .buttonStyle(RelayCircularIconButtonStyle(diameter: 40))
+                    .buttonStyle(RelayCircularIconButtonStyle())
                     .help("返回首页")
                     .accessibilityLabel("返回首页")
                     Spacer()
                 }
             }
-            .frame(height: 56)
+            .frame(height: RelayVisualStyle.navigationHeight)
             .padding(.horizontal, 16)
             .padding(.top, 8)
 
@@ -118,17 +118,18 @@ public struct SettingsWindowView: View {
 
             HStack {
                 Text(store.storageAvailability.isAvailable && storageWasAvailableOnOpen ? "设置会在关闭窗口时自动保存" : "本地数据未载入，本窗口不保存设置")
-                    .font(.system(size: 12))
+                    .font(.system(size: 10))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer()
                 Button("完成", action: onClose)
                     .buttonStyle(RelayPrimaryCapsuleButtonStyle())
-                    .frame(width: 96)
+                    .frame(width: 56)
             }
-            .padding(8)
-            .relayFloatingBarSurface(cornerRadius: 32)
-            .padding(16)
+            .padding(4)
+            .relayFloatingBarSurface()
+            .padding(.horizontal, 16)
+            .padding(.vertical, 6)
         }
         .frame(width: RelayVisualStyle.panelWidth, height: 520)
         .relayPanelSurface(cornerRadius: RelayVisualStyle.panelCornerRadius)
