@@ -50,11 +50,18 @@ struct DataTransferPanel: View {
                 }
                 DisclosureGroup("备份列表与目录") {
                     VStack(alignment: .leading, spacing: 8) {
-                        SettingsHint(backupDirectoryPath ?? "目录不可用，请前往「快捷键」重新授权。")
-                            .textSelection(.enabled)
-                        SettingsActionRow {
+                        HStack(spacing: 8) {
+                            Text(backupDirectoryPath ?? "目录不可用，请前往「快捷键」重新授权。")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                                .textSelection(.enabled)
+                                .help(backupDirectoryPath ?? "目录不可用，请前往「快捷键」重新授权。")
                             Button("打开目录") { openBackupDirectory() }
                                 .disabled(backupDirectoryPath == nil)
+                                .fixedSize()
                         }
                         if backupEntries.isEmpty { SettingsHint("尚无可用备份。") }
                         ForEach(backupEntries) { entry in
@@ -87,8 +94,13 @@ struct DataTransferPanel: View {
             SettingsSection("消费记录") {
                 DisclosureGroup("导出 CSV") {
                     VStack(alignment: .leading, spacing: 8) {
-                        DatePicker("开始", selection: $startDate, displayedComponents: .date)
-                        DatePicker("结束", selection: $endDate, displayedComponents: .date)
+                        HStack(spacing: 8) {
+                            DatePicker("开始", selection: $startDate, displayedComponents: .date)
+                                .frame(maxWidth: .infinity)
+                            DatePicker("结束", selection: $endDate, displayedComponents: .date)
+                                .frame(maxWidth: .infinity)
+                        }
+                        .datePickerStyle(.field)
                         Picker("账号", selection: $selectedAccountID) {
                             Text("全部账号").tag(Optional<UUID>.none)
                             ForEach(configurations) { account in Text(account.displayName).tag(Optional(account.id)) }

@@ -45,6 +45,13 @@ struct SettingsAboutPage: View {
             SettingsSection("应用信息") {
                 aboutInfoRow(title: "版本", value: appVersionText, systemImage: "tag")
                 latestVersionRow
+                if case .failed(let message) = updateState.status {
+                    Text(message)
+                        .font(.system(size: 10))
+                        .foregroundColor(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.leading, 28)
+                }
                 aboutInfoRow(title: "系统要求", value: "macOS 27.0 或更高版本", systemImage: "laptopcomputer")
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                     Image(systemName: "link")
@@ -61,12 +68,6 @@ struct SettingsAboutPage: View {
 
             Divider().opacity(0.4)
             SettingsSection("应用更新") {
-                if case .failed(let message) = updateState.status {
-                    Text(message)
-                        .font(.system(size: 11))
-                        .foregroundColor(.red)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
                 if let updateStatusMessage {
                     Text(updateStatusMessage)
                         .font(.system(size: 11))
@@ -149,7 +150,7 @@ struct SettingsAboutPage: View {
                 .foregroundStyle(Color.accentColor)
                 .fontWeight(.semibold)
         case .failed:
-            Text("检查失败")
+            Text("检查失败，重试")
                 .foregroundStyle(.red)
         }
     }
@@ -161,11 +162,14 @@ struct SettingsAboutPage: View {
         case .checking: return "正在检测更新"
         case .upToDate: return "无更新"
         case .available(let update): return "可下载 \(update.version)"
-        case .failed: return "检查失败"
+        case .failed(let message): return "检查失败：\(message)"
         }
     }
 
     private var latestVersionHelp: String {
+        if case .failed(let message) = updateState.status {
+            return "\(message) 点击重试。"
+        }
         if case .available = updateState.status {
             return "点击下载最新版本"
         }

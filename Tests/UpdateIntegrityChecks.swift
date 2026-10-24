@@ -67,6 +67,7 @@ enum UpdateIntegrityChecks {
         let digest = "sha256:" + hash(bytes)
         let goodAsset = asset(dmg, digest: digest, size: bytes.count)
         let goodMetadata = try metadata([asset(zip, digest: digest), goodAsset])
+        try await verifyCheckFailures(service: service, goodMetadata: goodMetadata)
 
         func install(_ data: Data, body: Data = bytes, status: Int = 200, finalURL: URL? = nil,
                      extra: [URL: UpdateIntegrityFixture] = [:]) {
@@ -247,7 +248,7 @@ enum UpdateIntegrityChecks {
             try await rejects(.downloadFailed, "non-complete HTTP download") { _ = try await service.download(update) }
         }
         UpdateIntegrityURLProtocol.install([metadataURL: UpdateIntegrityFixture(data: goodMetadata, status: 500)])
-        try await rejects(.invalidReleaseResponse, "metadata HTTP error") { _ = try await service.download(update) }
+        try await rejects(.releaseRequestFailed(statusCode: 500), "metadata HTTP error") { _ = try await service.download(update) }
         UpdateIntegrityURLProtocol.install([metadataURL: UpdateIntegrityFixture(data: goodMetadata, finalURL: allowedCDN)])
         try await rejects(.unsupportedDownloadURL, "metadata may not redirect to CDN") { _ = try await service.download(update) }
         UpdateIntegrityURLProtocol.install([metadataURL: UpdateIntegrityFixture(data: bytes)])
@@ -259,6 +260,67 @@ enum UpdateIntegrityChecks {
         try verifyRedirectPolicy(session: session, origin: url(dmg), allowedCDN: allowedCDN)
         try await verifyCleanup(service: service, update: update, root: root)
         print("PASSED: offline update integrity, digest/checksum fallback, version/source binding, URL/redirect policy, cleanup and manual DMG/ZIP downloads")
+    }
+
+    @MainActor private static func verifyCheckFailures(service: UpdateService, goodMetadata: Data) async throws {
+        let url = UpdateService.releasesAPIURL
+        for (status, headers, expected) in [
+            (403, ["X-RateLimit-Remaining": "0"], UpdateServiceError.releaseRateLimited),
+            (403, ["Retry-After": "60"], .releaseRateLimited),
+            (429, [:], .releaseRateLimited),
+            (403, [:], .releaseRequestFailed(statusCode: 403)),
+            (404, [:], .releaseNotFound),
+            (500, [:], .releaseRequestFailed(statusCode: 500)),
+            (503, [:], .releaseRequestFailed(statusCode: 503)),
+            (302, [:], .releaseRequestFailed(statusCode: 302))
+        ] {
+            UpdateIntegrityURLProtocol.install([
+                url: UpdateIntegrityFixture(data: goodMetadata, status: status, headers: headers)
+            ])
+            try await rejects(expected, "classify metadata HTTP \(status)") { _ = try await service.checkForUpdates() }
+            try verify(UpdateIntegrityURLProtocol.requestedURLs == [url], "No automatic retry loop or fallback host on HTTP failure")
+        }
+        UpdateIntegrityURLProtocol.install([
+            url: UpdateIntegrityFixture(data: goodMetadata, status: 429,
+                                       finalURL: URL(string: "https://evil.invalid/releases/latest")!)
+        ])
+        try await rejects(.unsupportedDownloadURL, "rate limit must not bypass source validation") {
+            _ = try await service.checkForUpdates()
+        }
+        for (code, expected) in [
+            (URLError.Code.notConnectedToInternet, UpdateServiceError.networkUnavailable),
+            (.dataNotAllowed, .networkUnavailable),
+            (.timedOut, .networkTimedOut),
+            (.cannotFindHost, .serverUnreachable),
+            (.dnsLookupFailed, .serverUnreachable),
+            (.cannotConnectToHost, .serverUnreachable),
+            (.networkConnectionLost, .serverUnreachable),
+            (.secureConnectionFailed, .secureConnectionFailed),
+            (.serverCertificateUntrusted, .secureConnectionFailed),
+            (.serverCertificateHasBadDate, .secureConnectionFailed),
+            (.serverCertificateHasUnknownRoot, .secureConnectionFailed),
+            (.serverCertificateNotYetValid, .secureConnectionFailed)
+        ] {
+            UpdateIntegrityURLProtocol.install([url: UpdateIntegrityFixture(data: Data(), error: code)])
+            try await rejects(expected, "classify metadata network error \(code.rawValue)") {
+                _ = try await service.checkForUpdates()
+            }
+        }
+
+        let state = RelayUpdateState(service: service)
+        UpdateIntegrityURLProtocol.install([url: UpdateIntegrityFixture(data: Data(), error: .timedOut)])
+        let failedResult = await state.checkForUpdates()
+        try verify(failedResult == nil && state.status == .failed(message: UpdateServiceError.networkTimedOut.localizedDescription),
+                   "Shared settings state retains an actionable failure reason")
+        UpdateIntegrityURLProtocol.install([url: UpdateIntegrityFixture(data: goodMetadata)])
+        let recoveredResult = await state.checkForUpdates()
+        guard case .available(let update) = recoveredResult else {
+            throw NSError(domain: "UpdateIntegrityChecks", code: 6,
+                          userInfo: [NSLocalizedDescriptionKey: "Manual retry did not recover"])
+        }
+        try verify(state.status == .available(update), "Successful retry clears the previous error")
+        try verify(UpdateIntegrityURLProtocol.requestedURLs == [url], "Manual retry sends exactly one metadata request")
+        print("PASSED: update HTTP/network failure diagnostics, strict source validation and manual retry recovery")
     }
 
     private static func verifyRedirectPolicy(session: URLSession, origin: URL, allowedCDN: URL) throws {
@@ -332,6 +394,8 @@ private struct UpdateIntegrityFixture {
     let data: Data
     var status: Int = 200
     var finalURL: URL? = nil
+    var headers: [String: String] = [:]
+    var error: URLError.Code? = nil
 }
 
 /// All URLSession requests, including unexpected ones, are handled here. No live
@@ -364,8 +428,14 @@ private final class UpdateIntegrityURLProtocol: URLProtocol, @unchecked Sendable
             client?.urlProtocol(self, didFailWithError: URLError(.resourceUnavailable))
             return
         }
+        if let error = fixture.error {
+            client?.urlProtocol(self, didFailWithError: URLError(error))
+            return
+        }
+        var headers = fixture.headers
+        headers["Content-Length"] = "\(fixture.data.count)"
         let response = HTTPURLResponse(url: fixture.finalURL ?? url, statusCode: fixture.status,
-                                       httpVersion: "HTTP/1.1", headerFields: ["Content-Length": "\(fixture.data.count)"])!
+                                       httpVersion: "HTTP/1.1", headerFields: headers)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: fixture.data)
         client?.urlProtocolDidFinishLoading(self)

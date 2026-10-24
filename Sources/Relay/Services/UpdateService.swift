@@ -78,6 +78,13 @@ public final class RelayUpdateState: ObservableObject {
 
 public enum UpdateServiceError: LocalizedError, Sendable, Equatable {
     case invalidReleaseResponse
+    case releaseRateLimited
+    case releaseNotFound
+    case releaseRequestFailed(statusCode: Int)
+    case networkUnavailable
+    case networkTimedOut
+    case serverUnreachable
+    case secureConnectionFailed
     case noMacOSArm64Asset
     case unsupportedDownloadURL
     case downloadDirectoryUnavailable
@@ -89,6 +96,20 @@ public enum UpdateServiceError: LocalizedError, Sendable, Equatable {
         switch self {
         case .invalidReleaseResponse:
             return "更新服务器返回的数据无效。"
+        case .releaseRateLimited:
+            return "GitHub 更新检查请求已被限流，请稍后重试。"
+        case .releaseNotFound:
+            return "GitHub 上暂未找到可用的正式版本，请稍后重试。"
+        case .releaseRequestFailed(let statusCode):
+            return "GitHub 更新检查失败（HTTP \(statusCode)），请稍后重试。"
+        case .networkUnavailable:
+            return "网络不可用，请连接网络后重试。"
+        case .networkTimedOut:
+            return "连接 GitHub 更新服务器超时，请稍后重试。"
+        case .serverUnreachable:
+            return "无法连接 GitHub 更新服务器，请检查网络或系统代理后重试。"
+        case .secureConnectionFailed:
+            return "无法与 GitHub 更新服务器建立安全连接，请检查系统时间及网络设置。"
         case .noMacOSArm64Asset:
             return "该版本没有可用的 macOS Apple Silicon 安装包。"
         case .unsupportedDownloadURL:
@@ -204,10 +225,28 @@ public struct UpdateService: Sendable {
     }
 
     private func fetchRelease(at url: URL) async throws -> GitHubRelease {
-        let (data, response) = try await session.data(
-            for: request(url, accept: "application/vnd.github+json"),
-            delegate: UpdateRedirectPolicy(origin: url, allowsAssetCDN: false)
-        )
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(
+                for: request(url, accept: "application/vnd.github+json"),
+                delegate: UpdateRedirectPolicy(origin: url, allowsAssetCDN: false)
+            )
+        } catch let error as URLError {
+            switch error.code {
+            case .notConnectedToInternet, .dataNotAllowed:
+                throw UpdateServiceError.networkUnavailable
+            case .timedOut:
+                throw UpdateServiceError.networkTimedOut
+            case .cannotFindHost, .dnsLookupFailed, .cannotConnectToHost, .networkConnectionLost:
+                throw UpdateServiceError.serverUnreachable
+            case .secureConnectionFailed, .serverCertificateHasBadDate, .serverCertificateUntrusted,
+                 .serverCertificateHasUnknownRoot, .serverCertificateNotYetValid:
+                throw UpdateServiceError.secureConnectionFailed
+            default:
+                throw error
+            }
+        }
         try validate(response, origin: url, allowsAssetCDN: false, error: .invalidReleaseResponse)
         let release: GitHubRelease
         do { release = try JSONDecoder().decode(GitHubRelease.self, from: data) }
@@ -316,7 +355,22 @@ public struct UpdateService: Sendable {
               Self.isAllowedDestination(finalURL, origin: origin, allowsAssetCDN: allowsAssetCDN) else {
             throw UpdateServiceError.unsupportedDownloadURL
         }
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { throw error }
+        guard let http = response as? HTTPURLResponse else { throw error }
+        guard http.statusCode == 200 else {
+            // Check the destination first. HTTP diagnostics must never relax the
+            // exact API origin/tag binding or the download validation policy.
+            if !allowsAssetCDN {
+                if http.statusCode == 429 || (http.statusCode == 403 && (
+                    http.value(forHTTPHeaderField: "X-RateLimit-Remaining") == "0"
+                    || http.value(forHTTPHeaderField: "Retry-After") != nil
+                )) {
+                    throw UpdateServiceError.releaseRateLimited
+                }
+                if http.statusCode == 404 { throw UpdateServiceError.releaseNotFound }
+                throw UpdateServiceError.releaseRequestFailed(statusCode: http.statusCode)
+            }
+            throw error
+        }
     }
 
     static func isSafeHTTPS(_ url: URL) -> Bool {
