@@ -184,14 +184,12 @@ public struct SettingsWindowView: View {
                 showTodayInMenuBar: $showTodayInMenuBar,
                 baseCurrency: $baseCurrency,
                 lowBalanceThreshold: $lowBalanceThreshold,
-                lowBalanceNotificationsEnabled: $lowBalanceNotificationsEnabled,
-                onManagePermissions: { selectedTab = .shortcuts }
+                lowBalanceNotificationsEnabled: $lowBalanceNotificationsEnabled
             )
         case .data:
             SettingsDataPage(
                 refreshIntervalMinutes: $refreshIntervalMinutes,
-                historyRetention: $historyRetention,
-                onManagePermissions: { selectedTab = .shortcuts }
+                historyRetention: $historyRetention
             )
         case .shortcuts:
             SettingsShortcutsPage(
@@ -210,7 +208,6 @@ public struct SettingsWindowView: View {
                 iCloudDirectoryURL: iCloudDirectoryURL,
                 showSyncConflict: $showSyncConflict,
                 syncConflictActionError: $syncConflictActionError,
-                onManagePermissions: { selectedTab = .shortcuts },
                 syncStatus: store.syncStatus,
                 syncConflictReport: store.syncConflictReport,
                 onResolveSyncConflict: onResolveSyncConflict,

@@ -8,7 +8,6 @@ struct SettingsGeneralPage: View {
     @Binding var baseCurrency: Currency
     @Binding var lowBalanceThreshold: String
     @Binding var lowBalanceNotificationsEnabled: Bool
-    let onManagePermissions: () -> Void
 
     var body: some View {
         SettingsPageScroll {
@@ -56,9 +55,6 @@ struct SettingsGeneralPage: View {
                 }
                 SettingsHint("折算余额低于阈值时，菜单栏与账户卡片标红预警。")
                 SettingsToggleRow(title: "低余额系统通知", isOn: $lowBalanceNotificationsEnabled)
-                SettingsActionRow {
-                    Button("通知权限…", action: onManagePermissions)
-                }
             }
         }
     }

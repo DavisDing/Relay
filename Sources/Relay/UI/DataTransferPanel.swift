@@ -5,7 +5,6 @@ import UniformTypeIdentifiers
 @MainActor
 struct DataTransferPanel: View {
     let actions: DataTransferActions
-    let onManagePermissions: () -> Void
     private let backups: LocalBackupService
     @State private var startDate = Calendar.current.date(byAdding: .day, value: -29, to: Date()) ?? Date()
     @State private var endDate = Date()
@@ -23,9 +22,8 @@ struct DataTransferPanel: View {
     @State private var message: String?
     @State private var isError = false
 
-    init(actions: DataTransferActions, onManagePermissions: @escaping () -> Void, backups: LocalBackupService = .shared) {
+    init(actions: DataTransferActions, backups: LocalBackupService = .shared) {
         self.actions = actions
-        self.onManagePermissions = onManagePermissions
         self.backups = backups
     }
 
@@ -47,7 +45,6 @@ struct DataTransferPanel: View {
                     Text("搬移待处理，有效副本已保留。")
                         .font(.system(size: 10)).foregroundStyle(.orange)
                     SettingsActionRow {
-                        Button("目录权限…", action: onManagePermissions)
                         Button("重试搬移") { retryMigration() }
                     }
                 }
@@ -56,7 +53,6 @@ struct DataTransferPanel: View {
                         SettingsHint(backupDirectoryPath ?? "目录不可用，请前往「快捷键」重新授权。")
                             .textSelection(.enabled)
                         SettingsActionRow {
-                            Button("目录权限…", action: onManagePermissions)
                             Button("打开目录") { openBackupDirectory() }
                                 .disabled(backupDirectoryPath == nil)
                         }

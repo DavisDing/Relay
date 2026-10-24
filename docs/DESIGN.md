@@ -27,7 +27,7 @@
 - `AccountDetailContainerView` / `AccountDetailView`：账户实时投影、固定近 7 日趋势、按日模型明细及明确口径的网关累计模型。
 - `SettingsDataPage`：刷新、历史保留、月预算通知。
 - `SettingsSyncPage` + `DataTransferPanel`：iCloud 普通文件同步、备份摘要/恢复、配置迁移；备份列表与 CSV 筛选使用折叠区，错误和搬移待处理状态不折叠。
-- `SettingsShortcutsPage` + `SettingsBackupDirectoryPanel`：全局快捷键、通知权限/测试、登录项、iCloud 与备份目录选择/重新授权；复用原文件同步/备份服务。
+- `SettingsShortcutsPage` + `SettingsBackupDirectoryPanel`：全局快捷键、通知权限/测试、登录项、iCloud 与备份目录选择/重新授权；复用原文件同步/备份服务；常规、数据与同步页不再提供重复的权限跳转按钮。
 - `SettingsPageLayout`：统一 12pt 正文、10pt 说明、紧凑分组、右侧 mini 开关及右对齐 28pt 胶囊操作行。设置内快捷键、导入/恢复及诊断 sheet 沿用同一控件体系。
 - `RelayMenuBarController`：菜单栏状态、Popover 和辅助窗口导航。
 

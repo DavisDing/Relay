@@ -7,7 +7,6 @@ struct SettingsSyncPage: View {
     let iCloudDirectoryURL: URL?
     @Binding var showSyncConflict: Bool
     @Binding var syncConflictActionError: String?
-    let onManagePermissions: () -> Void
     let syncStatus: SyncStatus
     let syncConflictReport: SyncConflictReport?
     let onResolveSyncConflict: ((SyncConflictDecision) async -> String?)?
@@ -26,11 +25,10 @@ struct SettingsSyncPage: View {
                 }
                 SettingsHint(iCloudDirectoryURL.map { "目录：" + $0.lastPathComponent } ?? "请先在「快捷键」页授权同步目录。")
                 SettingsHint("同步账户配置与聚合记录，不含凭据；异常不影响本机数据。")
-                SettingsActionRow {
-                    if syncConflictReport != nil {
+                if syncConflictReport != nil {
+                    SettingsActionRow {
                         Button("冲突详情…") { showSyncConflict = true }
                     }
-                    Button("目录权限…", action: onManagePermissions)
                 }
             }
             .sheet(isPresented: $showSyncConflict) {
@@ -68,7 +66,7 @@ struct SettingsSyncPage: View {
                 Text(backupErrorMessage).font(.footnote).foregroundStyle(.red)
             }
             if let transferActions {
-                DataTransferPanel(actions: transferActions, onManagePermissions: onManagePermissions)
+                DataTransferPanel(actions: transferActions)
             }
         }
     }

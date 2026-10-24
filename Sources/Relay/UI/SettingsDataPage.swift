@@ -5,7 +5,6 @@ struct SettingsDataPage: View {
     @Binding var refreshIntervalMinutes: String
     @Binding var historyRetention: HistoryRetention
     @AppStorage("budgetNotificationsEnabled") private var budgetNotificationsEnabled = false
-    let onManagePermissions: () -> Void
 
     var body: some View {
         SettingsPageScroll {
@@ -41,9 +40,6 @@ struct SettingsDataPage: View {
             SettingsSection("月预算通知") {
                 SettingsToggleRow(title: "月预算提醒", detail: "达到 80% / 100% 时通知。", isOn: $budgetNotificationsEnabled)
                 SettingsHint("按账户原币计算；未知、币种不同或过期的月消费不会触发通知。")
-                SettingsActionRow {
-                    Button("通知权限…", action: onManagePermissions)
-                }
             }
         }
     }
