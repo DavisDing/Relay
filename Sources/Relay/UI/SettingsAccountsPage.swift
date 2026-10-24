@@ -7,6 +7,7 @@ struct SettingsAccountsPage: View {
     @State private var selected = Set<UUID>()
     @State private var groupName = ""
     @State private var batchMessage: String?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let onEditAccount: ((AccountModel) -> Void)?
 
     private var managedAccounts: [AccountModel] {
@@ -27,20 +28,15 @@ struct SettingsAccountsPage: View {
                 if !managedAccounts.isEmpty {
                     HStack {
                         Button("全选") { selected = Set(managedAccounts.compactMap { UUID(uuidString: $0.id) }) }
-                        Button("取消选择") { selected.removeAll() }
+                        Button("取消选择") { selected.removeAll() }.disabled(selected.isEmpty)
                         Text("已选 \(selected.count) 项").font(.caption).foregroundStyle(.secondary)
-                    }.controlSize(.small)
+                    }.buttonStyle(RelayTextButtonStyle())
                     if !selected.isEmpty {
                         HStack {
-                            TextField("目标分组，留空取消", text: $groupName).textFieldStyle(.roundedBorder)
+                            TextField("目标分组，留空取消", text: $groupName).relayFormField()
                             Button("移动分组") { applyBatch(group: groupName, changeGroup: true) }
+                                .buttonStyle(RelayTextButtonStyle())
                         }
-                        HStack {
-                            Button("隐藏") { applyBatch(hidden: true) }
-                            Button("取消隐藏") { applyBatch(hidden: false) }
-                            Button("停用") { applyBatch(enabled: false) }
-                            Button("启用") { applyBatch(enabled: true) }
-                        }.controlSize(.small)
                     }
                     if let batchMessage { Text(batchMessage).font(.caption).foregroundStyle(.secondary) }
                 }
@@ -64,6 +60,34 @@ struct SettingsAccountsPage: View {
                 }
             }
         }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if !selected.isEmpty {
+                HStack(spacing: 0) {
+                    batchAction("隐藏", icon: "eye.slash") { applyBatch(hidden: true) }
+                    batchAction("显示", icon: "eye") { applyBatch(hidden: false) }
+                    batchAction("停用", icon: "pause.circle") { applyBatch(enabled: false) }
+                    batchAction("启用", icon: "play.circle") { applyBatch(enabled: true) }
+                }
+                .padding(8)
+                .relayFloatingBarSurface()
+                .padding(12)
+                .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.9), value: selected.isEmpty)
+    }
+
+    private func batchAction(_ title: String, icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 6) {
+                Image(systemName: icon).font(.system(size: 22, weight: .regular))
+                Text(title).font(.system(size: 12))
+            }
+            .foregroundStyle(.primary)
+            .frame(maxWidth: .infinity, minHeight: 52)
+        }
+        .buttonStyle(RelayCardButtonStyle())
+        .accessibilityLabel("\(title)选中的 \(selected.count) 个账户")
     }
 
     @ViewBuilder
@@ -75,12 +99,12 @@ struct SettingsAccountsPage: View {
                 })).labelsHidden().toggleStyle(.checkbox)
             }
             Image(systemName: account.kind == .workbuddy2api ? "point.3.connected.trianglepath.dotted" : "person.crop.circle")
-                .foregroundStyle(account.isHidden ? .secondary : Color.accentColor)
+                .foregroundStyle(.secondary)
                 .frame(width: 20)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(account.name)
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.system(size: 14, weight: .medium))
                         .lineLimit(1)
                     Text(account.kind.displayName)
                         .font(.system(size: 9))
@@ -122,7 +146,7 @@ struct SettingsAccountsPage: View {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.secondary)
-                    .frame(width: 24, height: 24)
+                    .frame(width: 32, height: 40)
                     .contentShape(Rectangle())
             }
             .menuStyle(.borderlessButton)
@@ -132,9 +156,10 @@ struct SettingsAccountsPage: View {
             .accessibilityHint(UUID(uuidString: account.id).map { store.health(for: $0).detail } ?? "")
             .accessibilityValue(account.isEnabled ? (account.isHidden ? "已启用，已隐藏" : "已启用") : (account.isHidden ? "已停用，已隐藏" : "已停用"))
         }
-        .padding(.horizontal, 9)
+        .frame(minHeight: 56)
+        .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .relayInsetSurface(cornerRadius: 9)
+        .relayInsetSurface(cornerRadius: 14)
     }
     private func applyBatch(group: String? = nil, changeGroup: Bool = false, hidden: Bool? = nil, enabled: Bool? = nil) {
         do {

@@ -132,29 +132,31 @@ public struct AccountDetailView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .layoutPriority(1)
 
-            Divider().opacity(0.35)
-            HStack {
+            VStack(spacing: 8) {
                 Text(compactFooterText)
-                    .font(.system(size: 10))
+                    .font(.system(size: 12))
                     .foregroundStyle(dataErrorMessage == nil ? Color.secondary : Color.red)
                     .help(footerDetailText)
                     .accessibilityLabel(footerDetailText)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                Spacer(minLength: 6)
-                if accountWebsiteURL != nil {
-                    Button(action: openAccountWebsite) {
-                        Label("在 Safari 打开", systemImage: "safari")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                HStack(spacing: 8) {
+                    if accountWebsiteURL != nil {
+                        Button(action: openAccountWebsite) {
+                            Label("官网", systemImage: "safari")
+                        }
+                        .buttonStyle(RelaySecondaryCapsuleButtonStyle())
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                    Button("返回首页", action: onClose)
+                        .buttonStyle(RelayPrimaryCapsuleButtonStyle())
                 }
-                Button("返回首页", action: onClose)
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
+                .padding(8)
+                .relayFloatingBarSurface(cornerRadius: 32)
             }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 11)
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 16)
         }
         .frame(width: RelayVisualStyle.panelWidth, height: 520)
         .relayPanelSurface(cornerRadius: RelayVisualStyle.panelCornerRadius)
@@ -215,6 +217,12 @@ public struct AccountDetailView: View {
 
     private var header: some View {
         HStack(spacing: 10) {
+            Button(action: onClose) {
+                Image(systemName: "chevron.left")
+            }
+            .buttonStyle(RelayCircularIconButtonStyle(diameter: 40))
+            .help("返回首页")
+            .accessibilityLabel("返回首页")
             Circle()
                 .fill(statusColor)
                 .frame(width: 8, height: 8)
@@ -233,17 +241,10 @@ public struct AccountDetailView: View {
                 .padding(.horizontal, 7)
                 .padding(.vertical, 3)
                 .background(.secondary.opacity(0.14), in: RoundedRectangle(cornerRadius: 4))
-            Button(action: onClose) {
-                Image(systemName: "xmark.circle.fill")
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-            .help("返回首页")
-            .accessibilityLabel("返回首页")
         }
-        .padding(.horizontal, 18)
-        .padding(.top, 14)
-        .padding(.bottom, 12)
+        .frame(minHeight: 56)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
     }
 
     private var creditDetails: some View {
@@ -444,23 +445,24 @@ private struct MetricCard: View {
     let accentColor: Color
 
     var body: some View {
-        VStack(alignment: .center, spacing: 4) {
+        VStack(alignment: .center, spacing: 8) {
             Text(title)
-                .font(.system(size: 10))
+                .font(.system(size: 12))
                 .foregroundStyle(.secondary)
             Text(value)
-                .font(.system(size: 16, weight: .bold))
+                .font(.system(size: 20, weight: .semibold))
+                .monospacedDigit()
                 .foregroundStyle(accentColor)
                 .lineLimit(1)
                 .minimumScaleFactor(0.72)
             Text(subTitle)
-                .font(.system(size: 9))
+                .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
         .multilineTextAlignment(.center)
         .frame(maxWidth: .infinity, alignment: .center)
-        .padding(9)
-        .relayGlassTile(cornerRadius: 10)
+        .padding(16)
+        .relayGlassTile()
     }
 }

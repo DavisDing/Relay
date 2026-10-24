@@ -8,9 +8,10 @@ struct ConsumptionOverviewView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("消费总览").font(.headline)
+                Text("消费总览").font(.system(size: 17, weight: .semibold))
                 Spacer()
                 Button("完成", action: onClose)
+                    .buttonStyle(RelayTextButtonStyle())
             }
             Text("按供应商日历统计当日或本月已记录消费；缺失数据不补零，币种分别展示。隐藏、停用及积分账户不参与。")
                 .font(.caption).foregroundStyle(.secondary)
@@ -29,7 +30,7 @@ struct ConsumptionOverviewView: View {
                             Text(amounts(group.amounts))
                             Text(daily ? "已记录 \(group.knownDays)/\(group.expectedDays) 个账户的当日消费" : "已记录 \(group.knownDays)/\(group.expectedDays) 个账户日")
                                 .font(.caption).foregroundStyle(.secondary)
-                        }.frame(maxWidth: .infinity, alignment: .leading).padding(10).relayInsetSurface(cornerRadius: 10)
+                        }.frame(maxWidth: .infinity, alignment: .leading).padding(16).relayGlassTile()
                     }
                     Text("账户明细").font(.subheadline.bold())
                     ForEach(rows) { row in
@@ -52,11 +53,11 @@ struct ConsumptionOverviewView: View {
                                     Text("同口径完整数据不足，暂不显示环比").font(.caption).foregroundStyle(.secondary)
                                 }
                             }
-                        }.frame(maxWidth: .infinity, alignment: .leading).padding(10).relayInsetSurface(cornerRadius: 10)
+                        }.frame(maxWidth: .infinity, alignment: .leading).padding(16).relayGlassTile()
                     }
                 }
             }
-        }.padding(20).frame(width: RelayVisualStyle.panelWidth, height: 480).relayPanelSurface(cornerRadius: 14)
+        }.padding(16).frame(width: RelayVisualStyle.panelWidth, height: 480).relayPanelSurface()
     }
     private func amounts(_ values: [MoneyValue]) -> String {
         values.isEmpty ? "未知" : values.map { RelayNumberFormatter.money($0.amount, currency: $0.currency) }.joined(separator: " · ")

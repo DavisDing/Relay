@@ -90,46 +90,45 @@ public struct SettingsWindowView: View {
         VStack(spacing: 0) {
             ZStack {
                 Text("设置")
-                    .font(.system(size: 16, weight: .bold))
+                    .font(.system(size: 17, weight: .semibold))
 
                 HStack {
-                    Spacer()
                     Button(action: onClose) {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.secondary)
+                        Image(systemName: "chevron.left")
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(RelayCircularIconButtonStyle(diameter: 40))
                     .help("返回首页")
                     .accessibilityLabel("返回首页")
+                    Spacer()
                 }
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 14)
+            .frame(height: 56)
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
 
             SettingsTabBar(selectedTab: $selectedTab)
-
-            Divider().opacity(0.3)
 
             selectedSettingsPage
                 .background(RelayInitialFocus().id(selectedTab).frame(width: 0, height: 0).accessibilityHidden(true))
                 .disabled(!store.storageAvailability.isAvailable && selectedTab != .about)
                 .frame(maxHeight: .infinity)
-                .relayGlassTile(cornerRadius: 14)
+                .relayGlassTile()
                 .padding(.horizontal, 16)
-
-            Divider().opacity(0.3)
+                .padding(.top, 12)
 
             HStack {
                 Text(store.storageAvailability.isAvailable && storageWasAvailableOnOpen ? "设置会在关闭窗口时自动保存" : "本地数据未载入，本窗口不保存设置")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.tertiary)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 Spacer()
                 Button("完成", action: onClose)
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
+                    .buttonStyle(RelayPrimaryCapsuleButtonStyle())
+                    .frame(width: 96)
             }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 11)
+            .padding(8)
+            .relayFloatingBarSurface(cornerRadius: 32)
+            .padding(16)
         }
         .frame(width: RelayVisualStyle.panelWidth, height: 520)
         .relayPanelSurface(cornerRadius: RelayVisualStyle.panelCornerRadius)

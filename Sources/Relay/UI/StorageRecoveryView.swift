@@ -13,7 +13,7 @@ struct StorageRecoveryView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack { Text("从备份恢复损坏数据").font(.headline); Spacer(); Button("关闭", action: onClose).disabled(busy) }
+            HStack { Text("从备份恢复损坏数据").font(.headline); Spacer(); Button("关闭", action: onClose).buttonStyle(RelayTextButtonStyle()).disabled(busy) }
             Text("恢复前会保留损坏原文件。备份不含凭据，恢复后请重新录入账户凭据；同步保持关闭。")
                 .font(.caption).foregroundStyle(.secondary)
             if entries.isEmpty { Text("未找到有效备份，请检查原备份目录授权。") }
@@ -48,7 +48,7 @@ struct StorageRecoveryView: View {
                         do { try await store.restoreDamagedStorage(preview); onClose() }
                         catch { message = error.localizedDescription; self.preview = nil }
                     }
-                }.buttonStyle(.borderedProminent)
+                }.buttonStyle(RelayPrimaryCapsuleButtonStyle(isLoading: busy))
             }
             if busy { ProgressView() }
             if let message { Text(message).font(.caption).foregroundStyle(.red).textSelection(.enabled) }

@@ -39,34 +39,32 @@ public struct AccountAddModalView: View {
 
     public var body: some View {
         VStack(spacing: 16) {
-            HStack {
+            HStack(spacing: 8) {
+                Button(action: onDismiss) { Image(systemName: "chevron.left") }
+                    .buttonStyle(RelayCircularIconButtonStyle(diameter: 40))
+                    .help("返回首页")
+                    .accessibilityLabel("返回首页")
                 Text("添加服务商账号")
-                    .font(.system(size: 16, weight: .bold))
+                    .font(.system(size: 17, weight: .semibold))
                 Spacer()
-                Button(action: onDismiss) {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundColor(.secondary)
-                }
-                .buttonStyle(.plain)
-                .help("返回首页")
-                .accessibilityLabel("返回首页")
             }
+            .frame(height: 56)
             .padding(.horizontal, 20)
-            .padding(.top, 16)
+            .padding(.top, 8)
 
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 14) {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("账号显示名称")
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.system(size: 13, weight: .medium))
                             .foregroundColor(.secondary)
                         TextField("例如：主力生产、备用开发", text: $accountName)
-                            .textFieldStyle(.roundedBorder)
+                            .relayFormField()
                     }
 
                     VStack(alignment: .leading, spacing: 6) {
                         Text("服务商平台")
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.system(size: 13, weight: .medium))
                             .foregroundColor(.secondary)
                         Picker("", selection: $selectedProvider) {
                             ForEach(ProviderKind.supportedCases, id: \.self) { provider in
@@ -120,34 +118,23 @@ public struct AccountAddModalView: View {
 
             Divider().opacity(0.3)
 
-            HStack {
+            HStack(spacing: 8) {
                 Button(action: testConnection) {
-                    HStack(spacing: 4) {
-                        if isTesting { ProgressView().controlSize(.small) }
-                        else { Image(systemName: "bolt.badge.checkmark") }
-                        Text("测活与探测能力")
-                    }
+                    Label("测试连接", systemImage: "bolt.badge.checkmark")
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.regular)
+                .buttonStyle(RelaySecondaryCapsuleButtonStyle(isLoading: isTesting))
                 .disabled(isTesting || isSaving)
 
-                Spacer()
-
-                Button("取消", action: onDismiss)
-                    .buttonStyle(.plain)
-                    .foregroundColor(.secondary)
-                    .padding(.trailing, 8)
-
-                Button(isSaving ? "保存中…" : "保存到本机", action: saveAccount)
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.regular)
+                Button("保存到本机", action: saveAccount)
+                    .buttonStyle(RelayPrimaryCapsuleButtonStyle(isLoading: isSaving))
                     .disabled(isTesting || isSaving || accountName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-            .padding(.horizontal, 20)
+            .padding(8)
+            .relayFloatingBarSurface(cornerRadius: 32)
+            .padding(.horizontal, 16)
             .padding(.bottom, 16)
         }
-        .frame(width: RelayVisualStyle.panelWidth, height: 500)
+        .frame(width: RelayVisualStyle.panelWidth, height: 520)
         .relayPanelSurface(cornerRadius: RelayVisualStyle.panelCornerRadius)
     }
 
@@ -161,10 +148,10 @@ public struct AccountAddModalView: View {
             labeledField("Pipio User ID（纯数字）", text: $pipioUserId, placeholder: "例如：10283")
             VStack(alignment: .leading, spacing: 4) {
                 Text("Pipio 管理 Token（仅本机保存）")
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.system(size: 13, weight: .medium))
                     .foregroundColor(.secondary)
                 SecureField("sk-••••••••••••••••", text: $pipioToken)
-                    .textFieldStyle(.roundedBorder)
+                    .relayFormField()
                 Text("不使用 Keychain；仅写入 Relay 私有数据目录，文件权限 0600")
                     .font(.system(size: 10))
                     .foregroundColor(.secondary.opacity(0.8))
@@ -176,8 +163,8 @@ public struct AccountAddModalView: View {
         VStack(alignment: .leading, spacing: 12) {
             labeledField("网关地址（本机 HTTP 或远端 HTTPS）", text: $workbuddyBaseURL, placeholder: "http://localhost:7863")
             VStack(alignment: .leading, spacing: 4) {
-                Text("网关 API Key（仅本机保存）").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
-                SecureField("Bearer API Key", text: $workbuddyApiKey).textFieldStyle(.roundedBorder)
+                Text("网关 API Key（仅本机保存）").font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary)
+                SecureField("Bearer API Key", text: $workbuddyApiKey).relayFormField()
             }
             Text("从 /status 读取内部账号积分；管理操作需要网关启用 admin.enabled。")
                 .font(.system(size: 10)).foregroundStyle(.secondary)
@@ -188,10 +175,10 @@ public struct AccountAddModalView: View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("DeepSeek API Base URL")
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.system(size: 13, weight: .medium))
                     .foregroundColor(.secondary)
                 TextField("https://api.deepseek.com", text: $deepseekBaseURL)
-                    .textFieldStyle(.roundedBorder)
+                    .relayFormField()
                     .disabled(true)
                 Text("余额使用官方接口返回的真实人民币，不套用 Pipio 汇率")
                     .font(.system(size: 10))
@@ -199,20 +186,20 @@ public struct AccountAddModalView: View {
             }
             VStack(alignment: .leading, spacing: 4) {
                 Text("DeepSeek API Key（仅本机保存）")
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.system(size: 13, weight: .medium))
                     .foregroundColor(.secondary)
                 SecureField("sk-••••••••••••••••", text: $deepseekApiKey)
-                    .textFieldStyle(.roundedBorder)
+                    .relayFormField()
                 Text("不使用 Keychain；仅写入 Relay 私有数据目录，文件权限 0600")
                     .font(.system(size: 10))
                     .foregroundColor(.secondary.opacity(0.8))
             }
             VStack(alignment: .leading, spacing: 4) {
                 Text("DeepSeek 平台 userToken（可选）")
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.system(size: 13, weight: .medium))
                     .foregroundColor(.secondary)
                 SecureField("填写后获取历史用量和消费", text: $deepseekUserToken)
-                    .textFieldStyle(.roundedBorder)
+                    .relayFormField()
                 Text("不填写只获取余额；填写后首次回填最近 7 天。仅使用你手动输入的 token，不读取浏览器 Cookie；平台历史接口是内部接口，可能失效。")
                     .font(.system(size: 10))
                     .foregroundColor(.secondary.opacity(0.8))
@@ -223,10 +210,10 @@ public struct AccountAddModalView: View {
     private func labeledField(_ title: String, text: Binding<String>, placeholder: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.system(size: 12, weight: .medium))
+                .font(.system(size: 13, weight: .medium))
                 .foregroundColor(.secondary)
             TextField(placeholder, text: text)
-                .textFieldStyle(.roundedBorder)
+                .relayFormField()
         }
     }
 

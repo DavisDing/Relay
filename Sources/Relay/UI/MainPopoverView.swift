@@ -12,6 +12,7 @@ public struct MainPopoverView: View {
     @State private var showStorageRecovery = false
     @State private var accountSearch = ""
     @State private var accountGroup: String?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private let initialGlobalShortcutConfiguration: GlobalShortcutConfiguration
     private let onApplyGlobalShortcut: ((GlobalShortcutConfiguration) -> GlobalShortcutRegistrationOutcome)?
@@ -132,8 +133,13 @@ public struct MainPopoverView: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Text("Relay 额度监控")
-                .font(.system(size: 16, weight: .bold))
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Relay 额度监控")
+                    .font(.system(size: 17, weight: .semibold))
+                Text("基准 · \(store.settings.baseCurrency.rawValue) ¥")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
                 .contextMenu {
                     Button(action: onPresentSettings) {
                         Label("设置…", systemImage: "gearshape")
@@ -148,21 +154,12 @@ public struct MainPopoverView: View {
 
             Spacer(minLength: 8)
 
-            Text("基准: \(store.settings.baseCurrency.rawValue) ¥")
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(.blue)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
-                .background(.blue.opacity(0.09), in: Capsule())
-                .overlay(Capsule().stroke(.blue.opacity(0.6), lineWidth: 1))
-
             Button {
                 homeAmountsHidden.toggle()
             } label: {
                 Image(systemName: homeAmountsHidden ? "eye.slash" : "eye")
-                    .frame(width: 18, height: 18)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(RelayCircularIconButtonStyle(diameter: 40, isSelected: homeAmountsHidden))
             .help(homeAmountsHidden ? "显示首页金额与积分" : "隐藏首页金额与积分")
             .accessibilityLabel(homeAmountsHidden ? "显示首页金额与积分" : "隐藏首页金额与积分")
 
@@ -176,15 +173,16 @@ public struct MainPopoverView: View {
                         Image(systemName: "arrow.clockwise")
                     }
                 }
-                .frame(width: 18, height: 18)
             }
-            .buttonStyle(.plain)
-            .disabled(!store.storageAvailability.isAvailable)
+            .buttonStyle(RelayCircularIconButtonStyle(diameter: 40))
+            .disabled(!store.storageAvailability.isAvailable || store.isRefreshing)
             .help("立即同步并刷新账户级汇率")
+            .accessibilityLabel(store.isRefreshing ? "正在刷新账户" : "刷新全部账户")
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 17)
-        .padding(.bottom, 12)
+        .frame(height: 56)
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .padding(.bottom, 8)
     }
 
     private var storageUnavailableView: some View {
@@ -197,8 +195,10 @@ public struct MainPopoverView: View {
                 .font(.caption).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
             Button("重新读取") { store.retryOpeningStorage() }
+                .buttonStyle(RelayPrimaryCapsuleButtonStyle())
             if store.storageAvailability == .unavailable(.corruptData) {
                 Button("从备份恢复…") { showStorageRecovery = true }
+                    .buttonStyle(RelaySecondaryCapsuleButtonStyle())
             }
         }
         .padding(24)
@@ -207,7 +207,7 @@ public struct MainPopoverView: View {
 
     private var dashboard: some View {
         ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 16) {
                 if let error = store.globalErrorMessage ?? store.syncErrorMessage {
                     Label(error, systemImage: "exclamationmark.triangle.fill")
                         .font(.system(size: 10, weight: .medium))
@@ -215,7 +215,7 @@ public struct MainPopoverView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 9)
                         .padding(.vertical, 7)
-                        .background(.red.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+                        .relayInsetSurface(cornerRadius: 12)
                 } else if hasAnyError {
                     Label("部分账号同步失败，已保留上次成功数据", systemImage: "exclamationmark.triangle.fill")
                         .font(.system(size: 10, weight: .medium))
@@ -223,7 +223,7 @@ public struct MainPopoverView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 9)
                         .padding(.vertical, 7)
-                        .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+                        .relayInsetSurface(cornerRadius: 12)
                 }
 
                 if visibleTopLevelAccounts.contains(where: { $0.kind != .workbuddy2api }) {
@@ -238,8 +238,8 @@ public struct MainPopoverView: View {
                         summaryCard(title: "今日总消耗",
                             value: homeAmount(totalTodaySpend.map { RelayNumberFormatter.money($0, currency: store.settings.baseCurrency) } ?? "--"),
                             subtitle: totalTodaySpend == nil ? "数据不完整，已不参与统计" : "全量统计（已完整）",
-                            accent: totalTodaySpend == nil ? .primary : .orange)
-                        }.buttonStyle(.plain).frame(maxWidth: .infinity)
+                            accent: .primary)
+                        }.buttonStyle(RelayCardButtonStyle()).frame(maxWidth: .infinity)
                             .help("查看当日与月度消费")
                             .accessibilityHint("打开当日与月度消费总览")
                     }
@@ -258,23 +258,12 @@ public struct MainPopoverView: View {
                         .font(.system(size: 10)).foregroundStyle(.secondary)
                 }
                 HStack(spacing: 8) {
-                    Text("已连接账号 (\(visibleDashboardAccounts.count))")
+                    Text("账号 · \(visibleDashboardAccounts.count)")
                         .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.secondary)
                     Spacer(minLength: 4)
-                    HStack(spacing: 7) {
-                        Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                        TextField("搜索账号", text: $accountSearch)
-                            .textFieldStyle(.plain)
-                            .accessibilityLabel("搜索账号、服务商或分组")
-                        if !accountSearch.isEmpty {
-                            Button { accountSearch = "" } label: { Image(systemName: "xmark.circle.fill") }
-                                .buttonStyle(.plain).foregroundStyle(.secondary)
-                        }
-                    }
-                    .font(.system(size: 11))
-                    .padding(.horizontal, 9).padding(.vertical, 7)
-                    .relayGlassTile(cornerRadius: 9)
-                    .frame(minWidth: 100, maxWidth: 165)
+                    RelaySearchField(text: $accountSearch)
+                        .frame(minWidth: 100, maxWidth: 180)
                     if !organizationGroups.isEmpty {
                         Menu {
                             Button("全部分组") { accountGroup = nil }
@@ -295,10 +284,10 @@ public struct MainPopoverView: View {
                     VStack(spacing: 6) {
                         Text("没有匹配的账号").font(.caption).foregroundStyle(.secondary)
                         Button("清除筛选") { accountSearch = ""; accountGroup = nil }
-                            .buttonStyle(.plain).font(.caption)
+                            .buttonStyle(RelayTextButtonStyle())
                     }.frame(maxWidth: .infinity).padding(12)
                 }
-                LazyVStack(spacing: 7) {
+                LazyVStack(spacing: 12) {
                     ForEach(organizationProviderOrder, id: \.self) { kind in
                         let grouped = visibleDashboardAccounts.filter { $0.kind == kind }
                         if !grouped.isEmpty {
@@ -308,30 +297,33 @@ public struct MainPopoverView: View {
                 }
             }
             .padding(.horizontal, 16)
-            .padding(.bottom, 9)
+            .padding(.bottom, 16)
         }
     }
 
     private var footer: some View {
-        HStack(spacing: 8) {
+        VStack(spacing: 8) {
             Text(lastSyncText)
-                .font(.system(size: 10))
+                .font(.system(size: 12))
                 .foregroundStyle(.secondary)
-            Spacer(minLength: 4)
-            Button(action: onPresentAddAccount) {
-                Label("添加", systemImage: "plus")
+                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 8) {
+                Button(action: onPresentAddAccount) {
+                    Label("添加账号", systemImage: "plus")
+                }
+                .disabled(!store.storageAvailability.isAvailable)
+                .buttonStyle(RelayPrimaryCapsuleButtonStyle())
+                Button(action: onPresentSettings) {
+                    Label("设置", systemImage: "gearshape")
+                }
+                .buttonStyle(RelaySecondaryCapsuleButtonStyle())
             }
-            .disabled(!store.storageAvailability.isAvailable)
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            Button(action: onPresentSettings) {
-                Label("设置", systemImage: "gearshape")
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
+            .padding(8)
+            .relayFloatingBarSurface(cornerRadius: 32)
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .padding(.bottom, 16)
     }
 
     private func workBuddyTodaySpend(for accounts: [AccountModel]) -> Decimal? {
@@ -355,36 +347,40 @@ public struct MainPopoverView: View {
     }
 
     private func summaryCard(title: String, value: String, subtitle: String, accent: Color) -> some View {
-        VStack(alignment: .center, spacing: 4) {
+        VStack(alignment: .center, spacing: 8) {
             Text(title)
-                .font(.system(size: 10))
+                .font(.system(size: 12))
                 .foregroundStyle(.secondary)
             Text(value)
-                .font(.system(size: 20, weight: .bold))
+                .font(.system(size: 24, weight: .semibold))
+                .monospacedDigit()
                 .foregroundStyle(accent)
                 .lineLimit(1)
                 .minimumScaleFactor(0.72)
             Text(subtitle)
-                .font(.system(size: 9))
-                .foregroundStyle(subtitle.contains("运行正常") ? .green : .secondary)
-                .lineLimit(1)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .frame(height: 28, alignment: .top)
         }
         .multilineTextAlignment(.center)
         .frame(maxWidth: .infinity, alignment: .center)
-        .padding(11)
-        .relayGlassTile(cornerRadius: 12)
+        .padding(16)
+        .relayGlassTile()
     }
 
     private func providerGroup(_ kind: ProviderKind, accounts: [AccountModel]) -> some View {
-        VStack(spacing: 7) {
+        VStack(spacing: 12) {
             Button {
-                if !expandedProviders.insert(kind).inserted { expandedProviders.remove(kind) }
+                withAnimation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 1)) {
+                    if !expandedProviders.insert(kind).inserted { expandedProviders.remove(kind) }
+                }
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: expandedProviders.contains(kind) ? "chevron.down" : "chevron.right")
                         .font(.system(size: 10, weight: .semibold))
                     Text(kind.displayName).font(.system(size: 13, weight: .semibold))
-                    Text("\(accounts.count) 个账号").font(.system(size: 10)).foregroundStyle(.secondary)
+                    Text("\(accounts.count)").font(.system(size: 12)).foregroundStyle(.secondary)
                     Spacer()
                     VStack(alignment: .trailing, spacing: 3) {
                         if kind == .workbuddy2api {
@@ -398,9 +394,12 @@ public struct MainPopoverView: View {
                         }
                     }.font(.system(size: 10)).foregroundStyle(.secondary)
                 }.contentShape(Rectangle())
-            }.buttonStyle(.plain)
-                .padding(11).relayGlassTile(cornerRadius: 11)
+                .frame(minHeight: 32)
+                .padding(16)
+                .relayGlassTile()
+            }.buttonStyle(RelayCardButtonStyle())
                 .accessibilityLabel("\(kind.displayName) 分组，\(accounts.count) 个账号")
+                .accessibilityValue(expandedProviders.contains(kind) || !accountSearch.isEmpty || accountGroup != nil ? "已展开" : "已折叠")
             if expandedProviders.contains(kind) || !accountSearch.isEmpty || accountGroup != nil {
                 ForEach(accounts) { account in accountRow(account).padding(.leading, 12) }
             }
@@ -420,7 +419,7 @@ public struct MainPopoverView: View {
                     VStack(alignment: .leading, spacing: 5) {
                         HStack(spacing: 4) {
                             Text(account.name)
-                                .font(.system(size: 12, weight: .semibold))
+                                .font(.system(size: 14, weight: .medium))
                                 .foregroundStyle(.primary)
                                 .lineLimit(1)
                             if AccountOrganizationService.configuration(for: account, in: store.accountConfigurations)?.isPinned == true {
@@ -461,7 +460,7 @@ public struct MainPopoverView: View {
                 }
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(RelayCardButtonStyle())
             .accessibilityLabel("查看 \(account.name) 的详情与走势")
             .accessibilityValue(healthDescription(for: account))
             .help(healthDescription(for: account))
@@ -492,7 +491,7 @@ public struct MainPopoverView: View {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.secondary)
-                    .frame(width: 24, height: 32)
+                    .frame(width: 32, height: 40)
                     .contentShape(Rectangle())
             }
             .menuStyle(.borderlessButton)
@@ -500,10 +499,11 @@ public struct MainPopoverView: View {
             .help("账号操作")
             .accessibilityLabel("\(account.name) 的账号操作")
         }
-        .padding(.leading, 10)
-        .padding(.trailing, 5)
-        .padding(.vertical, 9)
-        .relayGlassTile(cornerRadius: 11)
+        .frame(minHeight: 56)
+        .padding(.leading, 16)
+        .padding(.trailing, 8)
+        .padding(.vertical, 8)
+        .relayGlassTile()
     }
 
     private var hiddenAccountsStateView: some View {
@@ -524,7 +524,8 @@ public struct MainPopoverView: View {
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(RelayPrimaryCapsuleButtonStyle())
+            .padding(.horizontal, 24)
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -551,7 +552,8 @@ public struct MainPopoverView: View {
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(RelayPrimaryCapsuleButtonStyle())
+            .padding(.horizontal, 24)
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

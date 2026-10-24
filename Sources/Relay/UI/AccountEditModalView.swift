@@ -90,34 +90,35 @@ public struct AccountEditModalView: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Text("编辑账号").font(.system(size: 16, weight: .bold))
-                Spacer()
-                Button(action: onDismiss) { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
-                    .buttonStyle(.plain)
+            HStack(spacing: 8) {
+                Button(action: onDismiss) { Image(systemName: "chevron.left") }
+                    .buttonStyle(RelayCircularIconButtonStyle(diameter: 40))
                     .help("返回首页")
                     .accessibilityLabel("返回首页")
+                Text("编辑账号").font(.system(size: 17, weight: .semibold))
+                Spacer()
             }
+            .frame(height: 56)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     if account.kind == .workbuddy2api {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("网关地址").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
-                            TextField("http://localhost:7863", text: $gatewayURL).textFieldStyle(.roundedBorder)
+                            Text("网关地址").font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary)
+                            TextField("http://localhost:7863", text: $gatewayURL).relayFormField()
                         }
                     } else {
                         Text(account.baseURL).font(.system(size: 11)).foregroundStyle(.secondary)
                     }
 
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("显示名称").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
-                        TextField("账号名称", text: $displayName).textFieldStyle(.roundedBorder)
+                        Text("显示名称").font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary)
+                        TextField("账号名称", text: $displayName).relayFormField()
                     }
 
                     if account.kind != .workbuddy2api { VStack(alignment: .leading, spacing: 6) {
-                        Text("低余额阈值（账户原生币种）").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
-                        TextField("20", text: $threshold).textFieldStyle(.roundedBorder)
+                        Text("低余额阈值（账户原生币种）").font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary)
+                        TextField("20", text: $threshold).relayFormField()
                     } }
 
                     if account.kind != .workbuddy2api && (account.kind == .pipio || account.currency == .usd) {
@@ -139,14 +140,14 @@ public struct AccountEditModalView: View {
                     Text("替换凭据（可选，留空保持不变）")
                         .font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
                     SecureField(account.kind == .pipio ? "新的管理令牌" : "新的 API Key", text: $replacementSecret)
-                        .textFieldStyle(.roundedBorder)
+                        .relayFormField()
                     if account.kind == .pipio {
                         TextField("新的 Pipio-User 数值 ID", text: $replacementUserID)
-                            .textFieldStyle(.roundedBorder)
+                            .relayFormField()
                     }
                     if account.kind == .deepseek {
                         SecureField("新的平台 userToken（留空保持不变）", text: $replacementDeepSeekUserToken)
-                            .textFieldStyle(.roundedBorder)
+                            .relayFormField()
                         Toggle("清空已保存的 userToken", isOn: $clearDeepSeekUserToken)
                             .font(.system(size: 11))
                         Text("不填写且不勾选不会修改；填写后用于历史用量；勾选会清空并恢复为仅查询余额。")
@@ -162,17 +163,20 @@ public struct AccountEditModalView: View {
                 Text(errorMessage).font(.system(size: 11)).foregroundStyle(.red)
             }
 
-            HStack {
-                Spacer()
-                Button("取消", action: onDismiss).keyboardShortcut(.cancelAction)
+            HStack(spacing: 8) {
+                Button("取消", action: onDismiss)
+                    .buttonStyle(RelaySecondaryCapsuleButtonStyle())
+                    .keyboardShortcut(.cancelAction)
                 Button {
                     save()
                 } label: {
-                    if isSaving { ProgressView().controlSize(.small) } else { Text("保存") }
+                    Text("保存")
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(RelayPrimaryCapsuleButtonStyle(isLoading: isSaving))
                 .disabled(isSaving)
             }
+            .padding(8)
+            .relayFloatingBarSurface(cornerRadius: 32)
         }
         .padding(20)
         .frame(width: RelayVisualStyle.panelWidth)
@@ -230,7 +234,7 @@ public struct AccountEditModalView: View {
             HStack {
                 Text("1 USD =")
                 TextField("自动（可手动填写）", text: $manualRate)
-                    .textFieldStyle(.roundedBorder)
+                    .relayFormField()
                     .accessibilityLabel("手动美元人民币汇率")
                 Text("CNY")
             }

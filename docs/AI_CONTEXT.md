@@ -70,7 +70,7 @@ RelayStore / AccountService / RefreshScheduler / RefreshCoordinator
 
 ### 当前 UI 约定
 
-- 保持现有 Liquid Glass、菜单栏、Popover、设置和辅助窗口布局；优先修改状态、绑定和入口，不重做已确认视觉结构。
+- 保持菜单栏、Popover、设置分页和辅助窗口的信息结构；视觉按已确认的 HyperOS × iOS 玻璃拟态体系统一。首页、账户表单、详情和设置接入胶囊按钮、圆形图标按钮、输入与卡片样式；原生材质保留，不能只新增未被页面调用的组件。
 - 详情趋势固定近 7 日，不提供历史范围选择；历史 7/30 日回填在账户编辑页，有进度/取消。Pipio/DeepSeek 模型初始当天，点击趋势日期读取该日日模型，单行五列展示；旧明细缺失不冒充已知。workbuddy2api 展示父网关进程累计模型与积分单位，不随趋势日期切换，子账户同样标明网关范围；累计列表保留 nil 与空数组差别，不写入日模型。
 - 页面、设置分页与 sheet 通过中性初始响应者避免自动聚焦搜索/文本/趋势；用户点击、Tab 和辅助操作仍可聚焦。
 - 预算、分组、置顶在添加/编辑账户表单中保存；首页提供搜索、分组筛选和置顶排序，筛选不改变汇总口径。
@@ -110,6 +110,8 @@ git diff --check
 
 `scripts/verify-icloud-sync.sh --mode deterministic` 提供同步 fixture 验证；退出码 2 表示没有 fixture 失败但缺少真实第二台 Mac，不能当作双机通过。`test-window-navigation.sh --run` 需要实际图形会话，环境不可用的退出码 77 表示跳过，不表示通过。
 
+`bash scripts/preview-ui.sh --build-only` 编译 `.build/ui-preview/RelayPreview.app`；`--run` 在本机打开真实页面代码的深浅双栏预览。预览使用独立 bundle ID、内存账户/凭据与空供应商适配器，不连接真实供应商；只用于视觉与交互检查，不替代生产应用、窗口导航或供应商验收。
+
 这些检查覆盖离线业务、契约和 GUI 检查编译。重定向专项仅绑定本机回环服务；系统文件协调与本机端口在受限沙箱可能被拒绝，应在允许的验证环境执行，不绕过生产保护。`--build-only` 不等于真实 GUI 验收；真实图形会话、供应商请求、第二台 Mac、发布资产和安装升级仍需对应环境证据。当前 CLT 沙箱可能阻止 SwiftPM 的 `sandbox-exec`，应使用隔离缓存配置并在允许的构建环境重试，不能把沙箱错误写成源码编译失败。
 
 ## 已确认的默认值与系统能力
@@ -119,6 +121,7 @@ git diff --check
 - 历史默认 1 年，当前选项为一月、半年、一年、永久；低余额默认阈值 20，未知余额不提醒。
 - 菜单栏使用系统单色闪电，仅显示可核实今日消费数字；固定宽度为 70pt，未知消费只保留入口图标。
 - 共享原生材质由 `RelayVisualStyle` 管理：页面 `regularMaterial`、卡片 `thinMaterial`、嵌套状态 `ultraThinMaterial`。
+- `RelayVisualStyle` 同时管理 8pt 间距阶梯、16pt 卡片、48pt 主/次胶囊按钮、40pt 图标按钮与搜索框、输入聚焦描边和悬浮操作区。深色面板/卡片以黑色与 `#1C1C1E` 为底；减少透明度使用实色回退，减少动态效果关闭按压缩放与弹性过渡。实际图形界面验收仍需单独执行。
 - 快捷键仅支持“显示/隐藏面板”和“刷新全部账户”，由 `GlobalShortcutService` 封装 Carbon `RegisterEventHotKey`，可分别留空；登录项使用 `SMAppService.mainApp`，需要实际应用包/系统环境证据。
 - 更新、打包流程分别见 `UpdateService`、[CI 与发布说明](CI_RELEASE.md)；workflow 存在不等于当前提交已发布。
 - DMG 文件图标使用正式 ICNS，嵌入 UDIF 文件内容并读回核验，完成后生成最终 checksum；不依赖 Finder 扩展属性。专项 `scripts/test-dmg-icon.sh` 验证数据复制后的图标和映像完整性，不代表 Finder 或真实发布下载已验收。

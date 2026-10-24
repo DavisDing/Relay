@@ -36,26 +36,35 @@ enum SettingsTab: String, CaseIterable, Identifiable {
 @MainActor
 struct SettingsTabBar: View {
     @Binding var selectedTab: SettingsTab
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 0) {
             ForEach(SettingsTab.allCases) { tab in
                 Button {
-                    selectedTab = tab
+                    withAnimation(reduceMotion ? nil : .spring(response: 0.25, dampingFraction: 1)) {
+                        selectedTab = tab
+                    }
                 } label: {
                     VStack(spacing: 4) {
                         Image(systemName: tab.systemImage)
-                            .font(.system(size: 16, weight: .medium))
+                            .font(.system(size: 18, weight: .regular))
+                            .symbolVariant(selectedTab == tab ? .fill : .none)
                         Text(tab.title)
-                            .font(.system(size: 10, weight: .medium))
+                            .font(.system(size: 11, weight: selectedTab == tab ? .semibold : .regular))
                             .lineLimit(1)
                     }
-                    .frame(maxWidth: .infinity, minHeight: 48)
-                    .foregroundStyle(selectedTab == tab ? Color.accentColor : Color.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 52)
+                    .foregroundStyle(selectedTab == tab ? Color.primary : Color.secondary)
                     .background(
-                        selectedTab == tab ? Color.accentColor.opacity(0.13) : Color.clear,
+                        selectedTab == tab ? Color.primary.opacity(0.06) : Color.clear,
                         in: RoundedRectangle(cornerRadius: 12, style: .continuous)
                     )
+                    .overlay(alignment: .bottom) {
+                        if selectedTab == tab {
+                            Capsule().fill(RelayVisualStyle.accentColor).frame(width: 16, height: 2)
+                        }
+                    }
                     // 让整个分页单元格（包括图标和文字周围的空白）参与命中测试。
                     // 未选中项使用透明背景，若没有显式 contentShape，SwiftUI 可能只命中实际绘制内容。
                     .contentShape(Rectangle())
@@ -65,7 +74,9 @@ struct SettingsTabBar: View {
                 .accessibilityLabel(tab.title)
             }
         }
-        .padding(.horizontal, 14)
+        .padding(4)
+        .relayInsetSurface(cornerRadius: 16)
+        .padding(.horizontal, 16)
     }
 }
 
@@ -75,9 +86,8 @@ struct SettingsPageScroll<Content: View>: View {
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 16, content: content)
-                .padding(.horizontal, 20)
-                .padding(.vertical, 4)
+            VStack(alignment: .leading, spacing: 24, content: content)
+                .padding(16)
         }
     }
 }

@@ -37,13 +37,13 @@ struct SettingsGeneralPage: View {
                 Toggle(isOn: $fixedMenuBarWidth) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("固定菜单栏宽度 (70pt)")
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.system(size: 13, weight: .medium))
                         Text("仅显示今日消费数值，不含币种；长数字可在悬停提示中查看")
                             .font(.system(size: 10))
                             .foregroundColor(.secondary)
                     }
                 }
-                .toggleStyle(.checkbox)
+                .toggleStyle(.switch).controlSize(.small)
 
                 Text("如果使用 Hidden Bar，请将 Relay 拖到右侧常驻区；Relay 会保持稳定的菜单栏身份，但第三方菜单栏工具仍可能按自己的分隔位置隐藏图标。")
                     .font(.system(size: 10))
@@ -53,13 +53,13 @@ struct SettingsGeneralPage: View {
                 Toggle(isOn: $showTodayInMenuBar) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("常驻显示今日消耗 (若数据不全自动隐藏)")
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.system(size: 13, weight: .medium))
                         Text("严格遵循只读降级逻辑，不展示捏造数字")
                             .font(.system(size: 10))
                             .foregroundColor(.secondary)
                     }
                 }
-                .toggleStyle(.checkbox)
+                .toggleStyle(.switch).controlSize(.small)
             }
 
             Divider().opacity(0.4)
@@ -82,22 +82,23 @@ struct SettingsGeneralPage: View {
                     Spacer()
                 }
 
-                HStack {
-                    Text("当任一账号折算余额低于:")
-                        .font(.system(size: 12))
-                    TextField("20.00", text: $lowBalanceThreshold)
-                        .frame(width: 70)
-                        .textFieldStyle(.roundedBorder)
-                        .accessibilityLabel("低余额预警阈值")
-                        .accessibilityHint("以基准折算币种计价")
-                    Text("时，在顶栏与卡片标红预警")
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("低余额预警阈值").font(.system(size: 13))
+                    HStack(spacing: 8) {
+                        TextField("20.00", text: $lowBalanceThreshold)
+                            .relayFormField()
+                            .frame(width: 100)
+                            .accessibilityLabel("低余额预警阈值")
+                            .accessibilityHint("以基准折算币种计价")
+                        Text(baseCurrency.rawValue).font(.system(size: 13)).foregroundStyle(.secondary)
+                    }
+                    Text("账号折算余额低于阈值时，在顶栏与卡片标红预警")
+                        .font(.system(size: 12)).foregroundStyle(.secondary)
                 }
             }
 
             Toggle("低余额系统通知", isOn: $lowBalanceNotificationsEnabled)
-                .toggleStyle(.checkbox)
+                .toggleStyle(.switch).controlSize(.small)
 
             NotificationStatusPanel()
             Divider().opacity(0.4)
@@ -109,13 +110,13 @@ struct SettingsGeneralPage: View {
                 )) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("登录时自动启动 Relay")
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.system(size: 13, weight: .medium))
                         Text("使用 macOS 系统登录项，不保存额外凭据")
                             .font(.system(size: 10))
                             .foregroundColor(.secondary)
                     }
                 }
-                .toggleStyle(.checkbox)
+                .toggleStyle(.switch).controlSize(.small)
                 if let launchAtLoginError {
                     Text(launchAtLoginError)
                         .font(.system(size: 10))
