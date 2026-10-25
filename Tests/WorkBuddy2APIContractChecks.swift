@@ -41,7 +41,7 @@ private actor WorkBuddyFixtureClient: HTTPClient {
 
 enum WorkBuddy2APIContractChecks {
     static func run() async throws {
-        let first = Data(#"{"accounts":[{"uid":"a-1","nickname":"alpha","credits":100,"disabled":false,"cooling":false}]}"#.utf8)
+        let first = Data(#"{"accounts":[{"uid":"a-1","nickname":"alpha","credits":100,"disabled":false,"cooling":false,"reason":"账户调用失败"}]}"#.utf8)
         let second = Data(#"{"accounts":[{"uid":"a-1","nickname":"alpha","credits":125,"disabled":false,"cooling":false}]}"#.utf8)
         let client = WorkBuddyFixtureClient(statusPayloads: [first, second])
         let adapter = WorkBuddy2APIAdapter(client: client)
@@ -73,6 +73,7 @@ enum WorkBuddy2APIContractChecks {
         try workBuddyVerify(firstSnapshot.workBuddyStats?.total.credit == Decimal(string: "1.5"), "stats credit was not decoded")
         try workBuddyVerify(firstSnapshot.capabilities.contains(.requestCount), "stats request-count capability was not set")
         try workBuddyVerify(firstSnapshot.capabilities.contains(.modelUsage), "stats model-usage capability was not set")
+        try workBuddyVerify(firstSnapshot.subAccounts?.first?.statusMessage == "账户调用失败", "sub-account failure reason was not preserved")
 
         let requests = await client.requests
         let statusRequests = requests.filter { $0.url?.path == "/status" }

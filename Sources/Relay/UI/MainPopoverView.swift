@@ -232,7 +232,11 @@ public struct MainPopoverView: View {
                     HStack(spacing: 8) {
                         summaryCard(title: "总可用折算余额",
                             value: homeAmount(totalBalance.map { RelayNumberFormatter.money($0, currency: store.settings.baseCurrency) } ?? "--"),
-                            subtitle: store.balanceTotalCNY.isComplete ? "\(enabledAccountCount) 个账号运行正常" : "部分账号缺少可靠数据或汇率", accent: .primary)
+                            subtitle: store.hasAnyWarning
+                                ? "存在异常账号，请查看账号状态"
+                                : store.balanceTotalCNY.isComplete
+                                    ? "\(enabledAccountCount) 个账号状态正常"
+                                    : "部分账号缺少可靠数据或汇率", accent: .primary)
                         Button {
                             if let onPresentConsumptionOverview { onPresentConsumptionOverview() }
                             else { showConsumptionOverview = true }

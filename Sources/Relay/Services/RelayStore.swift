@@ -742,6 +742,9 @@ public final class RelayStore: ObservableObject {
         else if child.manualDisabled { status = .warning("手动停用") }
         else if child.disabled { status = .warning("系统停用") }
         else if child.cooling { status = .warning("冷却中") }
+        else if let message = child.statusMessage?.trimmingCharacters(in: .whitespacesAndNewlines), !message.isEmpty {
+            status = .warning(message)
+        }
         else { status = parent.status }
         return AccountModel(
             id: child.id, name: child.displayName, kind: .workbuddy2api,
@@ -822,8 +825,7 @@ public final class RelayStore: ObservableObject {
     }
 
     public var hasAnyWarning: Bool {
-        accounts.contains { account in
-            guard !account.isHidden else { return false }
+        dashboardAccounts.contains { account in
             switch account.status {
             case .ok: return false
             case .warning, .error, .retrying: return true

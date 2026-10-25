@@ -153,9 +153,10 @@ enum AccountDetailRefreshChecks {
         try await credentials.save(ProviderCredential(secret: "fixture-only"), reference: parent.credentialReference)
         let now = Date()
         let oldChild = ProviderSubAccountSnapshot(parentAccountID: parent.id, externalID: "uid-1", displayName: "Old child",
-                                                  availablePoints: 100, fetchedAt: now.addingTimeInterval(-120))
+                                                  availablePoints: 100, statusMessage: "上游返回失败", fetchedAt: now.addingTimeInterval(-120))
         let newChild = ProviderSubAccountSnapshot(parentAccountID: parent.id, externalID: "uid-1", displayName: "New child",
-                                                  availablePoints: 125, disabled: true, manualDisabled: true, cooling: true, fetchedAt: now)
+                                                  availablePoints: 125, disabled: true, manualDisabled: true, cooling: true,
+                                                  statusMessage: "上游返回失败", fetchedAt: now)
         let rate = AccountRate(accountID: parent.id, source: .providerNativeCurrency, nativeCurrency: .cny)
         func snapshot(_ children: [ProviderSubAccountSnapshot], credit: Decimal) -> ProviderSnapshot {
             ProviderSnapshot(accountID: parent.id, balance: nil, todaySpend: nil, monthSpend: nil, requestCount: nil,
@@ -173,11 +174,18 @@ enum AccountDetailRefreshChecks {
         let store = RelayStore(repository: repository, credentialStore: credentials,
                                adapters: ProviderAdapterRegistry(adapters: [adapter]), automaticallyRefresh: false)
         try check(try requireDetail(store, oldChild.id).account.availablePoints == 100, "Opening gateway child")
+        guard case .warning("上游返回失败") = try requireDetail(store, oldChild.id).account.status else {
+            throw DetailRefreshFailure(message: "provider failure reason reaches child account status")
+        }
+        try check(store.hasAnyWarning, "dashboard health includes unhealthy gateway child")
         await store.refreshAll()
         let updated = try requireDetail(store, oldChild.id)
         try check(updated.account.availablePoints == 125 && updated.account.name == "New child", "Resolve child by non-UUID ID")
         try check(updated.account.disabled && updated.account.manualDisabled && updated.account.cooling && updated.account.lastUpdated == now,
                   "Refresh gateway status and timestamp")
+        guard case .warning("手动停用") = updated.account.status else {
+            throw DetailRefreshFailure(message: "explicit disabled state keeps precedence over provider reason")
+        }
         try check(updated.modelUsages.first?.cost == 3 && updated.spendPoints.last?.amount == 2, "Gateway models and history come from parent")
         let parentDetail = try requireDetail(store, parent.id.uuidString)
         try check(updated.cumulativeModelUsages?.first?.cost == 3
