@@ -560,25 +560,16 @@ public struct MainPopoverView: View {
     }
 
     private func healthMessage(for account: AccountModel) -> String? {
-        guard account.isEnabled, let id = account.parentAccountID ?? UUID(uuidString: account.id) else {
-            return statusMessage(for: account.status)
-        }
-        let health = store.health(for: id)
-        if health.phase.isActive || health.issue != nil || health.freshness == .stale { return health.summary }
-        return statusMessage(for: account.status)
+        healthPresentation(for: account).summary
     }
 
     private func healthDescription(for account: AccountModel) -> String {
-        guard let id = account.parentAccountID ?? UUID(uuidString: account.id) else { return "" }
-        return account.isEnabled ? store.health(for: id).detail : "已停用，停止采集"
+        healthPresentation(for: account).detail
     }
 
-    private func statusMessage(for status: AccountStatus) -> String? {
-        switch status {
-        case .ok: return nil
-        case .warning(let message), .error(let message): return message
-        case .retrying(let seconds): return "\(seconds)s 后重试"
-        }
+    private func healthPresentation(for account: AccountModel) -> AccountHealthPresentation {
+        let id = account.parentAccountID ?? UUID(uuidString: account.id)
+        return AccountHealthPresentation(account: account, health: id.map { store.health(for: $0) })
     }
 
     private func statusColor(for status: AccountStatus) -> Color {

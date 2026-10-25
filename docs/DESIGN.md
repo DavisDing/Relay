@@ -111,6 +111,8 @@ UI 不拼供应商 URL、不解码供应商 JSON、不持有长期凭据。关�
 
 地址仅接受 HTTPS，另保留已实现的 localhost/127.0.0.1/::1 loopback HTTP 例外；该例外尚未成为已确认安全需求。读取网关 `status` 和可选 `v1/stats`，将子账户积分、状态、请求量和模型统计转换为统一快照。网关积分独立于金额汇总；累计统计的每日记录是采集间隔观测增量，无法还原离线各日真实消耗。子账户启停请求在执行前重新读取当前状态并确认外部 ID 存在；该写操作的产品边界见 REQUIREMENT 的 `NEEDS_CONFIRMATION`。
 
+子账户当前调用失败读取 `/status.accounts[].consecutive_fails`，大于零显示「连续失败 N 次」；不以网关级 `healthy` 或本次同步成功替代子账户状态。历史 `last_err`/`err_total` 可能在恢复后仍保留，不用于判定当前失败，也不保存原始 `last_err`。计数以可选 `consecutiveFailures` 加入子账户快照，旧 JSON 缺失为未知，无需改变 schema；成功刷新返回零后清除该失败提示，网关请求失败保留上次计数。首页、详情底栏、悬停和辅助功能文本复用 `AccountHealthPresentation`，分别标明子账户状态和网关同步；父网关错误/停用及子账户手动停用、系统停用、冷却仍优先。积分汇总维持可确认快照的独立口径。
+
 ## 5. 刷新与原子提交
 
 ```text
@@ -255,6 +257,8 @@ UI 不拼供应商 URL、不解码供应商 JSON、不持有长期凭据。关�
 ## 10. 更新与发布
 
 `UpdateService` 先绑定固定仓库的 Release tag/版本/准确 DMG 或 ZIP 文件名，下载前重新读取该 tag 元数据。优先用资产 `sha256:` digest，否则读取同版本 checksum；缺失、畸形、重复、版本不符、大小不符均拒绝。临时下载通过独立重定向策略限定 GitHub/CDN 路径，验证成功后移入 Downloads 且不覆盖已有文件，失败清理暂存。只下载，不解包替换自身。
+
+GitHub REST API 明确返回 403 限流或 429 时，记录 `Retry-After`（秒数或 HTTP 日期）/`X-RateLimit-Reset` 冷却期，缺失时至少等待 60 秒再访问 API；期间检查与下载走同仓库公开 Release 路径。检查用 HEAD `/releases/latest`，重定向只允许固定仓库的正式语义版本 tag 页面，再读取该 tag 下版本化 checksum 确认安装包及 SHA-256。已安装版本无需请求 checksum。下载前重新读取已选 tag 的 checksum，不跟随新的 latest；checksum 缺失/畸形或包摘要不符继续拒绝。普通 403、网络错误、错误来源及畸形 API 元数据不触发此回退；公开路径网络错误仍保留具体诊断。回退缺少 API 文件长度元数据时依靠必需的完整文件 SHA-256 校验。
 
 `.github/workflows/build.yml` 定义 main/tag 发布：回归、契约、GUI build-only、打包、checksum 复核、上传 ZIP/DMG/metadata/checksum，再创建 Release；PR 构建不等于发布。使用 ad-hoc、手动 Gatekeeper 放行，不采用 Developer ID/公证。SHA-256 不认证发布者身份；更详细流程见 [CI_RELEASE](CI_RELEASE.md)。
 

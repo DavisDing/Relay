@@ -48,6 +48,7 @@ RelayStore / AccountService / RefreshScheduler / RefreshCoordinator
 - Pipio 今日消费使用看板数据；模型和 Token 等可选指标缺失时保持未知。历史补齐只处理今天以前的 7/30 日范围。
 - DeepSeek 余额固定使用官方 `GET https://api.deepseek.com/user/balance`。平台历史用量只在用户手动提供 `userToken` 时访问网页内部接口；应用不读取浏览器 Cookie。
 - workbuddy2api 读取网关状态、子账户积分和可选统计，并提供已经存在的子账户启停请求入口。远端启停与本机 loopback HTTP 的产品边界见 REQUIREMENT 的 `NEEDS_CONFIRMATION`。
+- workbuddy2api 子账户按 `consecutive_fails` 判定当前调用失败，不由网关 `healthy` 或同步成功推定正常；历史 `last_err`/`err_total` 不代表当前失败。可选计数随子账户快照保存，旧数据兼容；首页、详情和辅助提示共用状态投影，不保存原始 `last_err`。
 - 汇率与额度换算按账户隔离；没有可靠换算值时禁止跨币种汇总。
 
 ### 数据、同步和迁移
@@ -126,6 +127,7 @@ git diff --check
 - `RelayVisualStyle` 以替换前的 macOS UI 为尺寸参考：28pt 主/次胶囊按钮及搜索/表单输入，24pt 图标按钮，32pt 导航基准高度，12pt 按钮/正文。首页汇总金额 20pt、详情指标金额 16pt，卡片内边距 9～11pt，首页/详情底栏恢复单行排布；窗口外框保持原尺寸。它同时管理输入聚焦描边和紧凑悬浮操作区。深色面板/卡片以黑色与 `#1C1C1E` 为底；减少透明度使用实色回退，减少动态效果关闭按压缩放与弹性过渡。实际图形界面验收仍需单独执行。
 - 快捷键仅支持“显示/隐藏面板”和“刷新全部账户”，由 `GlobalShortcutService` 封装 Carbon `RegisterEventHotKey`，可分别留空；登录项使用 `SMAppService.mainApp`，需要实际应用包/系统环境证据。
 - 更新、打包流程分别见 `UpdateService`、[CI 与发布说明](CI_RELEASE.md)；workflow 存在不等于当前提交已发布。
+- 更新检查及下载遇到 GitHub API 限流时，按响应头记录运行期冷却，回退到固定仓库公开 Release 与已选 tag 的版本化 checksum；回退仍强制 SHA-256，不使用第三方镜像，不需要 GitHub Token。具体来源、跳转及下载约束见 DESIGN 第 10 节；离线 fixture 不替代真实发布安装验收。
 - DMG 文件图标使用正式 ICNS，嵌入 UDIF 文件内容并读回核验，完成后生成最终 checksum；不依赖 Finder 扩展属性。专项 `scripts/test-dmg-icon.sh` 验证数据复制后的图标和映像完整性，不代表 Finder 或真实发布下载已验收。
 
 ## 维护规则

@@ -98,6 +98,8 @@ Relay 通过右键菜单“检查更新…”或“偏好设置 → 应用更新
 
 更新器重新读取精确 Release tag 并绑定版本化文件名/路径，优先校验资产 SHA-256 digest，缺失时读取同 Release 的 `Relay-<version>-sha256.txt`。畸形、缺失或不匹配的校验值、长度不一致或错误来源会阻止文件进入 Downloads，并清理暂存。旧 Release 若没有 digest/checksum，应用内下载被阻止，手动安装不受影响。
 
+GitHub API 限流时，更新器在冷却期使用官方公开 Release 路径：通过同仓库 `/releases/latest` 的 HEAD 跳转发现正式 tag，再从该 tag 的版本化 checksum 获取安装包和摘要。下载再次核对已选 tag 的 checksum；此路径必须发布 checksum 资产，不依赖 API digest/文件长度，仍校验完整文件 SHA-256。普通 HTTP/网络错误、来源变化及畸形 API 数据不启用回退。冷却时间采用 `Retry-After`/`X-RateLimit-Reset`，没有有效头时至少 60 秒。
+
 这些同源未签名校验用于完整性核对，不提供独立发布者身份认证。打包时生成并复算 checksum，构建 job 上传该文件，发布 job 下载后再次复算，再与 ZIP/DMG/metadata 一起发布。
 
 CI 还执行 `scripts/test-contracts.sh` 和 `scripts/test-window-navigation.sh --build-only`；后者仅证明编译成功，真实 GUI 导航仍需有效图形会话，skipped/77 不等于通过。

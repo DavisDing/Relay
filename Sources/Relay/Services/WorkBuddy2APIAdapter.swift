@@ -54,6 +54,7 @@ public struct WorkBuddy2APIAdapter: ProviderAdapter {
                 availablePoints: item.credits.map { Decimal($0) },
                 disabled: item.disabled, manualDisabled: item.manualDisabled,
                 cooling: item.cooling, statusMessage: reason,
+                consecutiveFailures: item.consecutiveFails,
                 fetchedAt: now
             )
         }
@@ -230,12 +231,14 @@ public struct WorkBuddy2APIAdapter: ProviderAdapter {
         let disabledReason: String?
         let manualReason: String?
         let reason: String?
+        let consecutiveFails: Int?
 
         enum CodingKeys: String, CodingKey {
             case uid, nickname, credits, disabled, cooling, reason
             case manualDisabled = "manual_disabled"
             case disabledReason = "disabled_reason"
             case manualReason = "manual_reason"
+            case consecutiveFails = "consecutive_fails"
         }
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -248,6 +251,8 @@ public struct WorkBuddy2APIAdapter: ProviderAdapter {
             disabledReason = try c.decodeIfPresent(String.self, forKey: .disabledReason)
             manualReason = try c.decodeIfPresent(String.self, forKey: .manualReason)
             reason = try c.decodeIfPresent(String.self, forKey: .reason)
+            consecutiveFails = try c.decodeIfPresent(Int.self, forKey: .consecutiveFails)
+            guard consecutiveFails.map({ $0 >= 0 }) ?? true else { throw ProviderError.incompatibleResponse }
         }
     }
 }

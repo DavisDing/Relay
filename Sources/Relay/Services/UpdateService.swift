@@ -132,10 +132,12 @@ public enum UpdateServiceError: LocalizedError, Sendable, Equatable {
 public struct UpdateService: Sendable {
     public static let repository = "DavisDing/Relay"
     public static let releasesAPIURL = URL(string: "https://api.github.com/repos/\(repository)/releases/latest")!
+    public static let latestReleaseURL = URL(string: "https://github.com/\(repository)/releases/latest")!
     public static let currentVersionFallback = "0.1.0"
 
     private let session: URLSession
     private let downloadsDirectory: URL?
+    private let apiCooldown = UpdateAPICooldown()
 
     // The directory override lets offline checks avoid the user's real Downloads.
     public init(session: URLSession = .shared, downloadsDirectory: URL? = nil) {
@@ -225,13 +227,15 @@ public struct UpdateService: Sendable {
     }
 
     private func fetchRelease(at url: URL) async throws -> GitHubRelease {
-        let data: Data
-        let response: URLResponse
         do {
-            (data, response) = try await session.data(
-                for: request(url, accept: "application/vnd.github+json"),
-                delegate: UpdateRedirectPolicy(origin: url, allowsAssetCDN: false)
-            )
+            if await apiCooldown.isActive() {
+                return try await fetchPublicRelease(for: url)
+            }
+            do {
+                return try await fetchAPIRelease(at: url)
+            } catch UpdateServiceError.releaseRateLimited {
+                return try await fetchPublicRelease(for: url)
+            }
         } catch let error as URLError {
             switch error.code {
             case .notConnectedToInternet, .dataNotAllowed:
@@ -247,7 +251,21 @@ public struct UpdateService: Sendable {
                 throw error
             }
         }
-        try validate(response, origin: url, allowsAssetCDN: false, error: .invalidReleaseResponse)
+    }
+
+    private func fetchAPIRelease(at url: URL) async throws -> GitHubRelease {
+        let (data, response) = try await session.data(
+            for: request(url, accept: "application/vnd.github+json"),
+            delegate: UpdateRedirectPolicy(origin: url, allowsAssetCDN: false)
+        )
+        do {
+            try validate(response, origin: url, allowsAssetCDN: false, error: .invalidReleaseResponse)
+        } catch UpdateServiceError.releaseRateLimited {
+            if let http = response as? HTTPURLResponse {
+                await apiCooldown.record(http)
+            }
+            throw UpdateServiceError.releaseRateLimited
+        }
         let release: GitHubRelease
         do { release = try JSONDecoder().decode(GitHubRelease.self, from: data) }
         catch { throw UpdateServiceError.invalidReleaseResponse }
@@ -258,6 +276,54 @@ public struct UpdateService: Sendable {
             throw UpdateServiceError.invalidReleaseResponse
         }
         return release
+    }
+
+    /// The official public Release path works without REST API quota. Discover
+    /// only the latest tag; the checksum and package always use that exact tag.
+    private func fetchPublicRelease(for apiURL: URL) async throws -> GitHubRelease {
+        let tag: String
+        if apiURL == Self.releasesAPIURL {
+            var discovery = request(Self.latestReleaseURL, accept: "text/html")
+            discovery.httpMethod = "HEAD"
+            let (_, response) = try await session.data(for: discovery, delegate: UpdateReleaseRedirectPolicy())
+            guard let finalURL = response.url,
+                  finalURL == Self.latestReleaseURL || Self.releaseTag(from: finalURL) != nil else {
+                throw UpdateServiceError.unsupportedDownloadURL
+            }
+            try validate(response, origin: finalURL, allowsAssetCDN: false, error: .invalidReleaseResponse)
+            guard let discovered = Self.releaseTag(from: finalURL) else { throw UpdateServiceError.invalidReleaseResponse }
+            tag = discovered
+        } else {
+            let prefix = "https://api.github.com/repos/\(Self.repository)/releases/tags/"
+            guard apiURL.absoluteString.hasPrefix(prefix) else { throw UpdateServiceError.unsupportedDownloadURL }
+            tag = String(apiURL.absoluteString.dropFirst(prefix.count))
+            guard Self.version(for: tag) != nil else { throw UpdateServiceError.invalidReleaseResponse }
+        }
+        guard let version = Self.version(for: tag) else { throw UpdateServiceError.invalidReleaseResponse }
+        // Checking an already-installed version needs no package or checksum.
+        if apiURL == Self.releasesAPIURL,
+           let current = RelaySemanticVersion(currentVersionString),
+           let latest = RelaySemanticVersion(version), latest <= current {
+            return GitHubRelease(tagName: tag, htmlURL: Self.releaseURL(tag: tag).absoluteString,
+                                 assets: [], draft: false, prerelease: false)
+        }
+        let checksumName = "Relay-\(version)-sha256.txt"
+        let checksumURL = Self.assetURL(tag: tag, name: checksumName)
+        let data = try await fetchChecksumData(at: checksumURL, declaredSize: nil, digest: nil)
+        let hashes = try Self.checksums(in: data, version: version)
+        guard !hashes.isEmpty else { throw UpdateServiceError.integrityUnavailable }
+        let assets = hashes.keys.sorted().map { name in
+            GitHubAsset(name: name, browserDownloadURL: Self.assetURL(tag: tag, name: name).absoluteString,
+                        digest: "sha256:" + hashes[name]!, size: nil)
+        }
+        return GitHubRelease(tagName: tag, htmlURL: Self.releaseURL(tag: tag).absoluteString,
+                             assets: assets, draft: false, prerelease: false)
+    }
+
+    static func releaseTag(from url: URL) -> String? {
+        let tag = url.lastPathComponent
+        guard version(for: tag) != nil, isSafeHTTPS(url), url == releaseURL(tag: tag) else { return nil }
+        return tag
     }
 
     private func expectedSHA256(for asset: GitHubAsset, release: GitHubRelease) async throws -> String {
@@ -272,10 +338,14 @@ public struct UpdateService: Sendable {
         guard let checksums = release.assets.first(where: { $0.name == checksumName }) else {
             throw UpdateServiceError.integrityUnavailable
         }
-        if let declaredSize = checksums.size, !(0...Int64(128 * 1024)).contains(declaredSize) {
+        let data = try await fetchChecksumData(at: release.assetURL(checksums), declaredSize: checksums.size, digest: checksums.digest)
+        return try Self.checksum(in: data, assetName: asset.name, version: release.version)
+    }
+
+    private func fetchChecksumData(at url: URL, declaredSize: Int64?, digest: String?) async throws -> Data {
+        if let declaredSize, !(0...Int64(128 * 1024)).contains(declaredSize) {
             throw UpdateServiceError.integrityUnavailable
         }
-        let url = try release.assetURL(checksums)
         let (temporaryURL, response) = try await session.download(
             for: request(url), delegate: UpdateRedirectPolicy(origin: url, allowsAssetCDN: true)
         )
@@ -283,22 +353,28 @@ public struct UpdateService: Sendable {
         try validate(response, origin: url, allowsAssetCDN: true, error: .downloadFailed)
         guard let size = try temporaryURL.resourceValues(forKeys: [.fileSizeKey]).fileSize,
               size <= 128 * 1024 else { throw UpdateServiceError.integrityUnavailable }
-        if let declaredSize = checksums.size, declaredSize != Int64(size) {
+        if let declaredSize, declaredSize != Int64(size) {
             throw UpdateServiceError.integrityMismatch
         }
         let data = try Data(contentsOf: temporaryURL)
-        if let digest = checksums.digest {
+        if let digest {
             guard digest.hasPrefix("sha256:"), let hash = Self.normalizedHash(String(digest.dropFirst(7))) else {
                 throw UpdateServiceError.integrityUnavailable
             }
             guard Self.hash(data) == hash else { throw UpdateServiceError.integrityMismatch }
         }
-        return try Self.checksum(in: data, assetName: asset.name, version: release.version)
+        return data
     }
 
     // Accept only the bounded shasum -a 256 format emitted by package-app.sh.
     // Reject paths, wrong versions, malformed lines and duplicates (even identical).
     static func checksum(in data: Data, assetName: String, version: String) throws -> String {
+        let hashes = try checksums(in: data, version: version)
+        guard let hash = hashes[assetName] else { throw UpdateServiceError.integrityUnavailable }
+        return hash
+    }
+
+    private static func checksums(in data: Data, version: String) throws -> [String: String] {
         guard data.count <= 128 * 1024, let text = String(data: data, encoding: .utf8) else {
             throw UpdateServiceError.integrityUnavailable
         }
@@ -315,8 +391,7 @@ public struct UpdateService: Sendable {
             }
             hashes[name] = hash
         }
-        guard let hash = hashes[assetName] else { throw UpdateServiceError.integrityUnavailable }
-        return hash
+        return hashes
     }
 
     private static func normalizedHash(_ value: String) -> String? {
@@ -449,6 +524,48 @@ public struct UpdateService: Sendable {
             case name, digest, size
             case browserDownloadURL = "browser_download_url"
         }
+    }
+}
+
+/// Shared by copies of one service, including the launch check and later download.
+/// No requests sleep or retry the exhausted API while the reset window is active.
+actor UpdateAPICooldown {
+    private var until: Date?
+
+    func isActive(now: Date = Date()) -> Bool { until.map { $0 > now } ?? false }
+
+    func record(_ response: HTTPURLResponse, now: Date = Date()) {
+        var reset = now.addingTimeInterval(60)
+        if let raw = response.value(forHTTPHeaderField: "X-RateLimit-Reset"),
+           let seconds = Double(raw), seconds.isFinite {
+            reset = max(reset, Date(timeIntervalSince1970: seconds))
+        }
+        if let raw = response.value(forHTTPHeaderField: "Retry-After") {
+            if let seconds = Double(raw), seconds.isFinite, seconds >= 0 {
+                reset = max(reset, now.addingTimeInterval(seconds))
+            } else {
+                let formatter = DateFormatter()
+                formatter.locale = Locale(identifier: "en_US_POSIX")
+                formatter.timeZone = TimeZone(secondsFromGMT: 0)
+                formatter.dateFormat = "EEE',' dd MMM yyyy HH':'mm':'ss z"
+                if let date = formatter.date(from: raw) { reset = max(reset, date) }
+            }
+        }
+        until = max(until ?? reset, reset)
+    }
+}
+
+/// Latest may redirect only to a strict stable tag page in this exact repository.
+final class UpdateReleaseRedirectPolicy: NSObject, URLSessionTaskDelegate, Sendable {
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        guard let url = request.url,
+              url == UpdateService.latestReleaseURL || UpdateService.releaseTag(from: url) != nil else {
+            completionHandler(nil)
+            return
+        }
+        completionHandler(request)
     }
 }
 

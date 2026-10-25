@@ -72,3 +72,41 @@ public struct AccountHealth: Sendable, Equatable {
         return parts.joined(separator: "；")
     }
 }
+
+/// Keep a child's upstream state visible even when fetching its gateway succeeds.
+/// The same text is used in home rows, detail footers and accessibility hints.
+public struct AccountHealthPresentation: Sendable, Equatable {
+    public let summary: String?
+    public let detail: String
+    public let subAccountStatusMessage: String?
+
+    public init(account: AccountModel, health: AccountHealth?) {
+        let statusMessage: String?
+        switch account.status {
+        case .ok: statusMessage = nil
+        case .warning(let message), .error(let message): statusMessage = message
+        case .retrying(let seconds): statusMessage = "\(seconds)s 后重试"
+        }
+        switch account.status {
+        case .warning(let message), .error(let message):
+            subAccountStatusMessage = account.parentAccountID == nil ? nil : message
+        case .ok, .retrying: subAccountStatusMessage = nil
+        }
+        if let subAccountStatusMessage {
+            summary = subAccountStatusMessage
+        } else if account.isEnabled, let health,
+                  health.phase.isActive || health.issue != nil || health.freshness == .stale {
+            summary = health.summary
+        } else {
+            summary = statusMessage
+        }
+        if !account.isEnabled {
+            detail = "已停用，停止采集"
+        } else if account.parentAccountID != nil {
+            detail = [subAccountStatusMessage.map { "子账户状态：" + $0 },
+                      health.map { "网关同步：" + $0.detail }].compactMap { $0 }.joined(separator: "；")
+        } else {
+            detail = health?.detail ?? statusMessage ?? ""
+        }
+    }
+}

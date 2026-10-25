@@ -181,6 +181,9 @@ public struct AccountDetailView: View {
     private var compactFooterText: String {
         if dataErrorMessage != nil { return "读取失败" }
         if !account.isEnabled { return "已停用" }
+        if let message = AccountHealthPresentation(account: account, health: health).subAccountStatusMessage {
+            return message
+        }
         if let health {
             switch health.phase {
             case .queued: return "排队中"
@@ -212,7 +215,8 @@ public struct AccountDetailView: View {
     private var footerDetailText: String {
         if let dataErrorMessage { return "读取失败，保留上次数据：" + dataErrorMessage }
         if !account.isEnabled { return "账户已停用；" + lastUpdatedText }
-        return health.map { $0.detail + "；" + lastUpdatedText } ?? lastUpdatedText
+        let detail = AccountHealthPresentation(account: account, health: health).detail
+        return detail.isEmpty ? lastUpdatedText : detail + "；" + lastUpdatedText
     }
 
     private var header: some View {

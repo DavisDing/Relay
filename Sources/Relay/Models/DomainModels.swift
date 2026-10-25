@@ -65,6 +65,7 @@ public struct AccountModel: Identifiable, Sendable {
     public var disabled: Bool
     public var manualDisabled: Bool
     public var cooling: Bool
+    public var consecutiveFailures: Int?
     
     public init(id: String = UUID().uuidString,
                 name: String,
@@ -90,7 +91,8 @@ public struct AccountModel: Identifiable, Sendable {
                 externalID: String? = nil,
                 disabled: Bool = false,
                 manualDisabled: Bool = false,
-                cooling: Bool = false) {
+                cooling: Bool = false,
+                consecutiveFailures: Int? = nil) {
         self.id = id
         self.name = name
         self.kind = kind
@@ -116,6 +118,7 @@ public struct AccountModel: Identifiable, Sendable {
         self.disabled = disabled
         self.manualDisabled = manualDisabled
         self.cooling = cooling
+        self.consecutiveFailures = consecutiveFailures
     }
 }
 

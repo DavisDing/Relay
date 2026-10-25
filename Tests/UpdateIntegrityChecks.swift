@@ -67,7 +67,8 @@ enum UpdateIntegrityChecks {
         let digest = "sha256:" + hash(bytes)
         let goodAsset = asset(dmg, digest: digest, size: bytes.count)
         let goodMetadata = try metadata([asset(zip, digest: digest), goodAsset])
-        try await verifyCheckFailures(service: service, goodMetadata: goodMetadata)
+        try await verifyCheckFailures(service: service, session: session, goodMetadata: goodMetadata)
+        try await verifyRateLimitFallback(session: session, directory: directory, update: update, goodMetadata: goodMetadata)
 
         func install(_ data: Data, body: Data = bytes, status: Int = 200, finalURL: URL? = nil,
                      extra: [URL: UpdateIntegrityFixture] = [:]) {
@@ -262,7 +263,7 @@ enum UpdateIntegrityChecks {
         print("PASSED: offline update integrity, digest/checksum fallback, version/source binding, URL/redirect policy, cleanup and manual DMG/ZIP downloads")
     }
 
-    @MainActor private static func verifyCheckFailures(service: UpdateService, goodMetadata: Data) async throws {
+    @MainActor private static func verifyCheckFailures(service: UpdateService, session: URLSession, goodMetadata: Data) async throws {
         let url = UpdateService.releasesAPIURL
         for (status, headers, expected) in [
             (403, ["X-RateLimit-Remaining": "0"], UpdateServiceError.releaseRateLimited),
@@ -275,10 +276,14 @@ enum UpdateIntegrityChecks {
             (302, [:], .releaseRequestFailed(statusCode: 302))
         ] {
             UpdateIntegrityURLProtocol.install([
-                url: UpdateIntegrityFixture(data: goodMetadata, status: status, headers: headers)
+                url: UpdateIntegrityFixture(data: goodMetadata, status: status, headers: headers),
+                UpdateService.latestReleaseURL: UpdateIntegrityFixture(data: Data(), status: 429)
             ])
-            try await rejects(expected, "classify metadata HTTP \(status)") { _ = try await service.checkForUpdates() }
-            try verify(UpdateIntegrityURLProtocol.requestedURLs == [url], "No automatic retry loop or fallback host on HTTP failure")
+            let freshService = UpdateService(session: session)
+            try await rejects(expected, "classify metadata HTTP \(status)") { _ = try await freshService.checkForUpdates() }
+            let expectedURLs = expected == .releaseRateLimited ? [url, UpdateService.latestReleaseURL] : [url]
+            try verify(UpdateIntegrityURLProtocol.requestedURLs == expectedURLs,
+                       "Only an API rate limit uses the official Release fallback; no automatic retry loop")
         }
         UpdateIntegrityURLProtocol.install([
             url: UpdateIntegrityFixture(data: goodMetadata, status: 429,
@@ -321,6 +326,124 @@ enum UpdateIntegrityChecks {
         try verify(state.status == .available(update), "Successful retry clears the previous error")
         try verify(UpdateIntegrityURLProtocol.requestedURLs == [url], "Manual retry sends exactly one metadata request")
         print("PASSED: update HTTP/network failure diagnostics, strict source validation and manual retry recovery")
+    }
+
+    @MainActor private static func verifyRateLimitFallback(session: URLSession, directory: URL,
+                                                           update: RelayAppUpdate, goodMetadata: Data) async throws {
+        let checksumData = Data("\(hash(bytes))  \(dmg)\n\(hash(bytes))  \(zip)\n".utf8)
+        func routes(status: Int = 429, checksum: Data = checksumData, page: URL = releaseURL) -> [URL: UpdateIntegrityFixture] {
+            [UpdateService.releasesAPIURL: UpdateIntegrityFixture(data: Data(), status: status,
+                                                                  headers: ["X-RateLimit-Remaining": "0"]),
+             metadataURL: UpdateIntegrityFixture(data: Data(), status: status),
+             UpdateService.latestReleaseURL: UpdateIntegrityFixture(data: Data(), finalURL: page),
+             url(checksums): UpdateIntegrityFixture(data: checksum),
+             url(dmg): UpdateIntegrityFixture(data: bytes), url(zip): UpdateIntegrityFixture(data: bytes)]
+        }
+        for status in [403, 429] {
+            let fallback = UpdateService(session: session, downloadsDirectory: directory)
+            UpdateIntegrityURLProtocol.install(routes(status: status))
+            guard case .available(let selected) = try await fallback.checkForUpdates() else {
+                throw NSError(domain: "Expected public Release fallback", code: 1)
+            }
+            try verify(selected == update, "Public latest resolves exact stable tag and prefers manifest DMG")
+            let destination = try await fallback.download(selected)
+            try verify(try Data(contentsOf: destination) == bytes, "Rate-limited update still verifies downloaded SHA-256")
+            try verify(UpdateIntegrityURLProtocol.requestedURLs == [UpdateService.releasesAPIURL,
+                UpdateService.latestReleaseURL, url(checksums), url(checksums), url(dmg)],
+                "Cooldown skips REST metadata on download and re-reads the pinned tag checksum")
+            try FileManager.default.removeItem(at: directory)
+
+            UpdateIntegrityURLProtocol.install(routes(checksum: Data("\(hash(bytes))  \(zip)\n".utf8)))
+            guard case .available(let zipUpdate) = try await fallback.checkForUpdates() else {
+                throw NSError(domain: "Expected ZIP fallback", code: 1)
+            }
+            try verify(zipUpdate.assetName == zip, "Public manifest may advertise ZIP only")
+            try verify(UpdateIntegrityURLProtocol.requestedURLs == [UpdateService.latestReleaseURL, url(checksums)],
+                       "Manual recheck during cooldown uses official Release without another API request")
+        }
+
+        let current = UpdateService(session: session)
+        UpdateIntegrityURLProtocol.install(routes(page: URL(string: "https://github.com/DavisDing/Relay/releases/tag/v0.0.0")!))
+        try verify(try await current.checkForUpdates() == .upToDate(currentVersion: current.currentVersionString),
+                   "Up-to-date check during rate limit needs no checksum asset")
+        try verify(UpdateIntegrityURLProtocol.requestedURLs == [UpdateService.releasesAPIURL, UpdateService.latestReleaseURL],
+                   "No unnecessary checksum download for an older Release")
+        let unavailable = UpdateService(session: session)
+        var unavailableRoutes = routes()
+        unavailableRoutes[UpdateService.latestReleaseURL] = UpdateIntegrityFixture(data: Data(), error: .timedOut)
+        UpdateIntegrityURLProtocol.install(unavailableRoutes)
+        try await rejects(.networkTimedOut, "Fallback preserves actionable network diagnostics") {
+            _ = try await unavailable.checkForUpdates()
+        }
+
+        // API quota may expire between a successful check and the download.
+        let downloadFallback = UpdateService(session: session, downloadsDirectory: directory)
+        UpdateIntegrityURLProtocol.install([UpdateService.releasesAPIURL: UpdateIntegrityFixture(data: goodMetadata)])
+        guard case .available(let selected) = try await downloadFallback.checkForUpdates() else {
+            throw NSError(domain: "Expected API update", code: 1)
+        }
+        UpdateIntegrityURLProtocol.install(routes())
+        _ = try await downloadFallback.download(selected)
+        try verify(UpdateIntegrityURLProtocol.requestedURLs == [metadataURL, url(checksums), url(dmg)],
+                   "Download rate limit uses selected tag and never resolves a different latest version")
+        try FileManager.default.removeItem(at: directory)
+
+        for checksum in [Data(), Data("\(hash(bytes))  Relay-1.2.3-macos-arm64.dmg\n".utf8),
+                         Data("\(hash(bytes))  ../\(dmg)\n".utf8), checksumData + checksumData,
+                         Data(repeating: 65, count: 128 * 1024 + 1)] {
+            let fallback = UpdateService(session: session, downloadsDirectory: directory)
+            UpdateIntegrityURLProtocol.install(routes(checksum: checksum))
+            try await rejects(.integrityUnavailable, "Fallback requires bounded valid versioned checksums") {
+                _ = try await fallback.checkForUpdates()
+            }
+            try verify(!UpdateIntegrityURLProtocol.requestedURLs.contains(url(dmg)), "Invalid manifest stops package download")
+        }
+        let corrupted = UpdateService(session: session, downloadsDirectory: directory)
+        var tamperedRoutes = routes()
+        tamperedRoutes[url(dmg)] = UpdateIntegrityFixture(data: Data("tampered".utf8))
+        UpdateIntegrityURLProtocol.install(tamperedRoutes)
+        try await rejects(.integrityMismatch, "Public fallback cannot expose tampered package") {
+            _ = try await corrupted.download(update)
+        }
+        try verify(!FileManager.default.fileExists(atPath: directory.path), "No invalid package is exposed")
+
+        let unsafePages = ["https://github.com/Other/Relay/releases/tag/\(tag)",
+                           "https://github.com/DavisDing/Relay/releases/tag/v9.8.7-beta",
+                           "http://github.com/DavisDing/Relay/releases/tag/\(tag)",
+                           releaseURL.absoluteString + "?extra=1",
+                           "https://evil.invalid/releases/tag/\(tag)"]
+        let policy = UpdateReleaseRedirectPolicy()
+        let task = session.dataTask(with: UpdateService.latestReleaseURL)
+        defer { task.cancel() }
+        let redirect = HTTPURLResponse(url: UpdateService.latestReleaseURL, statusCode: 302, httpVersion: nil, headerFields: nil)!
+        for raw in unsafePages + [releaseURL.absoluteString] {
+            let target = URL(string: raw)!
+            var followed: URLRequest?
+            policy.urlSession(session, task: task, willPerformHTTPRedirection: redirect,
+                              newRequest: URLRequest(url: target)) { followed = $0 }
+            try verify((followed != nil) == (target == releaseURL), "Reject unsafe latest redirects before following")
+            if target != releaseURL {
+                let fallback = UpdateService(session: session)
+                UpdateIntegrityURLProtocol.install(routes(page: target))
+                try await rejects(.unsupportedDownloadURL, "Public latest final source must match fixed repository") {
+                    _ = try await fallback.checkForUpdates()
+                }
+            }
+        }
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        for (headers, seconds) in [
+            ([String: String](), 60.0), (["Retry-After": "120"], 120),
+            (["X-RateLimit-Reset": "1700000300", "Retry-After": "120"], 300),
+            (["Retry-After": "Tue, 14 Nov 2023 22:15:20 GMT"], 120),
+            (["Retry-After": "invalid", "X-RateLimit-Reset": "nan"], 60)
+        ] {
+            let cooldown = UpdateAPICooldown()
+            let response = HTTPURLResponse(url: metadataURL, statusCode: 429, httpVersion: nil, headerFields: headers)!
+            await cooldown.record(response, now: now)
+            try verify(await cooldown.isActive(now: now.addingTimeInterval(seconds - 1)), "Honor API reset/Retry-After window")
+            try verify(!(await cooldown.isActive(now: now.addingTimeInterval(seconds))), "API becomes available after cooldown")
+        }
+        print("PASSED: API 403/429 public Release fallback, exact-tag download, cooldown/reset, checksum and redirect rejection")
     }
 
     private static func verifyRedirectPolicy(session: URLSession, origin: URL, allowedCDN: URL) throws {

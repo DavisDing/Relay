@@ -335,6 +335,8 @@ public struct ProviderSubAccountSnapshot: Codable, Sendable, Equatable, Identifi
     public let manualDisabled: Bool
     public let cooling: Bool
     public let statusMessage: String?
+    /// Current upstream failure streak; nil for snapshots from older gateways.
+    public let consecutiveFailures: Int?
     public let fetchedAt: Date
 
     public init(
@@ -346,6 +348,7 @@ public struct ProviderSubAccountSnapshot: Codable, Sendable, Equatable, Identifi
         manualDisabled: Bool = false,
         cooling: Bool = false,
         statusMessage: String? = nil,
+        consecutiveFailures: Int? = nil,
         fetchedAt: Date = Date()
     ) {
         self.parentAccountID = parentAccountID
@@ -357,6 +360,7 @@ public struct ProviderSubAccountSnapshot: Codable, Sendable, Equatable, Identifi
         self.manualDisabled = manualDisabled
         self.cooling = cooling
         self.statusMessage = statusMessage
+        self.consecutiveFailures = consecutiveFailures
         self.fetchedAt = fetchedAt
     }
 }

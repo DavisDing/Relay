@@ -742,6 +742,7 @@ public final class RelayStore: ObservableObject {
         else if child.manualDisabled { status = .warning("手动停用") }
         else if child.disabled { status = .warning("系统停用") }
         else if child.cooling { status = .warning("冷却中") }
+        else if let failures = child.consecutiveFailures, failures > 0 { status = .error("连续失败 \(failures) 次") }
         else if let message = child.statusMessage?.trimmingCharacters(in: .whitespacesAndNewlines), !message.isEmpty {
             status = .warning(message)
         }
@@ -752,7 +753,8 @@ public final class RelayStore: ObservableObject {
             status: status, lastUpdated: child.fetchedAt, isEnabled: parent.isEnabled,
             availablePoints: child.availablePoints, parentAccountID: child.parentAccountID,
             externalID: child.externalID, disabled: child.disabled,
-            manualDisabled: child.manualDisabled, cooling: child.cooling
+            manualDisabled: child.manualDisabled, cooling: child.cooling,
+            consecutiveFailures: child.consecutiveFailures
         )
     }
 
