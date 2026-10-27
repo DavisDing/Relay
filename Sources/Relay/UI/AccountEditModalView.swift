@@ -228,20 +228,25 @@ public struct AccountEditModalView: View {
                 Text("原生金额 = 额度 ÷ quota_per_unit；此参数不是美元/人民币汇率。")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
             }
-            Text("美元 / 人民币汇率")
-                .font(.system(size: 12, weight: .semibold))
-            Text("站点汇率：\(number(account.siteUSDToCNY))\(account.siteRateIsExpired ? "（已过期）" : "")")
-                .font(.system(size: 11)).foregroundStyle(.secondary)
-            HStack {
-                Text("1 USD =")
-                TextField("自动（可手动填写）", text: $manualRate)
-                    .relayFormField()
-                    .accessibilityLabel("手动美元人民币汇率")
-                Text("CNY")
+            if account.kind != .pipio {
+                Text("美元 / 人民币汇率")
+                    .font(.system(size: 12, weight: .semibold))
+                Text("站点汇率：\(number(account.siteUSDToCNY))\(account.siteRateIsExpired ? "（已过期）" : "")")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                HStack {
+                    Text("1 USD =")
+                    TextField("自动（可手动填写）", text: $manualRate)
+                        .relayFormField()
+                        .accessibilityLabel("手动美元人民币汇率")
+                    Text("CNY")
+                }
+                .font(.system(size: 12))
+                Text("手动值优先，自动刷新不会覆盖；留空恢复站点汇率。站点未提供且未填写时，不进行人民币换算。")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+            } else {
+                Text("当前 Pipio 站点已直接使用人民币展示，跳过美元兑人民币换算。")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
             }
-            .font(.system(size: 12))
-            Text("手动值优先，自动刷新不会覆盖；留空恢复站点汇率。站点未提供且未填写时，不进行人民币换算。")
-                .font(.system(size: 11)).foregroundStyle(.secondary)
         }
     }
 
@@ -257,8 +262,13 @@ public struct AccountEditModalView: View {
 
         let rateUpdate: ManualExchangeRateUpdate
         do {
-            rateUpdate = account.kind == .pipio || account.currency == .usd
-                ? .set(try USDToCNYRate.parseOverride(manualRate)) : .unchanged
+            if account.kind == .pipio {
+                rateUpdate = .set(nil)
+            } else if account.currency == .usd {
+                rateUpdate = .set(try USDToCNYRate.parseOverride(manualRate))
+            } else {
+                rateUpdate = .unchanged
+            }
         } catch {
             errorMessage = error.localizedDescription
             return

@@ -11,7 +11,7 @@ private actor DashboardFixtureClient: HTTPClient {
     let statQuota: Int
     let rejectDashboard: Bool
     private var paths: [String] = []
-    init(dashboard: Data, status: String = #"{"success":true,"data":{"quota_per_unit":500000,"credit_currency":"USD","usd_exchange_rate":7.3}}"#, rejectDashboard: Bool = false, statQuota: Int = 6435000) {
+    init(dashboard: Data, status: String = #"{"success":true,"data":{"quota_per_unit":500000,"display_in_currency":true,"custom_currency_exchange_rate":1,"custom_currency_symbol":"¥","payment_settlement_currency":"CNY"}}"#, rejectDashboard: Bool = false, statQuota: Int = 6435000) {
         self.statQuota = statQuota
         self.dashboard = dashboard
         self.status = status
@@ -271,18 +271,33 @@ enum PipioDashboardContractChecks {
                 throw PipioCheckFailure(message: "invalid dashboard should fail")
             } catch is ProviderError { }
         }
-        let client = DashboardFixtureClient(dashboard: data)
+        let client = DashboardFixtureClient(dashboard: data,
+            status: #"{"success":true,"data":{"quota_per_unit":500000,"display_in_currency":true,"custom_currency_exchange_rate":1,"custom_currency_symbol":"¥","payment_settlement_currency":"CNY"}}"#)
         let adapter = PipioAdapter(client: client)
         let account = AccountConfiguration(displayName: "Fixture", providerKind: .pipio, siteOrigin: URL(string: "https://example.invalid")!)
         let credential = ProviderCredential(secret: "fixture-not-a-real-token", pipioUserID: "1")
         let rate = try await adapter.fetchAccountRate(for: account, credential: credential)
-        try verify(rate.conversionToCNY == Decimal(string: "7.3"), "published exchange rate is retained")
+        try verify(rate.nativeCurrency == .cny && rate.conversionToCNY == 1 && rate.amountMultiplier == 1,
+                   "Pipio uses direct RMB display rate")
         let snapshot = try await adapter.fetchSnapshot(for: account, credential: credential, rate: rate, now: now, calendar: calendar)
         try verify(snapshot.modelUsages?.count == 5, "adapter integrates dashboard models")
         let total = DashboardAggregator.balanceTotal(snapshots: [snapshot], targetCurrency: .cny, now: now)
-        try verify(total.isComplete && total.value?.amount == 730, "home and menu balance converts to CNY")
+        try verify(total.isComplete && total.value?.amount == 100, "home and menu balance keeps direct CNY")
         let today = DashboardAggregator.todaySpendTotal(snapshots: [snapshot], targetCurrency: .cny, now: now, calendar: calendar)
-        try verify(today.isComplete && today.value?.amount == Decimal(string: "115.851"), "today CNY total includes all dashboard model quotas")
+        try verify(today.isComplete && today.value?.amount == Decimal(string: "15.87"), "today CNY total keeps direct CNY")
+
+        // Pipio's current status contract reports direct RMB display.
+        let rmbClient = DashboardFixtureClient(dashboard: data,
+            status: #"{"success":true,"data":{"quota_per_unit":500000,"display_in_currency":true,"custom_currency_exchange_rate":1,"custom_currency_symbol":"¥","payment_settlement_currency":"CNY"}}"#)
+        let rmbAdapter = PipioAdapter(client: rmbClient)
+        let rmbRate = try await rmbAdapter.fetchAccountRate(for: account, credential: credential)
+        try verify(rmbRate.nativeCurrency == .cny && rmbRate.amountMultiplier == 1 && rmbRate.conversionToCNY == 1,
+                   "Pipio current status reports direct RMB")
+        let rmbSnapshot = try await rmbAdapter.fetchSnapshot(for: account, credential: credential, rate: rmbRate, now: now, calendar: calendar)
+        try verify(rmbSnapshot.balance?.amount == 100 && rmbSnapshot.balance?.currency == .cny,
+                   "RMB mode reports quota directly as CNY")
+        try verify(rmbSnapshot.todaySpend?.amount == Decimal(string: "15.87") && rmbSnapshot.todaySpend?.currency == .cny,
+                   "RMB mode skips a second USD to CNY conversion")
         // Reproduce the reported discrepancy without real account data: logs say 35.15,
         // while dashboard model quotas sum to 34.45. Only today's source changes.
         let mismatchClient = DashboardFixtureClient(dashboard: try envelope([
@@ -341,48 +356,27 @@ enum PipioDashboardContractChecks {
         let legacy = AccountRate(accountID: account.id, source: .pipioAccountStatus, nativeCurrency: .usd, quotaPerUnit: 500000, conversionToCNY: nil, fetchedAt: now)
         _ = try await service.resolve(account: account, credential: credential, adapter: adapter, persistedRate: legacy, forceRefresh: false, now: now)
         let calls = await client.count("/api/status")
-        try verify(calls == 2, "upgrade repairs unexpired legacy rate without manual action")
-        let missingClient = DashboardFixtureClient(dashboard: data, status: #"{"success":true,"data":{"quota_per_unit":500000,"credit_currency":"USD"}}"#, rejectDashboard: true)
+        try verify(calls == 2, "old local rate is refreshed without manual action")
+        let missingClient = DashboardFixtureClient(dashboard: data, rejectDashboard: true)
         let missingAdapter = PipioAdapter(client: missingClient)
         let missingRate = try await missingAdapter.fetchAccountRate(for: account, credential: credential)
-        try verify(missingRate.conversionToCNY == nil, "no hardcoded fallback FX")
+        try verify(missingRate.nativeCurrency == .cny && missingRate.conversionToCNY == 1, "RMB rate remains native and does not use FX")
         let partial = try await missingAdapter.fetchSnapshot(for: account, credential: credential, rate: missingRate, now: now, calendar: calendar)
         try verify(partial.balance != nil && partial.monthSpend != nil && partial.modelUsages == nil && partial.todaySpend == nil,
             "denied dashboard preserves balance/month but never substitutes a different today-spend source")
         try verify(!partial.capabilities.contains(.todayUsage) && partial.freshness == .partial, "missing dashboard amount is partial, not fresh zero")
-        // User FX is account metadata, never an alternative quota divisor.
-        var manualAccount = account
-        manualAccount.manualUSDToCNY = 8
-        let manualRateService = RateService()
-        _ = try await manualRateService.resolve(account: manualAccount, credential: credential,
-            adapter: missingAdapter, persistedRate: missingRate, forceRefresh: false, now: now)
-        let unchangedCalls = await missingClient.count("/api/status")
-        try verify(unchangedCalls == 1, "manual FX avoids repeatedly refetching missing site FX before expiry")
-        let repository = InMemoryLocalRepository()
-        try repository.upsertAccount(manualAccount)
-        try repository.upsertSnapshot(partial)
-        let credentials = InMemoryCredentialStore()
-        try await credentials.save(credential, reference: manualAccount.credentialReference)
-        let store = RelayStore(repository: repository, credentialStore: credentials,
-            adapters: ProviderAdapterRegistry(adapters: [missingAdapter]), automaticallyRefresh: false)
-        await store.refresh(accountID: manualAccount.id, forceRateRefresh: true)
-        let refreshed = try repository.snapshot(accountID: manualAccount.id)
-        try verify(refreshed?.balance?.amount == 100 && refreshed?.rate.quotaPerUnit == 500000,
-            "force refresh normalizes quota using site divisor only")
-        let totalAfterRefresh = store.balanceTotalCNY
-        try verify(refreshed?.rate.conversionToCNY == nil && totalAfterRefresh.value?.amount == 800,
-            "manual FX applies without fabricating raw provider rate")
-        let accountAfterRefresh = try repository.account(id: manualAccount.id)
-        try verify(accountAfterRefresh?.manualUSDToCNY == 8,
-            "force refresh preserves saved manual FX")
-        let forcedCalls = await missingClient.count("/api/status")
-        try verify(forcedCalls == 2, "manual FX still allows forcing provider parameter refresh")
-        let noQuotaClient = DashboardFixtureClient(dashboard: data,
-            status: #"{"success":true,"data":{"credit_currency":"USD","usd_exchange_rate":7.3}}"#)
+        let oldStatusClient = DashboardFixtureClient(dashboard: data,
+            status: #"{"success":true,"data":{"quota_per_unit":500000,"credit_currency":"USD","usd_exchange_rate":7.3}}"#)
         do {
-            _ = try await PipioAdapter(client: noQuotaClient).fetchAccountRate(for: manualAccount, credential: credential)
-            throw PipioCheckFailure(message: "manual FX must not substitute missing quota_per_unit")
+            _ = try await PipioAdapter(client: oldStatusClient).fetchAccountRate(for: account, credential: credential)
+            throw PipioCheckFailure(message: "old Pipio USD status must be rejected")
         } catch ProviderError.missingRate {}
-        print("PASSED: Pipio dashboard endpoint, five models, tokens/cache coverage, optional rows, account FX and legacy refresh")
+        let noQuotaClient = DashboardFixtureClient(dashboard: data,
+            status: #"{"success":true,"data":{"display_in_currency":true,"custom_currency_exchange_rate":1,"custom_currency_symbol":"¥","payment_settlement_currency":"CNY"}}"#)
+        do {
+            _ = try await PipioAdapter(client: noQuotaClient).fetchAccountRate(for: account, credential: credential)
+            throw PipioCheckFailure(message: "missing quota_per_unit must be rejected")
+        } catch ProviderError.missingRate {}
+        print("PASSED: Pipio dashboard endpoint, direct RMB display, five models, tokens/cache coverage and refresh")
     }
 }

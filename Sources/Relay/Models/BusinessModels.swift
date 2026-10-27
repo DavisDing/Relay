@@ -154,6 +154,10 @@ public struct AccountRate: Codable, Sendable, Equatable {
     public let source: RateSource
     public let nativeCurrency: Currency
     public let quotaPerUnit: Decimal?
+    /// Provider supplied multiplier for the displayed native amount.
+    /// Pipio's current status contract supplies this value; other providers
+    /// leave it nil.
+    public let amountMultiplier: Decimal?
     public let conversionToCNY: Decimal?
     public let fetchedAt: Date
     public let expiresAt: Date?
@@ -163,6 +167,7 @@ public struct AccountRate: Codable, Sendable, Equatable {
         source: RateSource,
         nativeCurrency: Currency,
         quotaPerUnit: Decimal? = nil,
+        amountMultiplier: Decimal? = nil,
         conversionToCNY: Decimal? = nil,
         fetchedAt: Date = Date(),
         expiresAt: Date? = nil
@@ -171,6 +176,7 @@ public struct AccountRate: Codable, Sendable, Equatable {
         self.source = source
         self.nativeCurrency = nativeCurrency
         self.quotaPerUnit = quotaPerUnit
+        self.amountMultiplier = amountMultiplier
         self.conversionToCNY = conversionToCNY
         self.fetchedAt = fetchedAt
         self.expiresAt = expiresAt

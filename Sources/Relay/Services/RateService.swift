@@ -29,13 +29,11 @@ public actor RateService {
         now: Date = Date()
     ) async throws -> RateResolution {
         let candidate = cachedRates[account.id] ?? persistedRate
-        // Older Pipio snapshots omitted the published USD exchange rate. Re-fetch
-        // these incomplete rates instead of waiting for the weekly expiry.
-        let needsPipioConversion = candidate.map {
-            $0.source == .pipioAccountStatus && $0.nativeCurrency == .usd && $0.conversionToCNY == nil &&
-            !(account.manualUSDToCNY.map(USDToCNYRate.isValid) ?? false)
+        let needsPipioDisplayRate = candidate.map {
+            $0.source == .pipioAccountStatus && ($0.nativeCurrency != .cny || $0.amountMultiplier == nil)
         } ?? false
-        if !forceRefresh, !needsPipioConversion, let candidate, !candidate.isExpired(at: now) {
+        if !forceRefresh, !needsPipioDisplayRate,
+           let candidate, !candidate.isExpired(at: now) {
             cachedRates[account.id] = candidate
             return RateResolution(rate: candidate, isStale: false)
         }
@@ -49,7 +47,7 @@ public actor RateService {
         } catch {
             if Task.isCancelled || error is CancellationError { throw CancellationError() }
             if let providerError = error as? ProviderError, case .rateLimited = providerError { throw providerError }
-            if let candidate {
+            if let candidate, !needsPipioDisplayRate {
                 cachedRates[account.id] = candidate
                 return RateResolution(rate: candidate, isStale: true)
             }

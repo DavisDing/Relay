@@ -19,9 +19,13 @@ public struct PipioAdapter: ProviderAdapter {
 
         let envelope: PipioEnvelope<PipioStatusData> = try decode(data)
         guard envelope.success != false,
-              let quotaPerUnit = envelope.data?.quotaPerUnit,
+              let status = envelope.data,
+              let quotaPerUnit = status.quotaPerUnit,
               quotaPerUnit > 0,
-              let currency = Currency(providerCode: envelope.data?.creditCurrency ?? envelope.data?.quotaDisplayType) else {
+              status.displayInCurrency == true,
+              let currency = status.displayCurrency,
+              currency == .cny,
+              let amountMultiplier = status.amountMultiplier else {
             throw ProviderError.missingRate
         }
 
@@ -31,7 +35,8 @@ public struct PipioAdapter: ProviderAdapter {
             source: .pipioAccountStatus,
             nativeCurrency: currency,
             quotaPerUnit: quotaPerUnit,
-            conversionToCNY: currency == .cny ? 1 : envelope.data?.usdExchangeRate.flatMap { $0 > 0 ? $0 : nil },
+            amountMultiplier: amountMultiplier,
+            conversionToCNY: 1,
             fetchedAt: fetchedAt,
             expiresAt: rateRefreshInterval.nextRefresh(after: fetchedAt)
         )
@@ -78,11 +83,12 @@ public struct PipioAdapter: ProviderAdapter {
             credential: credential,
             range: DateInterval(start: monthStart, end: now)
         )
+        let effectiveQuotaPerUnit = effectiveQuotaPerUnit(quotaPerUnit, rate: rate)
         async let dashboardResult = fetchDashboardUsage(
             urls: urls,
             credential: credential,
             range: DateInterval(start: dayStart, end: now),
-            quotaPerUnit: quotaPerUnit,
+            quotaPerUnit: effectiveQuotaPerUnit,
             currency: rate.nativeCurrency
         )
 
@@ -90,9 +96,9 @@ public struct PipioAdapter: ProviderAdapter {
         let dashboard = try? await dashboardResult
         let modelUsages = dashboard?.models
         let currency = rate.nativeCurrency
-        let balance = current.quota.map { MoneyValue(amount: $0 / quotaPerUnit, currency: currency) }
+        let balance = current.quota.map { MoneyValue(amount: $0 / effectiveQuotaPerUnit, currency: currency) }
         let todaySpend = dashboard?.spend
-        let monthSpend = month?.quota.map { MoneyValue(amount: $0 / quotaPerUnit, currency: currency) }
+        let monthSpend = month?.quota.map { MoneyValue(amount: $0 / effectiveQuotaPerUnit, currency: currency) }
 
         var capabilities: ProviderCapabilities = []
         if balance != nil { capabilities.insert(.balance) }
@@ -151,12 +157,12 @@ public struct PipioAdapter: ProviderAdapter {
             // Failure of optional metrics must not discard a valid historical amount.
             let dashboard = try? await fetchDashboardUsage(urls: urls, credential: credential,
                 range: DateInterval(start: day, end: end.addingTimeInterval(-1)),
-                quotaPerUnit: quotaPerUnit, currency: rate.nativeCurrency)
+                quotaPerUnit: effectiveQuotaPerUnit(quotaPerUnit, rate: rate), currency: rate.nativeCurrency)
             try Task.checkCancellation()
             records.append(DailyUsageRecord(
                 accountID: account.id,
                 day: day,
-                spend: MoneyValue(amount: quota / quotaPerUnit, currency: rate.nativeCurrency),
+                spend: MoneyValue(amount: quota / effectiveQuotaPerUnit(quotaPerUnit, rate: rate), currency: rate.nativeCurrency),
                 modelUsages: dashboard?.models,
                 updatedAt: now
             ))
@@ -247,6 +253,11 @@ public struct PipioAdapter: ProviderAdapter {
         return try PipioDashboardParser.usage(from: data, range: range, quotaPerUnit: quotaPerUnit, currency: currency)
     }
 
+    private func effectiveQuotaPerUnit(_ quotaPerUnit: Decimal, rate: AccountRate) -> Decimal {
+        let multiplier = rate.amountMultiplier.flatMap { $0 > 0 ? $0 : nil } ?? 1
+        return quotaPerUnit / multiplier
+    }
+
     private func decode<T: Decodable>(_ data: Data) throws -> T {
         do {
             let decoder = JSONDecoder()
@@ -265,9 +276,20 @@ private struct PipioEnvelope<Value: Decodable>: Decodable {
 
 private struct PipioStatusData: Decodable {
     let quotaPerUnit: Decimal?
-    let creditCurrency: String?
-    let quotaDisplayType: String?
-    let usdExchangeRate: Decimal?
+    let displayInCurrency: Bool?
+    let customCurrencyExchangeRate: Decimal?
+    let customCurrencySymbol: String?
+    let paymentSettlementCurrency: String?
+
+    var displayCurrency: Currency? {
+        if let currency = Currency(providerCode: customCurrencySymbol) { return currency }
+        return Currency(providerCode: paymentSettlementCurrency)
+    }
+
+    var amountMultiplier: Decimal? {
+        guard let value = customCurrencyExchangeRate, value > 0 else { return nil }
+        return value
+    }
 }
 
 private struct PipioUserData: Decodable {

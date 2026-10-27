@@ -44,7 +44,7 @@ RelayStore / AccountService / RefreshScheduler / RefreshCoordinator
 
 ### 供应商边界
 
-- Pipio 的管理地址和模型 API 地址分开规范化：`https://pipio.io/api` 与 `https://pipio.io/v1`。管理令牌和数值 `Pipio-User` 分开保存和发送。
+- Pipio 的管理地址和模型 API 地址分开规范化：`https://pipio.io/api` 与 `https://pipio.io/v1`。管理令牌和数值 `Pipio-User` 分开保存和发送。当前适配器要求新版直接金额配置：`display_in_currency=true`、`custom_currency_symbol=¥`、`payment_settlement_currency=CNY` 和有效的 `custom_currency_exchange_rate`；旧 USD 字段不再作为回退。
 - Pipio 今日消费使用看板数据；模型和 Token 等可选指标缺失时保持未知。历史补齐只处理今天以前的 7/30 日范围。
 - DeepSeek 余额固定使用官方 `GET https://api.deepseek.com/user/balance`。平台历史用量只在用户手动提供 `userToken` 时访问网页内部接口；应用不读取浏览器 Cookie。
 - workbuddy2api 读取网关状态、子账户积分和可选统计，并提供已经存在的子账户启停请求入口。远端启停与本机 loopback HTTP 的产品边界见 REQUIREMENT 的 `NEEDS_CONFIRMATION`。

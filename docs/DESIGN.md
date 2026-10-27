@@ -89,6 +89,8 @@ UI 不拼供应商 URL、不解码供应商 JSON、不持有长期凭据。关�
 
 输入站点可以是站点根地址或 `/v1` 地址。`ProviderURLNormalizer` 派生 origin、`/api` 管理基址和 `/v1` 模型基址。管理请求使用 `Authorization: Bearer` 和 `Pipio-User`，两者来自本机凭据文件的不同字段。
 
+`/api/status` 的余额单位要求 `display_in_currency=true`、`custom_currency_symbol`、`payment_settlement_currency` 和正的 `custom_currency_exchange_rate`。当前产品将展示金额记录为 CNY，余额、看板消费、月度统计和历史记录统一按 CNY 计算；缺少这些字段的旧响应直接返回不兼容，不读取 `credit_currency` 或 `usd_exchange_rate`。旧本地 `AccountRate` 快照不再作为 Pipio 的有效候选，会在下一次解析时重新请求新版状态。
+
 快照路径：
 
 ```text
