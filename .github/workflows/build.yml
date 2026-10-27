@@ -44,6 +44,9 @@ jobs:
       - name: Compile GUI navigation checks (no GUI pass claimed)
         run: scripts/test-window-navigation.sh --build-only
 
+      - name: Check DMG creation retry and failure handling
+        run: bash scripts/test-dmg-creation.sh
+
       - name: Verify embedded DMG file icon survives download
         run: scripts/test-dmg-icon.sh
 

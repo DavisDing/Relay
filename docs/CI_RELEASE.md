@@ -34,6 +34,8 @@ DMG 文件本身复用同一图标。`scripts/set-dmg-icon.swift` 通过 `hdiuti
 
 `scripts/test-dmg-icon.sh` 创建临时 DMG，按文件字节复制模拟发布下载，确认图标仍匹配、映像校验通过，非法图标输入被拒绝且映像未改变；CI 在打包前运行。本项不代替 Finder 的实际显示验收。现有 hdiutil 路线沿用打包工具；macOS 27 提示其已弃用，但当前系统仍提供这些命令。
 
+测试镜像与正式 DMG 统一通过 `scripts/create-dmg.sh` 创建。遇到明确的 `hdiutil: create failed - Resource busy` 时最多尝试 5 次，间隔 2/4/6/8 秒；每次使用独立临时文件，仅成功后交付目标路径，失败清理临时文件。其他错误立即终止，持续占用仍阻止发布；图标与 SHA-256 校验继续执行。CI 先运行 `bash scripts/test-dmg-creation.sh` 验证恢复、重试上限、其他错误、残留清理及已有文件保护。
+
 ## 本地打包
 
 在 macOS 上执行：

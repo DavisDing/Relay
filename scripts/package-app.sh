@@ -114,12 +114,8 @@ trap cleanup_dmg_staging EXIT
 ditto "$app_dir" "$dmg_staging/$app_name"
 ln -s /Applications "$dmg_staging/Applications"
 
-hdiutil create \
-    -volname "Relay ${marketing_version}" \
-    -srcfolder "$dmg_staging" \
-    -ov \
-    -format UDZO \
-    "$dmg_path" >/dev/null
+bash "$root_dir/scripts/create-dmg.sh" \
+    "$dmg_staging" "Relay ${marketing_version}" "$dmg_path" >/dev/null
 # Keep the custom file icon inside the DMG bytes, rather than a local Finder
 # resource fork which GitHub uploads and browser downloads would discard.
 swift -module-cache-path "$dmg_staging/module-cache" \

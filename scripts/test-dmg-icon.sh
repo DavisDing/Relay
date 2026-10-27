@@ -5,8 +5,8 @@ work="$(mktemp -d "${TMPDIR:-/tmp}/relay-dmg-icon-check.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/source"
 printf 'Relay disk image icon fixture\n' > "$work/source/fixture.txt"
-hdiutil create -volname 'Relay icon check' -srcfolder "$work/source" \
-    -format UDZO "$work/original.dmg" >/dev/null
+bash "$root_dir/scripts/create-dmg.sh" \
+    "$work/source" 'Relay icon check' "$work/original.dmg" >/dev/null
 swift -module-cache-path "$work/module-cache" "$root_dir/scripts/set-dmg-icon.swift" \
     "$root_dir/Resources/AppIcon.icns" "$work/original.dmg"
 
