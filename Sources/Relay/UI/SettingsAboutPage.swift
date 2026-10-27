@@ -45,6 +45,13 @@ struct SettingsAboutPage: View {
             SettingsSection("应用信息") {
                 aboutInfoRow(title: "版本", value: appVersionText, systemImage: "tag")
                 latestVersionRow
+                if let updateStatusMessage {
+                    Text(updateStatusMessage)
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.leading, 28)
+                }
                 if case .failed(let message) = updateState.status {
                     Text(message)
                         .font(.system(size: 10))
@@ -64,20 +71,6 @@ struct SettingsAboutPage: View {
                         .font(.system(size: 12))
                         .lineLimit(1)
                 }
-            }
-
-            Divider().opacity(0.4)
-            SettingsSection("应用更新") {
-                if let updateStatusMessage {
-                    Text(updateStatusMessage)
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Text("Relay 会从 GitHub Releases 检查 macOS Apple Silicon 版本。发现新版本后，点击“最新版本”即可下载；下载后放入“下载”文件夹，由你确认退出并替换旧版本。")
-                    .font(.system(size: 10))
-                    .foregroundColor(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Divider().opacity(0.4)
