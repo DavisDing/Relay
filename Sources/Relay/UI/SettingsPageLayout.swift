@@ -54,7 +54,7 @@ struct SettingsTabBar: View {
                             .font(.system(size: 10, weight: selectedTab == tab ? .semibold : .regular))
                             .lineLimit(1)
                     }
-                    .frame(maxWidth: .infinity, minHeight: 54)
+                    .frame(maxWidth: .infinity, minHeight: 44)
                     .foregroundStyle(selectedTab == tab ? Color.accentColor : Color.secondary)
                     .background(
                         selectedTab == tab ? Color.accentColor.opacity(0.08) : Color.clear,
@@ -85,12 +85,12 @@ struct SettingsPageScroll<Content: View>: View {
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 22, content: content)
+            VStack(alignment: .leading, spacing: 16, content: content)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 16)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 8)
         }
-        .font(.system(size: 13))
+        .font(.system(size: 12))
         .controlSize(.small)
         .buttonStyle(RelaySecondaryCapsuleButtonStyle())
     }
@@ -113,8 +113,8 @@ struct SettingsSection<Content: View>: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .accessibilityAddTraits(.isHeader)
-            VStack(alignment: .leading, spacing: 14, content: content)
-                .padding(16).frame(maxWidth: .infinity, alignment: .leading).relayGlassTile()
+            VStack(alignment: .leading, spacing: 10, content: content)
+                .padding(12).frame(maxWidth: .infinity, alignment: .leading).relayGlassTile()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -153,7 +153,7 @@ struct SettingsToggleRow: View {
     var body: some View {
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(.system(size: 13, weight: .medium))
+                Text(title).font(.system(size: 12, weight: .medium))
                 if let detail { SettingsHint(detail) }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

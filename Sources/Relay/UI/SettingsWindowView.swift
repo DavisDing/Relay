@@ -90,23 +90,7 @@ public struct SettingsWindowView: View {
 
     public var body: some View {
         VStack(spacing: 0) {
-            ZStack {
-                Text("设置")
-                    .font(.system(size: 23, weight: .semibold))
-
-                HStack {
-                    Button(action: onClose) {
-                        Image(systemName: "chevron.left")
-                    }
-                    .buttonStyle(RelayCircularIconButtonStyle())
-                    .help("返回首页")
-                    .accessibilityLabel("返回首页")
-                    Spacer()
-                }
-            }
-            .frame(height: RelayVisualStyle.navigationHeight)
-            .padding(.horizontal, 16)
-            .padding(.top, 18)
+            RelayPageHeader(title: "设置", onBack: onClose)
 
             SettingsTabBar(selectedTab: $selectedTab)
 
@@ -114,22 +98,18 @@ public struct SettingsWindowView: View {
                 .background(RelayInitialFocus().id(selectedTab).frame(width: 0, height: 0).accessibilityHidden(true))
                 .disabled(!store.storageAvailability.isAvailable && selectedTab != .about)
                 .frame(maxHeight: .infinity)
-                .padding(.horizontal, 16)
-                .padding(.top, 12)
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
 
-            HStack {
-                Text(store.storageAvailability.isAvailable && storageWasAvailableOnOpen ? "设置会在关闭窗口时自动保存" : "本地数据未载入，本窗口不保存设置")
+            RelayPageFooter {
+                Text(store.storageAvailability.isAvailable && storageWasAvailableOnOpen ? "关闭时自动保存" : "本地数据未载入，设置不保存")
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer()
                 Button("完成", action: onClose)
-                    .buttonStyle(RelayPrimaryCapsuleButtonStyle())
-                    .frame(width: 56)
+                    .buttonStyle(RelayTextButtonStyle())
             }
-            .padding(14)
-            .background(.bar)
-            .padding(.top, 12)
         }
         .frame(width: RelayVisualStyle.settingsPanelWidth, height: RelayVisualStyle.settingsPanelHeight)
         .relayPanelSurface(cornerRadius: RelayVisualStyle.panelCornerRadius)

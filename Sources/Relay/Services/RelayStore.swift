@@ -830,6 +830,31 @@ public final class RelayStore: ObservableObject {
         DashboardAggregator.todaySpendTotal(snapshots: snapshots, targetCurrency: settings.baseCurrency, now: presentationDate, expectedAccountIDs: expectedAccountIDs, calendar: calendar, manualUSDToCNY: manualExchangeRates)
     }
 
+    /// Each provider's local day follows the same calendar as its detail page.
+    /// Use the live dashboard total for today and cached daily records for earlier days.
+    public var dashboardSpendTrend: [Decimal?] {
+        let ids = expectedAccountIDs
+        return (-6...0).map { offset in
+            if offset == 0 {
+                let today = todaySpendTotalCNY
+                return today.isComplete ? today.value?.amount : nil
+            }
+            var values = [UUID: MoneyValue]()
+            for configuration in detailConfigurations where ids.contains(configuration.id) {
+                let providerCalendar = BudgetService.calendar(for: configuration.providerKind, fallback: calendar)
+                guard let day = providerCalendar.date(byAdding: .day, value: offset,
+                    to: providerCalendar.startOfDay(for: presentationDate)) else { continue }
+                let record = detailHistory[configuration.id]?.filter {
+                    providerCalendar.isDate($0.day, inSameDayAs: day)
+                }.max { $0.updatedAt < $1.updatedAt }
+                values[configuration.id] = record?.spend
+            }
+            return DashboardAggregator.historicalSpendTotal(values: values, snapshots: snapshots,
+                expectedAccountIDs: ids, targetCurrency: settings.baseCurrency, now: presentationDate,
+                manualUSDToCNY: manualExchangeRates)
+        }
+    }
+
     public var hasLowBalance: Bool {
         accounts.contains { account in
             guard account.isEnabled, !account.isHidden else { return false }

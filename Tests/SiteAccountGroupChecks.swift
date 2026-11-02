@@ -66,6 +66,28 @@ enum SiteAccountGroupChecks {
         let total = store.todaySpendTotal(forAccountIDs: selectedIDs)
         try check(total.isComplete && total.value?.amount == 3 && store.todaySpendTotalCNY.value?.amount == 6,
                   "Site totals exclude other sites while the dashboard total remains unchanged")
+        let now = Date()
+        let providerCalendar = BudgetService.calendar(for: .pipio)
+        let yesterday = providerCalendar.date(byAdding: .day, value: -1, to: providerCalendar.startOfDay(for: now))!
+        for config in configured {
+            try repo.upsertDailyUsage(DailyUsageRecord(accountID: config.id, day: yesterday,
+                                                     spend: MoneyValue(amount: 2, currency: .cny)))
+        }
+        store.updateTemporalPresentation(at: now)
+        try check(store.dashboardSpendTrend.count == 7 && store.dashboardSpendTrend[5] == 6
+                  && store.dashboardSpendTrend[6] == 6 && store.dashboardSpendTrend[4] == nil,
+                  "Home trend uses complete historical totals and the live today total; missing days remain gaps")
+        try check(DashboardAggregator.historicalSpendTotal(values: [configured[0].id: MoneyValue(amount: 2, currency: .cny)],
+            snapshots: [], expectedAccountIDs: selectedIDs, targetCurrency: .cny, now: now) == nil,
+                  "A partially recorded day is never drawn as a complete total")
+        let usd = [configured[0].id: MoneyValue(amount: 2, currency: .usd)]
+        try check(DashboardAggregator.historicalSpendTotal(values: usd, snapshots: store.snapshots,
+            expectedAccountIDs: [configured[0].id], targetCurrency: .cny, now: now) == nil,
+                  "Historical sparkline requires usable FX for mixed currencies")
+        try check(DashboardAggregator.historicalSpendTotal(values: usd, snapshots: store.snapshots,
+            expectedAccountIDs: [configured[0].id], targetCurrency: .cny, now: now,
+            manualUSDToCNY: [configured[0].id: 7]) == 14,
+                  "Historical sparkline shares the dashboard's per-account manual FX")
         store.setEnabled(accountID: configured[1].id, enabled: false)
         try check(store.todaySpendTotal(forAccountIDs: selectedIDs).value?.amount == 1, "Disabled accounts do not contribute to site totals")
         store.setHidden(accountID: configured[0].id, hidden: true)

@@ -98,20 +98,19 @@ public struct AccountDetailView: View {
 
     public var body: some View {
         VStack(spacing: 0) {
-            header
+            RelayPageHeader(title: "账户详情", onBack: onClose,
+                accessorySystemImage: accountWebsiteURL == nil ? nil : "safari",
+                accessoryLabel: "打开账户官网", onAccessory: openAccountWebsite)
 
             ScrollView(.vertical, showsIndicators: true) {
-                VStack(alignment: .leading, spacing: 24) {
+                VStack(alignment: .leading, spacing: 12) {
                     accountIdentity
                     if account.kind == .workbuddy2api {
                         creditDetails
                         trendSection
                     } else {
                         metrics
-                        if let id = UUID(uuidString: account.id) {
-                            BudgetAccountPanel(budget: monthlyBudget, snapshot: budgetSnapshot,
-                                               accountID: id, provider: account.kind)
-                        }
+                        Divider().opacity(0.5)
                         trendSection
                     }
 
@@ -126,38 +125,21 @@ public struct AccountDetailView: View {
                             : historyCalendar.isDateInToday(selectedModelDate)
                                 ? "当天暂无可用模型明细，请刷新账户。"
                                 : "该日期暂无可用模型明细，可在编辑账户中回填历史。")
+                    if account.kind != .workbuddy2api, monthlyBudget != nil, let id = UUID(uuidString: account.id) {
+                        DisclosureGroup("本月预算与提醒") {
+                            BudgetAccountPanel(budget: monthlyBudget, snapshot: budgetSnapshot,
+                                               accountID: id, provider: account.kind)
+                        }
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                    }
                 }
-                .padding(.horizontal, 28)
-                .padding(.top, 12)
-                .padding(.bottom, 24)
+                .padding(.horizontal, 20)
+                .padding(.top, 4)
+                .padding(.bottom, 12)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .layoutPriority(1)
 
-            HStack(spacing: 8) {
-                Text(compactFooterText)
-                    .font(.system(size: 10))
-                    .foregroundStyle(dataErrorMessage == nil ? Color.secondary : Color.red)
-                    .help(footerDetailText)
-                    .accessibilityLabel(footerDetailText)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                Spacer(minLength: 6)
-                HStack(spacing: 6) {
-                    if accountWebsiteURL != nil {
-                        Button(action: openAccountWebsite) {
-                            Label("官网", systemImage: "safari")
-                        }
-                        .buttonStyle(RelaySecondaryCapsuleButtonStyle())
-                    }
-                    Button("返回首页", action: onClose)
-                        .buttonStyle(RelayPrimaryCapsuleButtonStyle())
-                }
-
-            }
-            .padding(.horizontal, 28)
-            .padding(.vertical, 16)
-            .background(.bar)
         }
         .frame(width: RelayVisualStyle.detailPanelWidth, height: RelayVisualStyle.detailPanelHeight)
         .relayPanelSurface(cornerRadius: RelayVisualStyle.panelCornerRadius)
@@ -220,26 +202,13 @@ public struct AccountDetailView: View {
         return detail.isEmpty ? lastUpdatedText : detail + "；" + lastUpdatedText
     }
 
-    private var header: some View {
-        HStack {
-            Button(action: onClose) { Label("返回", systemImage: "chevron.left") }
-                .buttonStyle(RelayTextButtonStyle()).accessibilityLabel("返回首页")
-            Spacer()
-            Text("账户详情").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
-            Spacer()
-            Button(action: onClose) { Image(systemName: "xmark") }
-                .buttonStyle(RelayCircularIconButtonStyle()).accessibilityLabel("关闭详情并返回首页")
-        }
-        .padding(.horizontal, 22).padding(.vertical, 12)
-    }
-
     private var accountIdentity: some View {
-        HStack(spacing: 13) {
-            RelayProviderIcon(kind: account.kind, size: 44)
-            VStack(alignment: .leading, spacing: 5) {
-                Text(account.name).font(.system(size: 25, weight: .semibold)).tracking(-0.5).lineLimit(1)
-                Text(account.kind.displayName + " · " + SiteAccountGroup.displayAddress(for: account))
-                    .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
+        HStack(spacing: 10) {
+            RelayProviderIcon(kind: account.kind, size: 30)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(account.kind.displayName).font(.system(size: 18, weight: .semibold)).tracking(-0.5).lineLimit(1)
+                Text(account.name + " · " + SiteAccountGroup.displayAddress(for: account))
+                    .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 8)
             Label(compactFooterText, systemImage: statusSymbol)
@@ -251,10 +220,10 @@ public struct AccountDetailView: View {
     }
 
     private var creditDetails: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 10) {
             Text("可用积分").font(.system(size: 12)).foregroundStyle(.secondary)
             Text(account.availablePoints.map { RelayNumberFormatter.decimal($0) } ?? "—")
-                .font(.system(size: 42, weight: .semibold)).tracking(-1).monospacedDigit()
+                .font(.system(size: 28, weight: .semibold)).tracking(-1).monospacedDigit()
             Text("网关积分独立统计，不与货币余额合计。")
                 .font(.system(size: 12)).foregroundStyle(.secondary)
             if account.parentAccountID != nil {
@@ -278,15 +247,15 @@ public struct AccountDetailView: View {
     }
 
     private var metrics: some View {
-        HStack(alignment: .top, spacing: 28) {
-            VStack(alignment: .leading, spacing: 11) {
-                Text("可用余额").font(.system(size: 12)).foregroundStyle(.secondary)
+        HStack(alignment: .top, spacing: 16) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("可用余额").font(.system(size: 10)).foregroundStyle(.secondary)
                 Text(account.balance.map { RelayNumberFormatter.money($0, currency: account.currency) } ?? "—")
-                    .font(.system(size: 40, weight: .semibold)).tracking(-1)
+                    .font(.system(size: 28, weight: .semibold)).tracking(-1)
                     .monospacedDigit().lineLimit(1).minimumScaleFactor(0.65)
                 Text(account.currency.rawValue + " · 当前快照")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
-            }.frame(maxWidth: .infinity, alignment: .leading).layoutPriority(1)
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+            }.frame(maxWidth: .infinity, alignment: .leading)
             MetricCard(title: "今日消费",
                 value: account.todaySpend.map { RelayNumberFormatter.money($0, currency: account.currency) } ?? "—",
                 subTitle: "供应商当日口径")
@@ -294,19 +263,15 @@ public struct AccountDetailView: View {
                 value: account.monthSpend.map { RelayNumberFormatter.money($0, currency: account.currency) } ?? "—",
                 subTitle: monthlyBudget.map { "预算 " + RelayNumberFormatter.money($0.amount, currency: $0.currency) } ?? "供应商账单周期")
         }
-        .padding(.vertical, 12)
+        .padding(.top, 8)
     }
 
     private var trendSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("消费趋势")
-                        .font(.system(size: 15, weight: .semibold))
-                    Text(account.kind == .pipio ? "历史按已完成日期查询，今天由正常刷新更新。" : account.kind == .workbuddy2api ? "根据 /v1/stats 的进程累计积分计算刷新增量；无法恢复未采集日期。" : "平台历史使用手动填写的 userToken，按北京时间统计；缺失日期为未知。")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
-                }
+                Text("消费趋势")
+                    .font(.system(size: 12, weight: .semibold))
+                    .help(trendExplanation).accessibilityHint(trendExplanation)
                 Spacer()
                 Text("近 7 日 · " + (account.kind == .workbuddy2api ? "积分" : account.currency.rawValue))
                     .font(.system(size: 10, weight: .medium))
@@ -320,16 +285,22 @@ public struct AccountDetailView: View {
                     systemImage: "chart.line.uptrend.xyaxis",
                     description: Text(account.kind == .pipio ? "Pipio 未返回可用的历史统计；请稍后刷新。" : account.kind == .workbuddy2api ? "首次刷新后会保存积分增量；请继续刷新以形成趋势。" : "后续成功同步会保存当天累计，并逐日形成趋势。")
                 )
-                .frame(height: 155)
+                .frame(height: 130)
                 .background(.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
             } else {
                 AdaptiveLineChart(dataPoints: displayedHistoryPoints,
                     unit: account.kind == .workbuddy2api ? "积分" : account.currency.symbol,
                     onSelect: { selectedHistoryPointID = $0?.id })
-                    .frame(height: 185)
-                    .padding(.top, 12)
+                    .frame(height: 116)
+                    .padding(.top, 4)
             }
         }
+    }
+
+    private var trendExplanation: String {
+        account.kind == .pipio ? "历史按已完成日期查询，今天由正常刷新更新。"
+            : account.kind == .workbuddy2api ? "根据 /v1/stats 的进程累计积分计算刷新增量；无法恢复未采集日期。"
+            : "平台历史使用手动填写的 userToken，按北京时间统计；缺失日期为未知。"
     }
 
     private var historyCalendar: Calendar {
@@ -359,10 +330,8 @@ public struct AccountDetailView: View {
         if let historyRecords, let id = historyAccountID {
             let coverage = HistoryCoverage.calculate(records: historyRecords, accountID: id,
                 days: 7, calendar: historyCalendar, currency: account.currency)
-            Text("有效金额 \(coverage.knownDays)/7 天")
-                .font(.system(size: 10)).foregroundStyle(.secondary)
             if !coverage.isComplete {
-                Text("尚有 \(coverage.missingDays.count) 天金额未知；图表只绘制已有记录。")
+                Text("有效金额 \(coverage.knownDays)/7 天 · 缺失日期为未知")
                     .font(.system(size: 10)).foregroundStyle(.secondary)
             }
         }
@@ -456,9 +425,9 @@ private struct MetricCard: View {
     let subTitle: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(title).font(.system(size: 12)).foregroundStyle(.secondary)
-            Text(value).font(.system(size: 26, weight: .semibold)).tracking(-0.5)
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title).font(.system(size: 10)).foregroundStyle(.secondary)
+            Text(value).font(.system(size: 20, weight: .semibold)).tracking(-0.5)
                 .monospacedDigit().lineLimit(1).minimumScaleFactor(0.65)
             Text(subTitle).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(2)
         }

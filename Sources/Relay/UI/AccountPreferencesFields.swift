@@ -10,13 +10,15 @@ struct AccountPreferencesFields: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("分组与预算").font(.system(size: 12, weight: .semibold))
-            VStack(alignment: .leading, spacing: 4) {
-                Text("分组名称").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
-                TextField("可选，例如：生产、开发", text: $groupName).relayFormField()
+            HStack(alignment: .bottom, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("分组名称").font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+                    TextField("可选，例如：生产、开发", text: $groupName).relayFormField()
+                }
+                Toggle("置顶", isOn: $isPinned).font(.system(size: 11))
+                    .toggleStyle(.switch).controlSize(.mini)
+                    .frame(height: RelayVisualStyle.inputHeight)
             }
-            Toggle("置顶账号", isOn: $isPinned).font(.system(size: 12))
-                .toggleStyle(.switch).controlSize(.mini)
             if provider != .workbuddy2api {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("每月预算").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
@@ -26,7 +28,7 @@ struct AccountPreferencesFields: View {
                             ForEach(Currency.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                         }.labelsHidden().frame(width: 90)
                     }
-                    Text("选择服务商月消费的原始币种；开启预算提醒后，达到 80% 和 100% 时通知。")
+                    Text("按账户原币种填写；预算提醒可在设置中开启。")
                         .font(.system(size: 10)).foregroundStyle(.secondary)
                 }
             } else {

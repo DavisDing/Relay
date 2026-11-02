@@ -51,7 +51,7 @@ struct RelayVisualPreview {
             ]))
         let store = RelayStore(repository: repository, credentialStore: InMemoryCredentialStore(),
             adapters: ProviderAdapterRegistry(adapters: []), automaticallyRefresh: false)
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 840),
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 680, height: 700),
             styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
         window.title = "Relay UI 预览 · 离线示例"
         window.isReleasedWhenClosed = false
@@ -72,23 +72,25 @@ private struct RelayPreviewGallery: View {
     @State private var page = "首页"
     @State private var deletion: AccountModel?
     @State private var selectedAccountID: String?
+    @State private var darkAppearance = false
     private let pages = ["首页", "添加账户", "编辑账户", "账户详情", "设置", "批量整理"]
 
     var body: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 10) {
             Text("真实 SwiftUI 页面 · 离线示例数据").font(.headline)
             Picker("预览页面", selection: $page) {
                 ForEach(pages, id: \.self) { Text($0).tag($0) }
             }.pickerStyle(.segmented)
-            ScrollView([.horizontal, .vertical]) {
-                HStack(alignment: .top, spacing: 24) {
-                    preview(colorScheme: .light, title: "浅色")
-                    preview(colorScheme: .dark, title: "深色")
-                }.padding(8)
-            }
+            Picker("外观", selection: $darkAppearance) {
+                Text("浅色").tag(false)
+                Text("深色").tag(true)
+            }.pickerStyle(.segmented).frame(width: 140)
+            Spacer(minLength: 0)
+            preview(colorScheme: darkAppearance ? .dark : .light, title: "\(Int(previewSize.width)) × \(Int(previewSize.height)) pt")
+            Spacer(minLength: 0)
         }
-        .padding(24)
-        .frame(width: 1100, height: 840)
+        .padding(16)
+        .frame(width: 680, height: 700)
         .background(Color(nsColor: .windowBackgroundColor))
     }
 

@@ -3,33 +3,33 @@ import SwiftUI
 /// Apple Design expressed through native macOS surfaces and semantic colors.
 /// Material belongs to the outer chrome; content stays on quiet, readable surfaces.
 public enum RelayVisualStyle {
-    public static let panelWidth: CGFloat = 420
-    public static let panelHeight: CGFloat = 660
-    public static let detailPanelWidth: CGFloat = 760
-    public static let detailPanelHeight: CGFloat = 700
-    public static let formPanelWidth: CGFloat = 520
-    public static let formPanelHeight: CGFloat = 660
-    public static let settingsPanelWidth: CGFloat = 540
-    public static let settingsPanelHeight: CGFloat = 680
-    public static let auxiliaryPanelCornerRadius: CGFloat = 22
-    public static let buttonHeight: CGFloat = 32
-    public static let iconButtonDiameter: CGFloat = 30
-    public static let inputHeight: CGFloat = 34
-    public static let navigationHeight: CGFloat = 40
+    public static let panelWidth: CGFloat = 320
+    public static let panelHeight: CGFloat = 480
+    public static let detailPanelWidth: CGFloat = 560
+    public static let detailPanelHeight: CGFloat = 500
+    public static let formPanelWidth: CGFloat = 360
+    public static let formPanelHeight: CGFloat = 480
+    public static let settingsPanelWidth: CGFloat = 380
+    public static let settingsPanelHeight: CGFloat = 500
+    public static let auxiliaryPanelCornerRadius: CGFloat = 16
+    public static let buttonHeight: CGFloat = 26
+    public static let iconButtonDiameter: CGFloat = 24
+    public static let inputHeight: CGFloat = 28
+    public static let navigationHeight: CGFloat = 30
     public static let buttonFontSize: CGFloat = 12
-    public static let bodyFontSize: CGFloat = 13
+    public static let bodyFontSize: CGFloat = 12
     public static let radiusSmall: CGFloat = 8
     public static let radiusMedium: CGFloat = 10
     public static let radiusCard: CGFloat = 13
-    public static let radiusPanel: CGFloat = 22
+    public static let radiusPanel: CGFloat = 16
     public static let radiusLarge: CGFloat = 24
     public static let radiusFAB: CGFloat = 16
     public static let cardCornerRadius: CGFloat = radiusCard
     public static let panelCornerRadius: CGFloat = radiusPanel
     public static let spacingTight: CGFloat = 8
-    public static let spacingStandard: CGFloat = 16
-    public static let spacingSection: CGFloat = 22
-    public static let spacingLoose: CGFloat = 28
+    public static let spacingStandard: CGFloat = 12
+    public static let spacingSection: CGFloat = 16
+    public static let spacingLoose: CGFloat = 20
     public static let accentColor: Color = .accentColor
     public static let destructiveColor: Color = .red
     public static let darkCardColor = Color(nsColor: .controlBackgroundColor)
@@ -41,6 +41,41 @@ public enum RelayVisualStyle {
         case .light: return .light
         case .dark: return .dark
         }
+    }
+}
+
+/// One title bar for every auxiliary page; keep navigation, type and insets identical.
+struct RelayPageHeader: View {
+    let title: String
+    let onBack: () -> Void
+    var accessorySystemImage: String? = nil
+    var accessoryLabel: String = ""
+    var onAccessory: () -> Void = {}
+    var body: some View {
+        HStack(spacing: 8) {
+            Button(action: onBack) { Image(systemName: "chevron.left") }
+                .buttonStyle(RelayCircularIconButtonStyle())
+                .help("返回首页").accessibilityLabel("返回首页")
+            Text(title).font(.system(size: 16, weight: .semibold))
+            Spacer(minLength: 0)
+            if let accessorySystemImage {
+                Button(action: onAccessory) { Image(systemName: accessorySystemImage) }
+                    .buttonStyle(RelayCircularIconButtonStyle())
+                    .help(accessoryLabel).accessibilityLabel(accessoryLabel)
+            }
+        }
+        .frame(height: RelayVisualStyle.navigationHeight)
+        .padding(.horizontal, 14).padding(.top, 10).padding(.bottom, 8)
+    }
+}
+
+/// Actions sit on the page itself, separated by a quiet inset rule, never a second panel.
+struct RelayPageFooter<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+    var body: some View {
+        HStack(spacing: 10, content: content)
+            .padding(.horizontal, 14).padding(.vertical, 8)
+            .overlay(alignment: .top) { Divider().opacity(0.35).padding(.horizontal, 14) }
     }
 }
 
@@ -61,7 +96,15 @@ private struct RelaySurface: ViewModifier {
                         shape.fill(Color(nsColor: .windowBackgroundColor))
                     } else {
                         shape.fill(.regularMaterial)
-                            .overlay { shape.fill((scheme == .dark ? Color.black : Color.white).opacity(kind == .panel ? 0.23 : 0.12)) }
+                            .overlay {
+                                if kind == .panel {
+                                    shape.fill(scheme == .dark
+                                        ? Color(red: 0.10, green: 0.11, blue: 0.14).opacity(0.84)
+                                        : Color(red: 0.96, green: 0.97, blue: 0.99).opacity(0.82))
+                                } else {
+                                    shape.fill((scheme == .dark ? Color.black : Color.white).opacity(0.12))
+                                }
+                            }
                     }
                 } else {
                     shape.fill(kind == .content
@@ -231,20 +274,34 @@ struct RelaySearchField: View {
 struct RelayProviderIcon: View {
     let kind: ProviderKind
     var size: CGFloat = 34
-    private var symbol: String {
+    private var color: Color {
         switch kind {
-        case .deepseek: return "water.waves"
-        case .pipio: return "p.square.fill"
-        case .workbuddy2api: return "bolt.fill"
-        case .custom: return "network"
+        case .deepseek: return Color(red: 0.30, green: 0.42, blue: 0.91)
+        case .pipio: return Color(red: 0.23, green: 0.44, blue: 0.35)
+        default: return .secondary
         }
     }
     var body: some View {
-        Image(systemName: symbol)
-            .font(.system(size: size * 0.48, weight: .medium))
-            .foregroundStyle(kind == .workbuddy2api ? Color.secondary : .accentColor)
+        Group {
+            switch kind {
+            case .deepseek:
+                Canvas { context, bounds in
+                    let coordinates: [(CGFloat, CGFloat)] = [(6,19),(7,12),(13,10),(19,12),(24,17),(29,12),(28,21),(24,24),(15,24),(10,22)]
+                    let points = coordinates.map { CGPoint(x: $0.0 / 34 * bounds.width, y: $0.1 / 34 * bounds.height) }
+                    var path = Path(); path.addLines(points); path.closeSubpath()
+                    context.fill(path, with: .color(color))
+                    context.fill(Path(ellipseIn: CGRect(x: bounds.width * 12 / 34, y: bounds.height * 15 / 34,
+                        width: bounds.width * 1.5 / 34, height: bounds.height * 1.5 / 34)), with: .color(.white))
+                }
+            case .pipio:
+                Text("P").font(.system(size: size * 0.56, weight: .semibold)).foregroundStyle(color)
+            default:
+                Image(systemName: kind == .workbuddy2api ? "bolt.fill" : "network")
+                    .font(.system(size: size * 0.48, weight: .medium)).foregroundStyle(color)
+            }
+        }
             .frame(width: size, height: size)
-            .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: size * 0.3))
+            .background(color.opacity(0.075), in: RoundedRectangle(cornerRadius: size * 0.3))
             .accessibilityHidden(true)
     }
 }

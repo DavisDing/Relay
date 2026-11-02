@@ -1,6 +1,25 @@
 import Foundation
 
 public enum DashboardAggregator {
+    /// Missing members or unusable FX leave a gap in the sparkline, never a partial total.
+    public static func historicalSpendTotal(
+        values: [UUID: MoneyValue], snapshots: [ProviderSnapshot],
+        expectedAccountIDs: Set<UUID>, targetCurrency: Currency,
+        now: Date, manualUSDToCNY: [UUID: Decimal] = [:]
+    ) -> Decimal? {
+        guard !expectedAccountIDs.isEmpty else { return nil }
+        var total = Decimal.zero
+        for id in expectedAccountIDs {
+            guard let money = values[id], !money.amount.isNaN, money.amount >= 0 else { return nil }
+            if money.currency == targetCurrency { total += money.amount; continue }
+            guard let rate = snapshots.first(where: { $0.accountID == id })?.rate,
+                  let amount = convert(money, using: rate, target: targetCurrency, now: now,
+                                       manualUSDToCNY: manualUSDToCNY[id]) else { return nil }
+            total += amount
+        }
+        return total
+    }
+
     public static func balanceTotal(
         snapshots: [ProviderSnapshot],
         targetCurrency: Currency,

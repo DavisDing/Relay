@@ -28,7 +28,7 @@ public struct ModelAnalysisPanel: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                Text("模型用量").font(.system(size: 15, weight: .semibold))
+                Text("模型用量").font(.system(size: 12, weight: .semibold))
                 Text(dateLabel).font(.system(size: 10)).foregroundStyle(.secondary)
                 Spacer(minLength: 2)
                 if let items, !items.isEmpty {
@@ -81,7 +81,7 @@ public struct ModelAnalysisPanel: View {
                             .accessibilityLabel(spendTitle + "：" + (spend ?? "未知"))
                     }
                     .font(.system(size: 11)).monospacedDigit()
-                    .padding(.horizontal, 7).padding(.vertical, 10)
+                    .padding(.horizontal, 7).padding(.vertical, 7)
                     .overlay(alignment: .bottom) { Divider().opacity(0.4) }
                 }
             } else {

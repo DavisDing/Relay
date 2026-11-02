@@ -8,6 +8,7 @@ public struct MainPopoverView: View {
     @AppStorage("appearanceMode") private var appearanceMode: AppearanceMode = .followSystem
     @AppStorage("homeAmountsHidden") private var homeAmountsHidden = false
     @State private var expandedSites = Set<String>()
+    @State private var highlightedAccountID: String?
     @State private var showSearch = false
     @State private var accountSearch = ""
     @State private var accountGroup: String?
@@ -92,8 +93,8 @@ public struct MainPopoverView: View {
 
     private var header: some View {
         HStack(spacing: 9) {
-            Image(systemName: "bolt.fill").font(.system(size: 20))
-            Text("Relay").font(.system(size: 21, weight: .semibold)).tracking(-0.5)
+            Image(systemName: "bolt.fill").font(.system(size: 16))
+            Text("Relay").font(.system(size: 16, weight: .semibold)).tracking(-0.4)
                 .contextMenu {
                     Button("设置…", action: onPresentSettings)
                     Divider()
@@ -110,14 +111,14 @@ public struct MainPopoverView: View {
                 .buttonStyle(RelayCircularIconButtonStyle())
                 .help("设置").accessibilityLabel("设置")
         }
-        .padding(.horizontal, 24).padding(.top, 20).padding(.bottom, 16)
+        .padding(.horizontal, 16).padding(.top, 10).padding(.bottom, 10)
     }
 
     private var dashboard: some View {
         VStack(spacing: 0) {
             if visibleParents.contains(where: { $0.kind != .workbuddy2api }) { spendingSummary }
             ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 6) {
                     if let error = store.globalErrorMessage ?? store.syncErrorMessage {
                         Label(error, systemImage: "exclamationmark.triangle")
                             .font(.system(size: 11)).foregroundStyle(.red)
@@ -136,51 +137,57 @@ public struct MainPopoverView: View {
                         Button("清除筛选") { accountSearch = ""; accountGroup = nil }
                             .buttonStyle(RelayTextButtonStyle())
                     }
-                    LazyVStack(spacing: 8) {
+                    LazyVStack(spacing: 2) {
                         ForEach(sites) { site in siteGroup(site) }
                     }
                 }
-                .padding(.horizontal, 20).padding(.top, 15).padding(.bottom, 12)
+                .padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 6)
             }
         }
     }
 
     private var spendingSummary: some View {
-        VStack(alignment: .leading, spacing: 9) {
+        VStack(alignment: .leading, spacing: 0) {
             Button {
                 if let onPresentConsumptionOverview { onPresentConsumptionOverview() }
                 else { showConsumptionOverview = true }
             } label: {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("今日消费").font(.system(size: 13)).foregroundStyle(.secondary)
-                    HStack(alignment: .firstTextBaseline) {
-                        Text(money(todaySpend, currency: store.settings.baseCurrency))
-                            .font(.system(size: 43, weight: .semibold)).tracking(-1.5)
+                    Text("今日消费").font(.system(size: 11)).foregroundStyle(.secondary)
+                    HStack(alignment: .center, spacing: 12) {
+                        HStack(alignment: .firstTextBaseline, spacing: 4) {
+                            Text(store.settings.baseCurrency.symbol)
+                                .font(.system(size: 18)).foregroundStyle(.secondary)
+                            Text(amount(todaySpend.map(RelayNumberFormatter.decimal) ?? "—"))
+                                .font(.system(size: 32, weight: .semibold)).tracking(-1)
+                        }
                             .monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
-                        Spacer(minLength: 8)
-                        Image(systemName: "chevron.right").font(.system(size: 12, weight: .medium)).foregroundStyle(.tertiary)
+                        Spacer(minLength: 0)
+                        if !homeAmountsHidden {
+                            RelaySpendSparkline(values: store.dashboardSpendTrend)
+                                .frame(width: 92, height: 38)
+                        }
+                        Image(systemName: "chevron.right").font(.system(size: 10, weight: .medium)).foregroundStyle(.tertiary)
                     }
                     Text(todaySpend == nil ? "消费数据不完整，暂不合计"
                          : "\(visibleParents.filter { $0.isEnabled && $0.kind != .workbuddy2api }.count) 个计费账户 · \(store.settings.baseCurrency.rawValue)")
-                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 6)
             }
             .buttonStyle(RelayCardButtonStyle())
             .accessibilityLabel("今日消费 " + money(todaySpend, currency: store.settings.baseCurrency))
             .accessibilityHint("打开当日与月度消费总览")
-            Text("可用折算余额 " + money(store.balanceTotalCNY.isComplete ? store.balanceTotalCNY.value?.amount : nil,
-                                      currency: store.settings.baseCurrency))
-                .font(.system(size: 11)).foregroundStyle(.secondary)
         }
-        .padding(.horizontal, 24).padding(.bottom, 18)
-        .overlay(alignment: .bottom) { Divider().padding(.horizontal, 24).opacity(0.6) }
+        .padding(.horizontal, 16).padding(.bottom, 10)
+        .overlay(alignment: .bottom) { Divider().padding(.horizontal, 16).opacity(0.5) }
     }
 
     private var siteToolbar: some View {
         HStack(spacing: 8) {
-            Text("站点").font(.system(size: 14, weight: .semibold))
-            Text("\(sites.count) 个站点").font(.system(size: 10)).foregroundStyle(.secondary)
+            Text("站点").font(.system(size: 12, weight: .semibold))
+            Text("\(sites.count) 个站点 · \(sites.reduce(0) { $0 + $1.accounts.count }) 个账户")
+                .font(.system(size: 9)).foregroundStyle(.secondary)
             Spacer()
             Text("今日 / 积分").font(.system(size: 9)).foregroundStyle(.secondary)
             Button {
@@ -206,6 +213,7 @@ public struct MainPopoverView: View {
                 .accessibilityLabel(accountGroup.map { "筛选分组，当前：" + $0 } ?? "筛选分组")
             }
         }
+        .padding(.horizontal, 8)
     }
 
     private func siteGroup(_ site: SiteAccountGroup) -> some View {
@@ -221,36 +229,37 @@ public struct MainPopoverView: View {
                     }
                 } label: {
                     HStack(spacing: 11) {
-                        RelayProviderIcon(kind: site.kind)
-                        VStack(alignment: .leading, spacing: 5) {
+                        RelayProviderIcon(kind: site.kind, size: 28)
+                        VStack(alignment: .leading, spacing: 4) {
                             Text(site.kind == .workbuddy2api && site.parents.count == 1 ? site.parents[0].name : site.kind.displayName)
-                                .font(.system(size: 14, weight: .semibold)).lineLimit(1)
+                                .font(.system(size: 12, weight: .medium)).lineLimit(1)
                             Text(site.address + " · \(site.accounts.count) 个账户")
-                                .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+                                .font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1)
                         }
                         Spacer(minLength: 6)
-                        Text(siteValue(site)).font(.system(size: 17, weight: .medium)).monospacedDigit()
+                        Text(siteValue(site)).font(.system(size: site.kind == .workbuddy2api ? 11 : 15, weight: .medium))
+                            .foregroundStyle(site.kind == .workbuddy2api ? Color.secondary : Color.primary).monospacedDigit()
                             .lineLimit(1).minimumScaleFactor(0.75)
                         Image(systemName: "chevron.right")
                             .font(.system(size: 10, weight: .semibold)).foregroundStyle(.tertiary)
                             .rotationEffect(.degrees(expanded ? 90 : 0))
                     }
-                    .padding(.leading, 12).padding(.trailing, 6).padding(.vertical, 14)
+                    .padding(.horizontal, 10).padding(.vertical, 9)
                 }
                 .buttonStyle(RelayCardButtonStyle())
                 .accessibilityLabel("\(site.kind.displayName)，\(site.address)，\(site.accounts.count) 个账户，\(siteValue(site))")
                 .accessibilityValue(site.accounts.count == 1 ? "打开账户详情" : expanded ? "已展开" : "已折叠")
                 .accessibilityHint(site.accounts.count == 1 ? "打开账户详情" : "展开或收起此站点的账户")
-                if site.accounts.count == 1, let account = site.matchingAccounts.first {
-                    accountMenu(account).padding(.trailing, 6)
-                }
+            }
+            .contextMenu {
+                if site.accounts.count == 1, let account = site.matchingAccounts.first { accountActions(account) }
             }
             if expanded {
-                Divider().padding(.leading, 57).padding(.trailing, 12).opacity(0.5)
+                Divider().padding(.leading, 46).padding(.trailing, 10).opacity(0.5)
                 VStack(spacing: 2) {
                     ForEach(site.matchingAccounts) { account in accountRow(account, site: site) }
                 }
-                .padding(.horizontal, 8).padding(.vertical, 7)
+                .padding(.horizontal, 6).padding(.vertical, 5)
                 .transition(.opacity)
             }
             if site.warningCount > 0 {
@@ -261,7 +270,17 @@ public struct MainPopoverView: View {
                     .help(site.accounts.compactMap { healthMessage($0) }.joined(separator: "；"))
             }
         }
-        .relayGlassTile()
+        .background {
+            if expanded {
+                RoundedRectangle(cornerRadius: 12).fill(Color(nsColor: .controlBackgroundColor))
+            }
+        }
+        .overlay {
+            if expanded {
+                RoundedRectangle(cornerRadius: 12).strokeBorder(Color.accentColor.opacity(0.2), lineWidth: 0.5)
+                    .allowsHitTesting(false)
+            }
+        }
     }
 
     private func siteValue(_ site: SiteAccountGroup) -> String {
@@ -281,11 +300,13 @@ public struct MainPopoverView: View {
 
     private func accountRow(_ account: AccountModel, site: SiteAccountGroup) -> some View {
         HStack(spacing: 3) {
-            Button { onPresentDetail(account) } label: {
+            Button { highlightedAccountID = account.id; onPresentDetail(account) } label: {
                 HStack(spacing: 10) {
-                    Image(systemName: account.parentAccountID == nil ? "person.crop.circle" : "person.crop.circle.badge.checkmark")
-                        .font(.system(size: 19)).foregroundStyle(.secondary).frame(width: 26)
-                    VStack(alignment: .leading, spacing: 5) {
+                    Text(String(account.name.prefix(1)))
+                        .font(.system(size: 10, weight: .medium))
+                        .frame(width: 22, height: 22)
+                        .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 7))
+                    VStack(alignment: .leading, spacing: 4) {
                         HStack(spacing: 4) {
                             Text(account.name).font(.system(size: 12, weight: .medium)).lineLimit(1)
                             if AccountOrganizationService.configuration(for: account, in: store.accountConfigurations)?.isPinned == true {
@@ -304,53 +325,52 @@ public struct MainPopoverView: View {
                     Text(account.kind == .workbuddy2api
                          ? amount(account.availablePoints.map { RelayNumberFormatter.decimal($0) + " 积分" } ?? "—")
                          : money(account.todaySpend, currency: account.currency))
-                        .font(.system(size: 14, weight: .medium)).monospacedDigit().lineLimit(1)
+                        .font(.system(size: 13, weight: .medium)).monospacedDigit().lineLimit(1)
                     Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold)).foregroundStyle(.tertiary)
                 }
-                .padding(.horizontal, 8).padding(.vertical, 10).contentShape(Rectangle())
+                .padding(.horizontal, 8).padding(.vertical, 6).contentShape(Rectangle())
             }
             .buttonStyle(RelayCardButtonStyle())
             .help(healthPresentation(account).detail)
             .accessibilityLabel("查看 \(account.name) 的详情与走势")
             .accessibilityValue(healthPresentation(account).detail)
-            accountMenu(account)
         }
+        .foregroundStyle(highlightedAccountID == account.id ? Color.accentColor : Color.primary)
+        .background(highlightedAccountID == account.id ? Color.accentColor.opacity(0.08) : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 9))
+        .contextMenu { accountActions(account) }
     }
 
     private func gatewayName(_ account: AccountModel, site: SiteAccountGroup) -> String {
         site.parents.first { UUID(uuidString: $0.id) == account.parentAccountID }?.name ?? "网关账户"
     }
 
-    private func accountMenu(_ account: AccountModel) -> some View {
-        Menu {
-            Button("查看详情") { onPresentDetail(account) }
-            if let parentID = account.parentAccountID, let parent = store.accounts.first(where: { UUID(uuidString: $0.id) == parentID }) {
-                Button("编辑所属网关") { onPresentEdit(parent) }
-            } else { Button("编辑账户") { onPresentEdit(account) } }
-            if let config = AccountOrganizationService.configuration(for: account, in: store.accountConfigurations) {
-                Button(config.isPinned ? "取消置顶" : "置顶账户") {
-                    store.updateAccountPreferences(id: config.id, monthlyBudget: config.monthlyBudget,
-                        groupName: config.groupName, isPinned: !config.isPinned)
-                }
+    @ViewBuilder private func accountActions(_ account: AccountModel) -> some View {
+        Button("查看详情") { onPresentDetail(account) }
+        if let parentID = account.parentAccountID, let parent = store.accounts.first(where: { UUID(uuidString: $0.id) == parentID }) {
+            Button("编辑所属网关") { onPresentEdit(parent) }
+        } else { Button("编辑账户") { onPresentEdit(account) } }
+        if let config = AccountOrganizationService.configuration(for: account, in: store.accountConfigurations) {
+            Button(config.isPinned ? "取消置顶" : "置顶账户") {
+                store.updateAccountPreferences(id: config.id, monthlyBudget: config.monthlyBudget,
+                    groupName: config.groupName, isPinned: !config.isPinned)
             }
-            Button("立即刷新") {
-                guard let id = account.parentAccountID ?? UUID(uuidString: account.id) else { return }
-                Task { await store.refresh(accountID: id, forceRateRefresh: true) }
+        }
+        Button("立即刷新") {
+            guard let id = account.parentAccountID ?? UUID(uuidString: account.id) else { return }
+            Task { await store.refresh(accountID: id, forceRateRefresh: true) }
+        }
+        if account.parentAccountID == nil, let id = UUID(uuidString: account.id) {
+            Button(account.isEnabled ? "停用账户" : "启用账户") {
+                store.setEnabled(accountID: id, enabled: !account.isEnabled)
             }
-            if account.parentAccountID == nil, let id = UUID(uuidString: account.id) {
-                Button(account.isEnabled ? "停用账户" : "启用账户") {
-                    store.setEnabled(accountID: id, enabled: !account.isEnabled)
-                }
-                Divider()
-                Button("删除账户", role: .destructive) { accountPendingDeletion = account }
-            }
-        } label: { Image(systemName: "ellipsis").font(.system(size: 11)).foregroundStyle(.secondary).frame(width: 22, height: 30) }
-        .menuStyle(.borderlessButton).menuIndicator(.hidden)
-        .accessibilityLabel(account.name + "的账户操作")
+            Divider()
+            Button("删除账户", role: .destructive) { accountPendingDeletion = account }
+        }
     }
 
     private var footer: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 8) {
             HStack(spacing: 5) {
                 Image(systemName: store.isRefreshing ? "arrow.triangle.2.circlepath" : "clock").font(.system(size: 9))
                 Text(store.isRefreshing ? "正在刷新" : store.lastSyncedAt.map { "已更新 · " + $0.formatted(date: .omitted, time: .shortened) } ?? "尚未刷新")
@@ -375,7 +395,7 @@ public struct MainPopoverView: View {
                 .accessibilityLabel(store.isRefreshing ? "取消刷新" : "刷新全部账户")
             }
         }
-        .padding(.horizontal, 24).padding(.top, 10).padding(.bottom, 18)
+        .padding(.horizontal, 16).padding(.top, 6).padding(.bottom, 10)
     }
 
     private var storageState: some View {
@@ -409,5 +429,31 @@ public struct MainPopoverView: View {
     private func healthMessage(_ account: AccountModel) -> String? { healthPresentation(account).summary }
     private func statusColor(_ status: AccountStatus) -> Color {
         switch status { case .ok: return .secondary; case .warning, .retrying: return .orange; case .error: return .red }
+    }
+}
+
+/// A small, non-interactive overview. Nil days break the path rather than joining unknown data.
+private struct RelaySpendSparkline: View {
+    let values: [Decimal?]
+    var body: some View {
+        Canvas { context, size in
+            let known = values.compactMap { $0.map { NSDecimalNumber(decimal: $0).doubleValue } }
+            guard let low = known.min(), let high = known.max(), values.count > 1 else { return }
+            let span = max(high - low, max(abs(high) * 0.1, 1))
+            var path = Path()
+            var connected = false
+            for (index, amount) in values.enumerated() {
+                guard let amount else { connected = false; continue }
+                let value = NSDecimalNumber(decimal: amount).doubleValue
+                let point = CGPoint(x: CGFloat(index) / CGFloat(values.count - 1) * size.width,
+                    y: 3 + (1 - (value - low) / span) * (size.height - 6))
+                if connected { path.addLine(to: point) } else { path.move(to: point) }
+                connected = true
+                context.fill(Path(ellipseIn: CGRect(x: point.x - 1, y: point.y - 1, width: 2, height: 2)),
+                             with: .color(.accentColor))
+            }
+            context.stroke(path, with: .color(.accentColor), style: StrokeStyle(lineWidth: 1.25, lineCap: .round, lineJoin: .round))
+        }
+        .accessibilityHidden(true)
     }
 }

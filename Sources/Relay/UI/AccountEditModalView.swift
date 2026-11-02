@@ -89,19 +89,11 @@ public struct AccountEditModalView: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack(spacing: 8) {
-                Button(action: onDismiss) { Image(systemName: "chevron.left") }
-                    .buttonStyle(RelayCircularIconButtonStyle())
-                    .help("返回首页")
-                    .accessibilityLabel("返回首页")
-                Text("编辑账号").font(.system(size: 22, weight: .semibold))
-                Spacer()
-            }
-            .frame(height: RelayVisualStyle.navigationHeight)
+        VStack(alignment: .leading, spacing: 0) {
+            RelayPageHeader(title: "编辑账户", onBack: onDismiss)
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 12) {
                     if account.kind == .workbuddy2api {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("网关地址").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
@@ -111,15 +103,20 @@ public struct AccountEditModalView: View {
                         Text(account.baseURL).font(.system(size: 11)).foregroundStyle(.secondary)
                     }
 
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("显示名称").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
-                        TextField("账号名称", text: $displayName).relayFormField()
+                    HStack(alignment: .top, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("账户名称").font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+                            TextField("账户名称", text: $displayName).relayFormField()
+                        }
+                        if account.kind != .workbuddy2api {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("低余额 · " + account.currency.rawValue)
+                                    .font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+                                TextField("20", text: $threshold).relayFormField()
+                                    .accessibilityLabel("低余额阈值，账户原生币种 " + account.currency.rawValue)
+                            }.frame(width: 110)
+                        }
                     }
-
-                    if account.kind != .workbuddy2api { VStack(alignment: .leading, spacing: 6) {
-                        Text("低余额阈值（账户原生币种）").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
-                        TextField("20", text: $threshold).relayFormField()
-                    } }
 
                     if account.kind != .workbuddy2api && (account.kind == .pipio || account.currency == .usd) {
                         Divider()
@@ -155,18 +152,18 @@ public struct AccountEditModalView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                .padding(2)
+                .padding(.horizontal, 14).padding(.bottom, 10)
             }
             .disabled(isSaving)
 
             if let errorMessage {
-                Text(errorMessage).font(.system(size: 11)).foregroundStyle(.red)
+                Text(errorMessage).font(.system(size: 11)).foregroundStyle(.red).padding(.horizontal, 14)
             }
 
-            HStack(spacing: 8) {
+            RelayPageFooter {
                 Spacer(minLength: 4)
                 Button("取消", action: onDismiss)
-                    .buttonStyle(RelaySecondaryCapsuleButtonStyle())
+                    .buttonStyle(RelayTextButtonStyle())
                     .keyboardShortcut(.cancelAction)
                 Button {
                     save()
@@ -176,10 +173,7 @@ public struct AccountEditModalView: View {
                 .buttonStyle(RelayPrimaryCapsuleButtonStyle(isLoading: isSaving))
                 .disabled(isSaving)
             }
-            .padding(12)
-            .background(.bar, in: RoundedRectangle(cornerRadius: 12))
         }
-        .padding(20)
         .frame(width: RelayVisualStyle.formPanelWidth)
         .frame(height: RelayVisualStyle.formPanelHeight)
         .relayPanelSurface(cornerRadius: RelayVisualStyle.panelCornerRadius)

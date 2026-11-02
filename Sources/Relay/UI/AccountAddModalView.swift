@@ -38,42 +38,24 @@ public struct AccountAddModalView: View {
     }
 
     public var body: some View {
-        VStack(spacing: 12) {
-            HStack(spacing: 8) {
-                Button(action: onDismiss) { Image(systemName: "chevron.left") }
-                    .buttonStyle(RelayCircularIconButtonStyle())
-                    .help("返回首页")
-                    .accessibilityLabel("返回首页")
-                Text("添加账户")
-                    .font(.system(size: 22, weight: .semibold))
-                Spacer()
-            }
-            .frame(height: RelayVisualStyle.navigationHeight)
-            .padding(.horizontal, 20)
-            .padding(.top, 16)
+        VStack(spacing: 0) {
+            RelayPageHeader(title: "添加账户", onBack: onDismiss)
 
             ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 18) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("账号显示名称")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundColor(.secondary)
-                        TextField("例如：主力生产、备用开发", text: $accountName)
-                            .relayFormField()
-                    }
-
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("服务商平台")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundColor(.secondary)
-                        Picker("", selection: $selectedProvider) {
-                            ForEach(ProviderKind.supportedCases, id: \.self) { provider in
-                                Text(provider.displayName).tag(provider)
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(alignment: .top, spacing: 10) {
+                        labeledField("账户名称", text: $accountName, placeholder: "例如：个人、工作")
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("供应商").font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+                            Picker("供应商", selection: $selectedProvider) {
+                                ForEach(ProviderKind.supportedCases, id: \.self) { provider in
+                                    Text(provider.displayName).tag(provider)
+                                }
                             }
+                            .labelsHidden().pickerStyle(.menu).controlSize(.small)
+                            .frame(height: RelayVisualStyle.inputHeight)
                         }
-                        .labelsHidden()
-                        .pickerStyle(.menu)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .frame(width: 132, alignment: .leading)
                     }
 
                     Divider().opacity(0.4)
@@ -113,16 +95,17 @@ public struct AccountAddModalView: View {
                             .cornerRadius(8)
                     }
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, 14).padding(.bottom, 10)
             }
 
-            Divider().opacity(0.3)
-
-            HStack(spacing: 8) {
+            RelayPageFooter {
                 Button(action: testConnection) {
-                    Label("测试连接", systemImage: "bolt.badge.checkmark")
+                    HStack(spacing: 5) {
+                        if isTesting { ProgressView().controlSize(.mini) }
+                        Text(isTesting ? "测试中…" : "测试连接")
+                    }
                 }
-                .buttonStyle(RelaySecondaryCapsuleButtonStyle(isLoading: isTesting))
+                .buttonStyle(RelayTextButtonStyle())
                 .disabled(isTesting || isSaving)
 
                 Spacer(minLength: 4)
@@ -131,34 +114,32 @@ public struct AccountAddModalView: View {
                     .buttonStyle(RelayTextButtonStyle())
                     .keyboardShortcut(.cancelAction)
 
-                Button("保存到本机", action: saveAccount)
+                Button("保存", action: saveAccount)
                     .buttonStyle(RelayPrimaryCapsuleButtonStyle(isLoading: isSaving))
                     .disabled(isTesting || isSaving || accountName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-            .padding(12)
-            .background(.bar, in: RoundedRectangle(cornerRadius: 12))
-            .padding(.horizontal, 16)
-            .padding(.bottom, 12)
         }
         .frame(width: RelayVisualStyle.formPanelWidth, height: RelayVisualStyle.formPanelHeight)
         .relayPanelSurface(cornerRadius: RelayVisualStyle.panelCornerRadius)
     }
 
     private var pipioFormSection: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            labeledField("Pipio Base URL", text: $pipioBaseURL, placeholder: "https://pipio.io")
-            Text("自动移除 /v1 及 /api；管理接口走 /api，模型接口走 /v1")
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 10) {
+                labeledField("站点地址", text: $pipioBaseURL, placeholder: "https://pipio.io")
+                labeledField("User ID（数字）", text: $pipioUserId, placeholder: "10283").frame(width: 104)
+            }
+            Text("填写站点地址即可，无需添加接口路径。")
                 .font(.system(size: 10))
                 .foregroundColor(.secondary)
 
-            labeledField("Pipio User ID（纯数字）", text: $pipioUserId, placeholder: "例如：10283")
             VStack(alignment: .leading, spacing: 4) {
                 Text("Pipio 管理 Token（仅本机保存）")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(.secondary)
                 SecureField("sk-••••••••••••••••", text: $pipioToken)
                     .relayFormField()
-                Text("不使用 Keychain；仅写入 Relay 私有数据目录，文件权限 0600")
+                Text("凭据仅保存在此 Mac，不参与同步或导出。")
                     .font(.system(size: 10))
                     .foregroundColor(.secondary.opacity(0.8))
             }
@@ -166,7 +147,7 @@ public struct AccountAddModalView: View {
     }
 
     private var workbuddyFormSection: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 12) {
             labeledField("网关地址（本机 HTTP 或远端 HTTPS）", text: $workbuddyBaseURL, placeholder: "http://localhost:7863")
             VStack(alignment: .leading, spacing: 4) {
                 Text("网关 API Key（仅本机保存）").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
@@ -178,7 +159,7 @@ public struct AccountAddModalView: View {
     }
 
     private var deepseekFormSection: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("DeepSeek API Base URL")
                     .font(.system(size: 12, weight: .medium))
@@ -196,7 +177,7 @@ public struct AccountAddModalView: View {
                     .foregroundColor(.secondary)
                 SecureField("sk-••••••••••••••••", text: $deepseekApiKey)
                     .relayFormField()
-                Text("不使用 Keychain；仅写入 Relay 私有数据目录，文件权限 0600")
+                Text("凭据仅保存在此 Mac，不参与同步或导出。")
                     .font(.system(size: 10))
                     .foregroundColor(.secondary.opacity(0.8))
             }
@@ -216,7 +197,7 @@ public struct AccountAddModalView: View {
     private func labeledField(_ title: String, text: Binding<String>, placeholder: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.system(size: 12, weight: .medium))
+                .font(.system(size: 11, weight: .medium))
                 .foregroundColor(.secondary)
             TextField(placeholder, text: text)
                 .relayFormField()
