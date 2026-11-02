@@ -20,7 +20,7 @@ struct RelayVisualPreview {
                 groupName: "预览示例", isPinned: index == 0, sortOrder: index)
             try repository.upsertAccount(account)
             let todayAmounts: [Decimal] = [Decimal(string: "12.80")!, Decimal(string: "6.42")!, Decimal(string: "23.64")!]
-            let balances: [Decimal] = [Decimal(string: "128.40")!, Decimal(string: "38.17")!, Decimal(string: "151.83")!]
+            let balances: [Decimal] = [Decimal(string: "1234.56")!, Decimal(string: "38.17")!, Decimal(string: "151.83")!]
             let rate = AccountRate(accountID: account.id, source: .providerNativeCurrency, nativeCurrency: .cny)
             let models = [ModelUsageSummary(modelName: "deepseek-chat", tokenCount: 1_420_000, requestCount: 824,
                 cacheHitRate: Decimal(string: "0.68"), spend: MoneyValue(amount: todayAmounts[index], currency: .cny))]

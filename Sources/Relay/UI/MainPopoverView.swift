@@ -53,6 +53,9 @@ public struct MainPopoverView: View {
     private func money(_ value: Decimal?, currency: Currency) -> String {
         amount(value.map { RelayNumberFormatter.money($0, currency: currency) } ?? "—")
     }
+    private func compactMoney(_ value: Decimal?, currency: Currency) -> String {
+        amount(value.map { RelayNumberFormatter.compactMoney($0, currency: currency) } ?? "—")
+    }
     private var todaySpend: Decimal? {
         store.todaySpendTotalCNY.isComplete ? store.todaySpendTotalCNY.value?.amount : nil
     }
@@ -189,7 +192,7 @@ public struct MainPopoverView: View {
             Text("\(sites.count) 个站点 · \(sites.reduce(0) { $0 + $1.accounts.count }) 个账户")
                 .font(.system(size: 9)).foregroundStyle(.secondary)
             Spacer()
-            Text("今日 / 积分").font(.system(size: 9)).foregroundStyle(.secondary)
+            Text("余额 / 积分").font(.system(size: 9)).foregroundStyle(.secondary)
             Button {
                 withAnimation(reduceMotion ? nil : RelayVisualStyle.disclosureAnimation) {
                     showSearch.toggle()
@@ -233,13 +236,15 @@ public struct MainPopoverView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(site.kind == .workbuddy2api && site.parents.count == 1 ? site.parents[0].name : site.kind.displayName)
                                 .font(.system(size: 12, weight: .medium)).lineLimit(1)
-                            Text(site.address + " · \(site.accounts.count) 个账户")
+                            Text(siteConsumption(site) + " · \(site.accounts.count) 个账户")
                                 .font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1)
                         }
                         Spacer(minLength: 6)
                         Text(siteValue(site)).font(.system(size: site.kind == .workbuddy2api ? 11 : 15, weight: .medium))
                             .foregroundStyle(site.kind == .workbuddy2api ? Color.secondary : Color.primary).monospacedDigit()
                             .lineLimit(1).minimumScaleFactor(0.75)
+                            .layoutPriority(1)
+                            .help(siteValue(site, compact: false))
                         Image(systemName: "chevron.right")
                             .font(.system(size: 10, weight: .semibold)).foregroundStyle(.tertiary)
                             .rotationEffect(.degrees(expanded ? 90 : 0))
@@ -247,7 +252,8 @@ public struct MainPopoverView: View {
                     .padding(.horizontal, 10).padding(.vertical, 9)
                 }
                 .buttonStyle(RelayCardButtonStyle())
-                .accessibilityLabel("\(site.kind.displayName)，\(site.address)，\(site.accounts.count) 个账户，\(siteValue(site))")
+                .help(site.address)
+                .accessibilityLabel("\(site.kind.displayName)，\(site.address)，\(site.accounts.count) 个账户，\(siteConsumption(site))，\(site.kind == .workbuddy2api ? "可用积分" : "余额") \(siteValue(site, compact: false))")
                 .accessibilityValue(site.accounts.count == 1 ? "打开账户详情" : expanded ? "已展开" : "已折叠")
                 .accessibilityHint(site.accounts.count == 1 ? "打开账户详情" : "展开或收起此站点的账户")
             }
@@ -257,7 +263,7 @@ public struct MainPopoverView: View {
             if expanded {
                 Divider().padding(.leading, 46).padding(.trailing, 10).opacity(0.5)
                 VStack(spacing: 2) {
-                    ForEach(site.matchingAccounts) { account in accountRow(account, site: site) }
+                    ForEach(site.matchingAccounts) { account in accountRow(account) }
                 }
                 .padding(.horizontal, 6).padding(.vertical, 5)
                 .transition(.opacity)
@@ -283,13 +289,33 @@ public struct MainPopoverView: View {
         }
     }
 
-    private func siteValue(_ site: SiteAccountGroup) -> String {
+    private func siteValue(_ site: SiteAccountGroup, compact: Bool = true) -> String {
         if site.kind == .workbuddy2api {
             let credits = store.creditTotal(accountIDs: site.enabledParentIDs)
-            return amount(credits.value.map { RelayNumberFormatter.decimal($0) + " 积分" } ?? "—")
+            return amount(credits.value.map {
+                (compact ? RelayNumberFormatter.compactDecimal($0) : RelayNumberFormatter.decimal($0)) + " 积分"
+            } ?? "—")
         }
+        let total = store.balanceTotal(forAccountIDs: site.enabledParentIDs)
+        let value = total.isComplete ? total.value?.amount : nil
+        return compact ? compactMoney(value, currency: store.settings.baseCurrency)
+            : money(value, currency: store.settings.baseCurrency)
+    }
+
+    private func siteConsumption(_ site: SiteAccountGroup) -> String {
+        guard site.kind != .workbuddy2api else { return "消耗未提供" }
         let total = store.todaySpendTotal(forAccountIDs: site.enabledParentIDs)
-        return money(total.isComplete ? total.value?.amount : nil, currency: store.settings.baseCurrency)
+        return "今日消耗 " + money(total.isComplete ? total.value?.amount : nil, currency: store.settings.baseCurrency)
+    }
+
+    private func accountValue(_ account: AccountModel, compact: Bool = true) -> String {
+        if account.kind == .workbuddy2api {
+            return amount(account.availablePoints.map {
+                (compact ? RelayNumberFormatter.compactDecimal($0) : RelayNumberFormatter.decimal($0)) + " 积分"
+            } ?? "—")
+        }
+        return compact ? compactMoney(account.balance, currency: account.currency)
+            : money(account.balance, currency: account.currency)
     }
 
     private func expandMatchingSites() {
@@ -298,7 +324,7 @@ public struct MainPopoverView: View {
         expandedSites.formUnion(sites.filter { $0.accounts.count > 1 }.map(\.id))
     }
 
-    private func accountRow(_ account: AccountModel, site: SiteAccountGroup) -> some View {
+    private func accountRow(_ account: AccountModel) -> some View {
         HStack(spacing: 3) {
             Button { highlightedAccountID = account.id; onPresentDetail(account) } label: {
                 HStack(spacing: 10) {
@@ -312,37 +338,33 @@ public struct MainPopoverView: View {
                             if AccountOrganizationService.configuration(for: account, in: store.accountConfigurations)?.isPinned == true {
                                 Image(systemName: "pin.fill").font(.system(size: 8)).foregroundStyle(.secondary)
                             }
+                            if let message = healthMessage(account) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .font(.system(size: 9)).foregroundStyle(statusColor(account.status))
+                                    .help(message).accessibilityLabel(message)
+                            }
                         }
-                        if let message = healthMessage(account) {
-                            Text(message).font(.system(size: 10)).foregroundStyle(statusColor(account.status)).lineLimit(1)
-                        } else {
-                            Text(account.kind == .workbuddy2api ? gatewayName(account, site: site)
-                                 : "余额 " + money(account.balance, currency: account.currency))
-                                .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
-                        }
+                        Text(account.kind == .workbuddy2api ? "消耗未提供"
+                             : "今日消耗 " + money(account.todaySpend, currency: account.currency))
+                            .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
                     }
                     Spacer(minLength: 4)
-                    Text(account.kind == .workbuddy2api
-                         ? amount(account.availablePoints.map { RelayNumberFormatter.decimal($0) + " 积分" } ?? "—")
-                         : money(account.todaySpend, currency: account.currency))
+                    Text(accountValue(account))
                         .font(.system(size: 13, weight: .medium)).monospacedDigit().lineLimit(1)
+                        .layoutPriority(1).help(accountValue(account, compact: false))
                     Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold)).foregroundStyle(.tertiary)
                 }
                 .padding(.horizontal, 8).padding(.vertical, 6).contentShape(Rectangle())
             }
             .buttonStyle(RelayCardButtonStyle())
             .help(healthPresentation(account).detail)
-            .accessibilityLabel("查看 \(account.name) 的详情与走势")
+            .accessibilityLabel("查看 \(account.name) 的详情与走势，\(account.kind == .workbuddy2api ? "可用积分" : "余额") \(accountValue(account, compact: false))")
             .accessibilityValue(healthPresentation(account).detail)
         }
         .foregroundStyle(highlightedAccountID == account.id ? Color.accentColor : Color.primary)
         .background(highlightedAccountID == account.id ? Color.accentColor.opacity(0.08) : Color.clear,
                     in: RoundedRectangle(cornerRadius: 9))
         .contextMenu { accountActions(account) }
-    }
-
-    private func gatewayName(_ account: AccountModel, site: SiteAccountGroup) -> String {
-        site.parents.first { UUID(uuidString: $0.id) == account.parentAccountID }?.name ?? "网关账户"
     }
 
     @ViewBuilder private func accountActions(_ account: AccountModel) -> some View {
@@ -382,8 +404,6 @@ public struct MainPopoverView: View {
             HStack(spacing: 12) {
                 Button(action: onPresentAddAccount) { Label("添加账户", systemImage: "plus") }
                     .buttonStyle(RelaySecondaryCapsuleButtonStyle()).disabled(!store.storageAvailability.isAvailable)
-                Button(action: onPresentAccountManagement ?? onPresentSettings) { Label("管理", systemImage: "square.grid.2x2") }
-                    .buttonStyle(RelayTextButtonStyle())
                 Spacer()
                 Button {
                     if store.isRefreshing { store.cancelRefreshes() }

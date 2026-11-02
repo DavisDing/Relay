@@ -9,6 +9,16 @@ enum MenuBarPresentationChecks {
         try verify(ProviderKind.workbuddy2api.displayName == "WordBuddy2Api", "WordBuddy2Api display name uses the requested capitalization")
         try verify(RelayNumberFormatter.decimal(Decimal(string: "12.345")!) == "12.35", "Point values round half up to two decimals")
         try verify(RelayNumberFormatter.decimal(Decimal(string: "12")!) == "12.00", "Point values retain two decimal places")
+        for (input, expected) in [("0", "0.00"), ("999", "999.00"), ("1000", "1.00K"),
+            ("1234.567", "1.23K"), ("999994", "999.99K"), ("999995", "1.00M"),
+            ("1000000000", "1.00B"), ("-1234.567", "-1.23K"), ("-999995", "-1.00M"),
+            ("0.005", "0.01"), ("-0.001", "0.00")] {
+            try verify(RelayNumberFormatter.compactDecimal(Decimal(string: input)!) == expected,
+                       "Home amounts use base-1000 units and two decimals: \(input)")
+        }
+        try verify(RelayNumberFormatter.compactMoney(1000, currency: .cny) == "¥1.00K",
+                   "Compact money retains its currency")
+        try verify(RelayNumberFormatter.compactDecimal(.nan) == "—", "Invalid amounts remain unknown")
 
         let normal = MenuBarStatusPresentation(todaySpendAmount: Decimal(string: "1234.567"))
         try verify(normal.title == "1,234.57", "Only today's numeric spend, rounded to two decimals")

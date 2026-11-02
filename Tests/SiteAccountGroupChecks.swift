@@ -66,6 +66,9 @@ enum SiteAccountGroupChecks {
         let total = store.todaySpendTotal(forAccountIDs: selectedIDs)
         try check(total.isComplete && total.value?.amount == 3 && store.todaySpendTotalCNY.value?.amount == 6,
                   "Site totals exclude other sites while the dashboard total remains unchanged")
+        let balance = store.balanceTotal(forAccountIDs: selectedIDs)
+        try check(balance.isComplete && balance.value?.amount == 200 && store.balanceTotalCNY.value?.amount == 300,
+                  "Site balances include whole-site members and exclude other sites")
         let now = Date()
         let providerCalendar = BudgetService.calendar(for: .pipio)
         let yesterday = providerCalendar.date(byAdding: .day, value: -1, to: providerCalendar.startOfDay(for: now))!
@@ -90,8 +93,10 @@ enum SiteAccountGroupChecks {
                   "Historical sparkline shares the dashboard's per-account manual FX")
         store.setEnabled(accountID: configured[1].id, enabled: false)
         try check(store.todaySpendTotal(forAccountIDs: selectedIDs).value?.amount == 1, "Disabled accounts do not contribute to site totals")
+        try check(store.balanceTotal(forAccountIDs: selectedIDs).value?.amount == 100, "Disabled balances are excluded")
         store.setHidden(accountID: configured[0].id, hidden: true)
         try check(store.todaySpendTotal(forAccountIDs: selectedIDs).value == nil, "Hidden accounts never leak into site totals")
+        try check(store.balanceTotal(forAccountIDs: selectedIDs).value == nil, "Hidden balances are excluded")
         store.setHidden(accountID: configured[0].id, hidden: false)
         store.setEnabled(accountID: configured[1].id, enabled: true)
         let incompleteID = configured[1].id
@@ -101,13 +106,26 @@ enum SiteAccountGroupChecks {
         store.updateTemporalPresentation(at: Date())
         try check(!store.todaySpendTotal(forAccountIDs: selectedIDs).isComplete,
                   "A missing site member's spend is incomplete, never a fabricated zero or full total")
-        try repo.upsertSnapshot(ProviderSnapshot(accountID: incompleteID, balance: nil,
+        try check(!store.balanceTotal(forAccountIDs: selectedIDs).isComplete,
+                  "A missing balance prevents a complete site balance")
+        try repo.upsertSnapshot(ProviderSnapshot(accountID: incompleteID, balance: MoneyValue(amount: 5, currency: .usd),
             todaySpend: MoneyValue(amount: 5, currency: .usd), monthSpend: nil, requestCount: nil,
-            capabilities: [.todayUsage], freshness: .fresh,
+            capabilities: [.balance, .todayUsage], freshness: .fresh,
             rate: AccountRate(accountID: incompleteID, source: .providerNativeCurrency, nativeCurrency: .usd)))
         store.updateTemporalPresentation(at: Date())
         try check(!store.todaySpendTotal(forAccountIDs: selectedIDs).isComplete,
                   "Mixed currencies without reliable FX never form a complete site total")
+        try check(!store.balanceTotal(forAccountIDs: selectedIDs).isComplete,
+                  "Site balances require usable FX instead of summing raw currencies")
+        try repo.upsertSnapshot(ProviderSnapshot(accountID: incompleteID, balance: MoneyValue(amount: 5, currency: .usd),
+            todaySpend: MoneyValue(amount: 5, currency: .usd), monthSpend: nil, requestCount: nil,
+            capabilities: [.balance, .todayUsage], freshness: .fresh,
+            rate: AccountRate(accountID: incompleteID, source: .providerNativeCurrency, nativeCurrency: .usd,
+                              conversionToCNY: 7)))
+        store.updateTemporalPresentation(at: Date())
+        try check(store.balanceTotal(forAccountIDs: selectedIDs).isComplete
+                  && store.balanceTotal(forAccountIDs: selectedIDs).value?.amount == 135,
+                  "Site balances convert each member using its usable FX")
         for (index, host) in ["https://gateway-a.invalid", "https://gateway-b.invalid"].enumerated() {
             let config = AccountConfiguration(displayName: "Gateway \(index)", providerKind: .workbuddy2api,
                 siteOrigin: URL(string: host)!)

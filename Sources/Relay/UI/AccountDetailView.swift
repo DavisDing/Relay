@@ -206,8 +206,8 @@ public struct AccountDetailView: View {
         HStack(spacing: 10) {
             RelayProviderIcon(kind: account.kind, size: 30)
             VStack(alignment: .leading, spacing: 4) {
-                Text(account.kind.displayName).font(.system(size: 18, weight: .semibold)).tracking(-0.5).lineLimit(1)
-                Text(account.name + " · " + SiteAccountGroup.displayAddress(for: account))
+                Text(account.name).font(.system(size: 18, weight: .semibold)).tracking(-0.5).lineLimit(1)
+                Text(account.kind.displayName + " · " + SiteAccountGroup.displayAddress(for: account))
                     .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 8)

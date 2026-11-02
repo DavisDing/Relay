@@ -815,6 +815,13 @@ public final class RelayStore: ObservableObject {
 
     /// Site-scoped totals share the dashboard's clock, FX and completeness rules.
     /// Search only changes which rows are visible, never the members of this set.
+    public func balanceTotal(forAccountIDs ids: Set<UUID>) -> DashboardTotal {
+        let eligible = ids.intersection(expectedAccountIDs)
+        return DashboardAggregator.balanceTotal(snapshots: snapshots.filter { eligible.contains($0.accountID) },
+            targetCurrency: settings.baseCurrency, now: presentationDate, expectedAccountIDs: eligible,
+            manualUSDToCNY: manualExchangeRates)
+    }
+
     public func todaySpendTotal(forAccountIDs ids: Set<UUID>) -> DashboardTotal {
         let eligible = ids.intersection(expectedAccountIDs)
         return DashboardAggregator.todaySpendTotal(snapshots: snapshots.filter { eligible.contains($0.accountID) },
