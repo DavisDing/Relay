@@ -16,7 +16,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .data: return "数据"
         case .shortcuts: return "快捷键"
         case .sync: return "同步"
-        case .accountManagement: return "账管"
+        case .accountManagement: return "账户"
         case .about: return "关于"
         }
     }
@@ -54,10 +54,10 @@ struct SettingsTabBar: View {
                             .font(.system(size: 10, weight: selectedTab == tab ? .semibold : .regular))
                             .lineLimit(1)
                     }
-                    .frame(maxWidth: .infinity, minHeight: 44)
-                    .foregroundStyle(selectedTab == tab ? Color.primary : Color.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 54)
+                    .foregroundStyle(selectedTab == tab ? Color.accentColor : Color.secondary)
                     .background(
-                        selectedTab == tab ? Color.primary.opacity(0.06) : Color.clear,
+                        selectedTab == tab ? Color.accentColor.opacity(0.08) : Color.clear,
                         in: RoundedRectangle(cornerRadius: 12, style: .continuous)
                     )
                     .overlay(alignment: .bottom) {
@@ -74,8 +74,7 @@ struct SettingsTabBar: View {
                 .accessibilityLabel(tab.title)
             }
         }
-        .padding(2)
-        .relayInsetSurface(cornerRadius: 12)
+        .padding(4)
         .padding(.horizontal, 16)
     }
 }
@@ -86,12 +85,12 @@ struct SettingsPageScroll<Content: View>: View {
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 16, content: content)
+            VStack(alignment: .leading, spacing: 22, content: content)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 16)
-                .padding(.vertical, 8)
+                .padding(.vertical, 16)
         }
-        .font(.system(size: 12))
+        .font(.system(size: 13))
         .controlSize(.small)
         .buttonStyle(RelaySecondaryCapsuleButtonStyle())
     }
@@ -114,7 +113,8 @@ struct SettingsSection<Content: View>: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .accessibilityAddTraits(.isHeader)
-            content()
+            VStack(alignment: .leading, spacing: 14, content: content)
+                .padding(16).frame(maxWidth: .infinity, alignment: .leading).relayGlassTile()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -153,14 +153,14 @@ struct SettingsToggleRow: View {
     var body: some View {
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(.system(size: 12, weight: .medium))
+                Text(title).font(.system(size: 13, weight: .medium))
                 if let detail { SettingsHint(detail) }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             Toggle(title, isOn: $isOn)
                 .labelsHidden()
                 .toggleStyle(.switch)
-                .controlSize(.mini)
+                .controlSize(.small)
         }
     }
 }

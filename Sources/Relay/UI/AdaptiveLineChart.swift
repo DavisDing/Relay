@@ -78,7 +78,7 @@ public struct AdaptiveLineChart: View {
                     )
                     .interpolationMethod(.catmullRom)
                     .foregroundStyle(LinearGradient(
-                        colors: [Color.accentColor.opacity(0.35), Color.accentColor.opacity(0.02)],
+                        colors: [Color.accentColor.opacity(0.12), Color.accentColor.opacity(0.01)],
                         startPoint: .top,
                         endPoint: .bottom
                     ))
@@ -90,7 +90,7 @@ public struct AdaptiveLineChart: View {
                     y: .value("消耗金额", point.amount)
                 )
                 .foregroundStyle(Color.accentColor)
-                .symbolSize(point.id == selectedPointID ? 64 : 32)
+                .symbolSize(point.id == selectedPointID ? 50 : 14)
                 .accessibilityLabel(point.dateString)
                 .accessibilityValue(amountText(point))
             }
@@ -104,7 +104,7 @@ public struct AdaptiveLineChart: View {
         }
         .chartYAxis {
             AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { _ in
-                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [2, 2]))
+                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
                     .foregroundStyle(Color.secondary.opacity(0.2))
                 AxisValueLabel()
                     .font(.system(size: 9))

@@ -28,7 +28,7 @@ public struct ModelAnalysisPanel: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                Text("模型消耗分析").font(.system(size: 13, weight: .semibold))
+                Text("模型用量").font(.system(size: 15, weight: .semibold))
                 Text(dateLabel).font(.system(size: 10)).foregroundStyle(.secondary)
                 Spacer(minLength: 2)
                 if let items, !items.isEmpty {
@@ -62,7 +62,7 @@ public struct ModelAnalysisPanel: View {
                     : "费用/百万：当日消费 ÷ 当日总 Token × 100 万；未知值显示 --。")
                 ForEach(analysis.rows) { row in
                     ModelUsageColumns {
-                        Text(row.item.modelName).font(.system(size: 11, weight: .medium))
+                        Text(row.item.modelName).font(.system(size: 12, weight: .medium))
                             .lineLimit(1).truncationMode(.middle)
                             .frame(maxWidth: .infinity, alignment: .leading).help(row.item.modelName)
                         column(row.item.tokenCount.map(RelayNumberFormatter.tokens) ?? "--")
@@ -80,9 +80,9 @@ public struct ModelAnalysisPanel: View {
                                 + "；" + shareTitle + (row.spendShare.map { "：" + RelayNumberFormatter.percent($0) } ?? "未知"))
                             .accessibilityLabel(spendTitle + "：" + (spend ?? "未知"))
                     }
-                    .font(.system(size: 10)).monospacedDigit()
-                    .padding(.horizontal, 7).padding(.vertical, 7)
-                    .background(.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 7))
+                    .font(.system(size: 11)).monospacedDigit()
+                    .padding(.horizontal, 7).padding(.vertical, 10)
+                    .overlay(alignment: .bottom) { Divider().opacity(0.4) }
                 }
             } else {
                 Text(items == nil ? unavailableMessage : scope == .processCredits

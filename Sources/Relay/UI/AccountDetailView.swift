@@ -35,7 +35,7 @@ struct AccountDetailContainerView: View {
                 Text(message).foregroundStyle(.secondary)
                 Button("返回首页", action: onClose)
             }
-            .frame(width: RelayVisualStyle.panelWidth, height: 520)
+            .frame(width: RelayVisualStyle.detailPanelWidth, height: RelayVisualStyle.detailPanelHeight)
             .relayPanelSurface(cornerRadius: RelayVisualStyle.panelCornerRadius)
         } else {
             // Only a successful read confirming removal may close the page.
@@ -101,7 +101,8 @@ public struct AccountDetailView: View {
             header
 
             ScrollView(.vertical, showsIndicators: true) {
-                LazyVStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 24) {
+                    accountIdentity
                     if account.kind == .workbuddy2api {
                         creditDetails
                         trendSection
@@ -126,8 +127,9 @@ public struct AccountDetailView: View {
                                 ? "当天暂无可用模型明细，请刷新账户。"
                                 : "该日期暂无可用模型明细，可在编辑账户中回填历史。")
                 }
-                .padding(.horizontal, 18)
-                .padding(.bottom, 14)
+                .padding(.horizontal, 28)
+                .padding(.top, 12)
+                .padding(.bottom, 24)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .layoutPriority(1)
@@ -151,14 +153,13 @@ public struct AccountDetailView: View {
                     Button("返回首页", action: onClose)
                         .buttonStyle(RelayPrimaryCapsuleButtonStyle())
                 }
-                .padding(4)
-                .relayFloatingBarSurface()
+
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 8)
-            .padding(.bottom, 8)
+            .padding(.horizontal, 28)
+            .padding(.vertical, 16)
+            .background(.bar)
         }
-        .frame(width: RelayVisualStyle.panelWidth, height: 520)
+        .frame(width: RelayVisualStyle.detailPanelWidth, height: RelayVisualStyle.detailPanelHeight)
         .relayPanelSurface(cornerRadius: RelayVisualStyle.panelCornerRadius)
         .alert(confirmingAction == .enable ? "确认启用内部账号？" : "确认手动停用内部账号？",
                isPresented: Binding(get: { confirmingAction != nil }, set: { if !$0 { confirmingAction = nil } })) {
@@ -220,101 +221,94 @@ public struct AccountDetailView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 10) {
-            Button(action: onClose) {
-                Image(systemName: "chevron.left")
-            }
-            .buttonStyle(RelayCircularIconButtonStyle())
-            .help("返回首页")
-            .accessibilityLabel("返回首页")
-            Circle()
-                .fill(statusColor)
-                .frame(width: 8, height: 8)
-            VStack(alignment: .leading, spacing: 3) {
-                Text("账户详情与走势")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
-                Text(account.name)
-                    .font(.system(size: 17, weight: .bold))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
+        HStack {
+            Button(action: onClose) { Label("返回", systemImage: "chevron.left") }
+                .buttonStyle(RelayTextButtonStyle()).accessibilityLabel("返回首页")
             Spacer()
-            Text(account.kind.displayName)
-                .font(.system(size: 10, weight: .semibold))
-                .padding(.horizontal, 7)
-                .padding(.vertical, 3)
-                .background(.secondary.opacity(0.14), in: RoundedRectangle(cornerRadius: 4))
+            Text("账户详情").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
+            Spacer()
+            Button(action: onClose) { Image(systemName: "xmark") }
+                .buttonStyle(RelayCircularIconButtonStyle()).accessibilityLabel("关闭详情并返回首页")
         }
-        .frame(minHeight: 34)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 22).padding(.vertical, 12)
+    }
+
+    private var accountIdentity: some View {
+        HStack(spacing: 13) {
+            RelayProviderIcon(kind: account.kind, size: 44)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(account.name).font(.system(size: 25, weight: .semibold)).tracking(-0.5).lineLimit(1)
+                Text(account.kind.displayName + " · " + SiteAccountGroup.displayAddress(for: account))
+                    .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            Label(compactFooterText, systemImage: statusSymbol)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(statusColor).padding(.horizontal, 10).padding(.vertical, 6)
+                .background(statusColor.opacity(0.07), in: Capsule())
+                .help(footerDetailText).accessibilityLabel(footerDetailText)
+        }
     }
 
     private var creditDetails: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 9) {
-                MetricCard(title: "可用积分",
-                    value: account.availablePoints.map { RelayNumberFormatter.decimal($0) } ?? "--",
-                    subTitle: "网关当前快照", accentColor: .primary)
-                MetricCard(title: "统计来源", value: "/v1/stats",
-                    subTitle: "刷新时读取并去重", accentColor: .secondary)
+        VStack(alignment: .leading, spacing: 16) {
+            Text("可用积分").font(.system(size: 12)).foregroundStyle(.secondary)
+            Text(account.availablePoints.map { RelayNumberFormatter.decimal($0) } ?? "—")
+                .font(.system(size: 42, weight: .semibold)).tracking(-1).monospacedDigit()
+            Text("网关积分独立统计，不与货币余额合计。")
+                .font(.system(size: 12)).foregroundStyle(.secondary)
+            if account.parentAccountID != nil {
+                Divider().opacity(0.5)
+                Text("内部 UID：\(account.externalID ?? "—")")
+                    .font(.system(size: 11, design: .monospaced)).textSelection(.enabled)
+                Text("系统停用：\(account.disabled ? "是" : "否") · 手动停用：\(account.manualDisabled ? "是" : "否") · 冷却：\(account.cooling ? "是" : "否")")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                if let actionError { Text(actionError).font(.system(size: 12)).foregroundStyle(.red) }
+                HStack {
+                    Button("手动停用") { confirmingAction = .disable(reason: "由 Relay 手动停用") }
+                        .disabled(isActing || account.manualDisabled)
+                    Button("解除手动停用") { confirmingAction = .enable }
+                        .disabled(isActing || !account.manualDisabled)
+                }.buttonStyle(RelaySecondaryCapsuleButtonStyle())
+                Text("管理功能需在网关启用 admin.enabled；操作后会刷新快照。")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
             }
-            Text("内部 UID：\(account.externalID ?? "--")")
-                .font(.system(size: 11, design: .monospaced)).textSelection(.enabled)
-            Text("系统停用：\(account.disabled ? "是" : "否") · 手动停用：\(account.manualDisabled ? "是" : "否") · 冷却：\(account.cooling ? "是" : "否")")
-                .font(.system(size: 11)).foregroundStyle(.secondary)
-            Text("趋势按每次刷新读取的 /v1/stats 进程累计值计算增量并去重；容器重启前未刷新到 Relay 的区间无法恢复。")
-                .font(.system(size: 11)).foregroundStyle(.secondary)
-            if let actionError { Text(actionError).font(.system(size: 11)).foregroundStyle(.red) }
-            HStack {
-                Button("手动停用") { confirmingAction = .disable(reason: "由 Relay 手动停用") }
-                    .disabled(isActing || account.manualDisabled)
-                Button("解除手动停用") { confirmingAction = .enable }
-                    .disabled(isActing || !account.manualDisabled)
-            }.buttonStyle(.bordered)
-            Text("管理功能需在 WordBuddy2Api 中启用 admin.enabled；操作后会刷新快照。")
-                .font(.system(size: 10)).foregroundStyle(.secondary)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var metrics: some View {
-        HStack(spacing: 9) {
-            MetricCard(
-                title: "账户可用余额",
-                value: account.balance.map { RelayNumberFormatter.money($0, currency: account.currency) } ?? "--",
-                subTitle: "当前缓存快照",
-                accentColor: .primary
-            )
-            if let todaySpend = account.todaySpend {
-                MetricCard(
-                    title: "今日消耗",
-                    value: RelayNumberFormatter.money(todaySpend, currency: account.currency),
-                    subTitle: "仅显示完整数据",
-                    accentColor: .orange
-                )
-            }
-            MetricCard(
-                title: "本月累计账单",
-                value: account.monthSpend.map { RelayNumberFormatter.money($0, currency: account.currency) } ?? "--",
-                subTitle: "按账单周期",
-                accentColor: .primary
-            )
+        HStack(alignment: .top, spacing: 28) {
+            VStack(alignment: .leading, spacing: 11) {
+                Text("可用余额").font(.system(size: 12)).foregroundStyle(.secondary)
+                Text(account.balance.map { RelayNumberFormatter.money($0, currency: account.currency) } ?? "—")
+                    .font(.system(size: 40, weight: .semibold)).tracking(-1)
+                    .monospacedDigit().lineLimit(1).minimumScaleFactor(0.65)
+                Text(account.currency.rawValue + " · 当前快照")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+            }.frame(maxWidth: .infinity, alignment: .leading).layoutPriority(1)
+            MetricCard(title: "今日消费",
+                value: account.todaySpend.map { RelayNumberFormatter.money($0, currency: account.currency) } ?? "—",
+                subTitle: "供应商当日口径")
+            MetricCard(title: "本月消费",
+                value: account.monthSpend.map { RelayNumberFormatter.money($0, currency: account.currency) } ?? "—",
+                subTitle: monthlyBudget.map { "预算 " + RelayNumberFormatter.money($0.amount, currency: $0.currency) } ?? "供应商账单周期")
         }
+        .padding(.vertical, 12)
     }
 
     private var trendSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("近 7 日消耗趋势")
-                        .font(.system(size: 13, weight: .semibold))
+                    Text("消费趋势")
+                        .font(.system(size: 15, weight: .semibold))
                     Text(account.kind == .pipio ? "历史按已完成日期查询，今天由正常刷新更新。" : account.kind == .workbuddy2api ? "根据 /v1/stats 的进程累计积分计算刷新增量；无法恢复未采集日期。" : "平台历史使用手动填写的 userToken，按北京时间统计；缺失日期为未知。")
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Text(account.kind == .workbuddy2api ? "积分" : account.currency.rawValue)
+                Text("近 7 日 · " + (account.kind == .workbuddy2api ? "积分" : account.currency.rawValue))
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(.secondary)
             }
@@ -332,9 +326,8 @@ public struct AccountDetailView: View {
                 AdaptiveLineChart(dataPoints: displayedHistoryPoints,
                     unit: account.kind == .workbuddy2api ? "积分" : account.currency.symbol,
                     onSelect: { selectedHistoryPointID = $0?.id })
-                    .frame(height: 165)
-                    .padding(8)
-                    .background(.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+                    .frame(height: 185)
+                    .padding(.top, 12)
             }
         }
     }
@@ -433,10 +426,25 @@ public struct AccountDetailView: View {
         return "数据更新：\(formatter.string(from: updated))"
     }
 
+    private var statusSymbol: String {
+        if dataErrorMessage != nil { return "exclamationmark.triangle" }
+        if !account.isEnabled { return "pause.circle" }
+        if let health, health.phase.isActive { return "arrow.triangle.2.circlepath" }
+        if health?.issue != nil || health?.freshness == .stale { return "exclamationmark.circle" }
+        switch account.status {
+        case .ok: return account.lastUpdated == nil ? "clock" : "checkmark.circle"
+        default: return "exclamationmark.circle"
+        }
+    }
+
     private var statusColor: Color {
+        if dataErrorMessage != nil || health?.issue != nil { return .orange }
+        if !account.isEnabled || account.lastUpdated == nil { return .secondary }
+        if health?.freshness == .stale { return .orange }
+
         switch account.status {
         case .ok: return .green
-        case .warning, .retrying: return .yellow
+        case .warning, .retrying: return .orange
         case .error: return .red
         }
     }
@@ -446,27 +454,14 @@ private struct MetricCard: View {
     let title: String
     let value: String
     let subTitle: String
-    let accentColor: Color
 
     var body: some View {
-        VStack(alignment: .center, spacing: 4) {
-            Text(title)
-                .font(.system(size: 10))
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.system(size: 16, weight: .semibold))
-                .monospacedDigit()
-                .foregroundStyle(accentColor)
-                .lineLimit(1)
-                .minimumScaleFactor(0.72)
-            Text(subTitle)
-                .font(.system(size: 9))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title).font(.system(size: 12)).foregroundStyle(.secondary)
+            Text(value).font(.system(size: 26, weight: .semibold)).tracking(-0.5)
+                .monospacedDigit().lineLimit(1).minimumScaleFactor(0.65)
+            Text(subTitle).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(2)
         }
-        .multilineTextAlignment(.center)
-        .frame(maxWidth: .infinity, alignment: .center)
-        .padding(9)
-        .relayGlassTile(cornerRadius: 10)
+        .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 2)
     }
 }

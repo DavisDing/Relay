@@ -44,16 +44,16 @@ public struct AccountAddModalView: View {
                     .buttonStyle(RelayCircularIconButtonStyle())
                     .help("返回首页")
                     .accessibilityLabel("返回首页")
-                Text("添加服务商账号")
-                    .font(.system(size: 16, weight: .semibold))
+                Text("添加账户")
+                    .font(.system(size: 22, weight: .semibold))
                 Spacer()
             }
             .frame(height: RelayVisualStyle.navigationHeight)
             .padding(.horizontal, 20)
-            .padding(.top, 8)
+            .padding(.top, 16)
 
             ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 18) {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("账号显示名称")
                             .font(.system(size: 12, weight: .medium))
@@ -135,17 +135,17 @@ public struct AccountAddModalView: View {
                     .buttonStyle(RelayPrimaryCapsuleButtonStyle(isLoading: isSaving))
                     .disabled(isTesting || isSaving || accountName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-            .padding(4)
-            .relayFloatingBarSurface()
+            .padding(12)
+            .background(.bar, in: RoundedRectangle(cornerRadius: 12))
             .padding(.horizontal, 16)
             .padding(.bottom, 12)
         }
-        .frame(width: RelayVisualStyle.panelWidth, height: 520)
+        .frame(width: RelayVisualStyle.formPanelWidth, height: RelayVisualStyle.formPanelHeight)
         .relayPanelSurface(cornerRadius: RelayVisualStyle.panelCornerRadius)
     }
 
     private var pipioFormSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 18) {
             labeledField("Pipio Base URL", text: $pipioBaseURL, placeholder: "https://pipio.io")
             Text("自动移除 /v1 及 /api；管理接口走 /api，模型接口走 /v1")
                 .font(.system(size: 10))
@@ -166,7 +166,7 @@ public struct AccountAddModalView: View {
     }
 
     private var workbuddyFormSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 18) {
             labeledField("网关地址（本机 HTTP 或远端 HTTPS）", text: $workbuddyBaseURL, placeholder: "http://localhost:7863")
             VStack(alignment: .leading, spacing: 4) {
                 Text("网关 API Key（仅本机保存）").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
@@ -178,7 +178,7 @@ public struct AccountAddModalView: View {
     }
 
     private var deepseekFormSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("DeepSeek API Base URL")
                     .font(.system(size: 12, weight: .medium))

@@ -201,6 +201,7 @@ struct RegressionChecks {
         try await DataTransferChecks.run()
         try await HistoryBackfillChecks.run()
         try ProductFeatureChecks.run()
+        try SiteAccountGroupChecks.run()
         try BusinessLogicSelfCheck.run()
         print("PASSED: existing business logic self-check")
         try await PipioDashboardContractChecks.run()

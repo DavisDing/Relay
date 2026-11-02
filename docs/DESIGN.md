@@ -1,8 +1,8 @@
 # Relay 技术设计
 
-**版本**：v2.0
+**版本**：v2.1
 **状态**：当前实现设计
-**最近整理**：2026-10-11
+**最近整理**：2026-11-02
 
 需求与验收见 [REQUIREMENT](REQUIREMENT.md)，长期事实和构建命令见 [AI_CONTEXT](AI_CONTEXT.md)；原始凭据方案见 [SECURITY_DESIGN](SECURITY_DESIGN.md)；该旧记录的删除顺序不代表现状，账户生命周期以本文和 REQUIREMENT 为准。
 
@@ -14,7 +14,7 @@
 - 本地优先；业务数据、同步数据和凭据数据分离。
 - 已保存凭据仅由 `FileCredentialStore` 读取；UI 可持有用户正在录入的临时草稿，不回显旧值，同步、导出和备份不接触凭据正文。
 - 账户失败隔离，刷新和写入采用原子提交；未知值不能被转成零。
-- 复用现有页面和原生材质，不通过结构重做解决局部状态问题。
+- 按已确认 Apple Design 概念重构 UI；保留业务服务、数据兼容与窗口生命周期。
 
 ## 2. 模块职责
 
@@ -22,13 +22,13 @@
 
 `Sources/Relay/UI` 负责输入、展示和页面状态：
 
-- `MainPopoverView`：总览、搜索、分组、置顶排序和账户入口。
+- `MainPopoverView`：消费总览、站点折叠、搜索、分组、置顶排序与账户选择。`SiteAccountGroup` 仅做内存投影，不新增存储字段。
 - `AccountAddModalView` / `AccountEditModalView`：账户字段、预算、分组、置顶和凭据编辑。
 - `AccountDetailContainerView` / `AccountDetailView`：账户实时投影、固定近 7 日趋势、按日模型明细及明确口径的网关累计模型。
 - `SettingsDataPage`：刷新、历史保留、月预算通知。
 - `SettingsSyncPage` + `DataTransferPanel`：iCloud 普通文件同步、备份摘要/恢复、配置迁移；备份列表与 CSV 筛选使用折叠区，错误和搬移待处理状态不折叠。
 - `SettingsShortcutsPage` + `SettingsBackupDirectoryPanel`：全局快捷键、通知权限/测试、登录项、iCloud 与备份目录选择/重新授权；复用原文件同步/备份服务；常规、数据与同步页不再提供重复的权限跳转按钮。
-- `SettingsPageLayout`：统一 12pt 正文、10pt 说明、紧凑分组、右侧 mini 开关及右对齐 28pt 胶囊操作行。设置内快捷键、导入/恢复及诊断 sheet 沿用同一控件体系。
+- `SettingsPageLayout`：统一 13pt 正文、10pt 说明、清晰分组、右侧 small 开关及 32pt 操作按钮。设置内快捷键、导入/恢复及诊断 sheet 沿用同一控件体系。
 - `RelayMenuBarController`：菜单栏状态、Popover 和辅助窗口导航。
 
 UI 不拼供应商 URL、不解码供应商 JSON、不持有长期凭据。关闭辅助页返回首页；外部隐藏保留页面状态。
@@ -40,7 +40,7 @@ UI 不拼供应商 URL、不解码供应商 JSON、不持有长期凭据。关�
 - `RefreshScheduler`：账户请求去重、全局并发、同源串行、手动优先和取消。
 - `RefreshCoordinator`：执行单次请求、退避、能力补充、历史批量提交和刷新原子事务。
 - `DashboardAggregator`：基于可比较金额和数据完整性生成总览，不将未知视为零。
-- `AccountOrganizationService`：搜索、分组筛选、置顶和稳定排序的纯投影；`manualOrder` 按 sortOrder/createdAt/UUID 稳定排列设置列表。`RelayStore.reorderAccounts` 校验完整且唯一的父账户 ID 集合，一次 CAS 保存连续 sortOrder，仅为发生排名变化的账户推进 updatedAt；失败不发布新顺序，首页置顶与服务商分组语义不变。
+- `AccountOrganizationService`：搜索、分组筛选、置顶和稳定排序的纯投影；`manualOrder` 按 sortOrder/createdAt/UUID 稳定排列设置列表。`RelayStore.reorderAccounts` 校验完整且唯一的父账户 ID 集合，一次 CAS 保存连续 sortOrder，仅为发生排名变化的账户推进 updatedAt；失败不发布新顺序，首页置顶保留，分组改为供应商与站点 origin。
 - `BudgetService`：月预算币种、月份、80/100% 阈值和本机去重状态。
 - `ModelAnalysisService`：模型消费、Token、占比、单位成本和未知原因。
 - `AccountHealth`：运行期健康摘要，不持久化秘密。
@@ -234,9 +234,11 @@ UI 不拼供应商 URL、不解码供应商 JSON、不持有长期凭据。关�
 
 ## 8. UI 与错误
 
-共享 `RelayVisualStyle` 保留页面 `regularMaterial`、卡片 `thinMaterial`、嵌套 `ultraThinMaterial`，叠加适配深浅模式的中性色底；不自绘模糊/渐变替代系统材质。保留 HyperOS × iOS 视觉风格，尺寸参考替换前的 macOS UI：主/次操作使用默认 28pt、按内容宽度布局的胶囊按钮（浅色黑底白字，深色反转），导航图标使用 24pt 圆形按钮，搜索/表单输入默认 28pt，表单为 8pt 圆角与 2pt 聚焦描边，按钮/正文字号 12pt。首页汇总金额 20pt、详情指标金额 16pt，卡片内边距分别恢复为 11pt/9pt，组间距 7～16pt，导航基准高度 32pt。首页汇总内容居中，搜索在账号标题右侧；首页、表单、详情和设置底部使用紧凑悬浮操作区，首页/详情恢复状态与按钮的单行排布，操作区内边距 4pt；账户管理选择后呈现等宽的四项批量操作栏（项高 36pt），仍调用已有原子批量整理接口。减少动态效果时关闭弹性与缩放，减少透明度时使用实色底。设置分为通用、数据、快捷键、同步、账户管理、关于，选中分页使用中性色及蓝色短横线。辅助窗口锚定首页位置，显式退出返回首页，保存失败留原页，替换窗口不闪现首页。此处描述实现，深浅模式、交互与原生材质的实际视觉验收须在图形会话中另行核实。
+共享 `RelayVisualStyle` 实现 Apple Design：外围页面和工具栏使用原生 `regularMaterial`，内容卡片使用系统 `controlBackgroundColor`，嵌套区用低对比中性色，不叠加多层半透明卡片。系统字体与语义色适配深浅模式，主要动作强调色，按钮按下立即局部反馈，释放使用无回弹弹簧。减少动态效果不缩放或位移；减少透明度与增强对比度改用实色，增强对比度提高边框。
 
-账户详情顶部指标卡的标题、金额和说明居中；底部状态仅显示短标签（刷新中、待重试、网络异常等），正常时显示简短更新时间，完整健康信息、日期和读取错误保留在悬停与辅助功能文本中。
+首页为 420×660，主消费 43pt、左对齐，状态与底部操作固定，账户区滚动。`SiteAccountGroup` 按供应商 + 规范化 origin 分组（小写协议/host、移除默认 80/443 端口、忽略路径/查询/用户信息）；非法地址按账户 ID 隔离，地址标签不显示秘密。组序随置顶与账户顺序；网关子账户保留所属父账户关系，无子账户数据则显示父网关入口。展开 ID 仅在视图状态保存，搜索/分组自动展开匹配行，组汇总成员不受搜索影响。站点消费调用 `RelayStore.todaySpendTotal(forAccountIDs:)`，沿用全局时钟、汇率、完整性及隐藏/停用规则；网关积分使用同站点父账户 ID 限定，缺失时不显示部分总值。单账户直接进入详情，多账户原位展开后选择。所有账户操作仍调用已有业务入口。
+
+详情为 760×700，左对齐主余额和次级金额、近 7 日趋势、按日模型五列明细；网关展示独立积分和进程累计口径。标题/底栏保留状态、官网、关闭与返回行为，网关管理只在真实子账户详情呈现。添加/编辑为 520×660，设置为 540×680；共享新的输入、按钮与分组样式，保留已有表单验证、失败状态与六页设置功能。AppKit 主机尺寸与 SwiftUI 根视图尺寸一致；辅助窗口只裁剪内容，不再重复叠加第二层材质。辅助窗口锚定首页位置，显式退出返回首页，保存失败留原页，替换窗口不闪现首页。
 
 点击首页原有“今日总消耗”卡片通过既有 AppKit 辅助窗口打开 `ConsumptionOverviewView`，完成后返回首页，默认当日，可切换月度；分组与账户金额复用日记录，原币、覆盖与环比规则不变。
 
@@ -288,6 +290,8 @@ DMG 文件图标由 `scripts/set-dmg-icon.swift` 复用 `Resources/AppIcon.icns`
 | 备份日期/导航（AC-019/020） | GUI build-only，`WindowNavigationContractChecks` 的实际运行需图形会话 | 日期专门行为检查和真实界面验收尚未执行 |
 | 同步（AC-007/021） | `SyncSafetyChecks`、`SyncConflictContractTests`、双机 fixture 脚本 | fixture 不证明真实 iCloud 下载、冲突或第二台 Mac |
 | 更新（AC-022） | `UpdateIntegrityChecks`、`test-update-integrity.sh` | 不证明当前 Release 已发布、可安装或完成升级 |
+
+以下既有执行记录属于 UI 重构前的历史基线，不作为本次 Apple Design 界面的验收证据。
 
 新增 `StrengtheningChecks` 关联 AC-023～AC-032；完整离线回归、三个契约、GUI build-only、SwiftPM 构建和本机重定向专项在基于 `2b4a117` 的当前未提交工作区通过。备份重新创建服务后重试已由 fixture 覆盖，子进程强制退出在复制与清理阶段另有检查；真实断电和原生目录授权仍未验收。
 

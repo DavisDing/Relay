@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Complements the detail view without changing the existing monetary cards.
+/// Account budget state shown alongside the current provider totals.
 public struct BudgetAccountPanel: View {
     public let budget: MoneyValue?
     public let snapshot: ProviderSnapshot?
@@ -37,7 +37,7 @@ public struct BudgetAccountPanel: View {
                     Text("开启预算提醒后，达到 80% 和 100% 时通知。")
                         .font(.system(size: 10)).foregroundStyle(.secondary)
                 }
-            }.padding(11).relayGlassTile(cornerRadius: 10)
+            }.padding(16).relayInsetSurface(cornerRadius: 12)
         }
     }
 }

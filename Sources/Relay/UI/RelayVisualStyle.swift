@@ -1,53 +1,40 @@
 import SwiftUI
 
-/// Shared visual language for Relay's dashboard, modals, and auxiliary panels.
-///
-/// Blends HyperOS clean restraint with iOS system-level frosted glassmorphism.
-/// Leverages native macOS vibrant materials (`.regularMaterial`, `.thinMaterial`,
-/// `.ultraThinMaterial`) paired with continuous rounded corners, 0.5~1px hairline strokes,
-/// and soft diffusion shadows.
+/// Apple Design expressed through native macOS surfaces and semantic colors.
+/// Material belongs to the outer chrome; content stays on quiet, readable surfaces.
 public enum RelayVisualStyle {
-    // MARK: - Layout & Dimension Tokens
-    /// Shared width for the main popover and auxiliary panels.
-    public static let panelWidth: CGFloat = 360
-    public static let auxiliaryPanelCornerRadius: CGFloat = 20
-
-    /// Desktop density follows the original 360pt menu-bar panel, rather than
-    /// the touch-target dimensions of the mobile design reference.
-    public static let buttonHeight: CGFloat = 28
-    public static let iconButtonDiameter: CGFloat = 24
-    public static let inputHeight: CGFloat = 28
-    public static let navigationHeight: CGFloat = 32
+    public static let panelWidth: CGFloat = 420
+    public static let panelHeight: CGFloat = 660
+    public static let detailPanelWidth: CGFloat = 760
+    public static let detailPanelHeight: CGFloat = 700
+    public static let formPanelWidth: CGFloat = 520
+    public static let formPanelHeight: CGFloat = 660
+    public static let settingsPanelWidth: CGFloat = 540
+    public static let settingsPanelHeight: CGFloat = 680
+    public static let auxiliaryPanelCornerRadius: CGFloat = 22
+    public static let buttonHeight: CGFloat = 32
+    public static let iconButtonDiameter: CGFloat = 30
+    public static let inputHeight: CGFloat = 34
+    public static let navigationHeight: CGFloat = 40
     public static let buttonFontSize: CGFloat = 12
-    public static let bodyFontSize: CGFloat = 12
-
-    // MARK: - Radius Ladder (8 / 10 / 12 / 20 / 24 / Capsule)
+    public static let bodyFontSize: CGFloat = 13
     public static let radiusSmall: CGFloat = 8
     public static let radiusMedium: CGFloat = 10
-    public static let radiusCard: CGFloat = 12
-    public static let radiusPanel: CGFloat = 20
+    public static let radiusCard: CGFloat = 13
+    public static let radiusPanel: CGFloat = 22
     public static let radiusLarge: CGFloat = 24
-    public static let radiusFAB: CGFloat = 20
-
-    /// Preserved alias for card corner radius across existing components.
+    public static let radiusFAB: CGFloat = 16
     public static let cardCornerRadius: CGFloat = radiusCard
-    /// Preserved alias for main panel corner radius.
     public static let panelCornerRadius: CGFloat = radiusPanel
+    public static let spacingTight: CGFloat = 8
+    public static let spacingStandard: CGFloat = 16
+    public static let spacingSection: CGFloat = 22
+    public static let spacingLoose: CGFloat = 28
+    public static let accentColor: Color = .accentColor
+    public static let destructiveColor: Color = .red
+    public static let darkCardColor = Color(nsColor: .controlBackgroundColor)
+    public static let disclosureAnimation = Animation.spring(response: 0.32, dampingFraction: 1)
 
-    // MARK: - Compact Desktop Spacing
-    public static let spacingTight: CGFloat = 6
-    public static let spacingStandard: CGFloat = 12
-    public static let spacingSection: CGFloat = 16
-    public static let spacingLoose: CGFloat = 24
-
-    // MARK: - Colors & Accents
-    public static let accentColor: Color = Color(red: 10 / 255, green: 132 / 255, blue: 255 / 255) // #0A84FF
-    public static let destructiveColor: Color = Color(red: 255 / 255, green: 69 / 255, blue: 58 / 255) // #FF453A
-    public static let darkCardColor = Color(red: 28 / 255, green: 28 / 255, blue: 30 / 255)
-
-    /// One app-wide appearance policy for the dashboard and every auxiliary page.
-    /// A manual light/dark choice must win over the system appearance, while
-    /// followSystem keeps the native macOS behavior intact.
     public static func preferredColorScheme(for mode: AppearanceMode) -> ColorScheme? {
         switch mode {
         case .followSystem: return nil
@@ -57,313 +44,150 @@ public enum RelayVisualStyle {
     }
 }
 
-// MARK: - Surface Modifiers
-
-/// Keep native vibrancy, with predictable light/dark contrast and an opaque
-/// fallback when the user enables Reduce Transparency.
-private struct RelayMaterialBackground: View {
-    let material: Material
+private struct RelaySurface: ViewModifier {
+    enum Kind { case panel, content, inset, toolbar }
+    let kind: Kind
     let cornerRadius: CGFloat
-    let lightOpacity: Double
-    let darkOpacity: Double
-    var isPanel = false
-    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
-    var body: some View {
+    func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        let color = colorScheme == .dark
-            ? (isPanel ? Color.black : RelayVisualStyle.darkCardColor) : .white
-        if reduceTransparency {
-            shape.fill(color)
-        } else {
-            shape.fill(material)
-                .overlay { shape.fill(color.opacity(colorScheme == .dark ? darkOpacity : lightOpacity)) }
-        }
-    }
-}
-
-private struct RelayPanelSurfaceModifier: ViewModifier {
-    let cornerRadius: CGFloat
-    @Environment(\.colorScheme) private var colorScheme
-
-    func body(content: Content) -> some View {
         content
             .background {
-                RelayMaterialBackground(material: .regularMaterial, cornerRadius: cornerRadius,
-                                        lightOpacity: 0.45, darkOpacity: 0.6, isPanel: true)
+                if kind == .panel || kind == .toolbar {
+                    if reduceTransparency || contrast == .increased {
+                        shape.fill(Color(nsColor: .windowBackgroundColor))
+                    } else {
+                        shape.fill(.regularMaterial)
+                            .overlay { shape.fill((scheme == .dark ? Color.black : Color.white).opacity(kind == .panel ? 0.23 : 0.12)) }
+                    }
+                } else {
+                    shape.fill(kind == .content
+                        ? Color(nsColor: .controlBackgroundColor)
+                        : Color.primary.opacity(scheme == .dark ? 0.07 : 0.035))
+                }
             }
-            .tint(RelayVisualStyle.accentColor)
             .overlay {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .strokeBorder(
-                        colorScheme == .dark ? Color.white.opacity(0.12) : Color.white.opacity(0.55),
-                        lineWidth: 0.8
-                    )
+                shape.strokeBorder(Color.primary.opacity(contrast == .increased ? 0.45 : (kind == .inset ? 0.04 : 0.08)),
+                                   lineWidth: contrast == .increased ? 1 : 0.5)
+                    .allowsHitTesting(false)
             }
-            .overlay {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(colorScheme == .dark ? 0.22 : 0.08), lineWidth: 0.5)
-            }
-            .shadow(
-                color: Color.black.opacity(colorScheme == .dark ? 0.35 : 0.08),
-                radius: 18,
-                x: 0,
-                y: 8
-            )
+            .tint(.accentColor)
     }
 }
 
-private struct RelayGlassTileModifier: ViewModifier {
-    let cornerRadius: CGFloat
-    @Environment(\.colorScheme) private var colorScheme
-
-    func body(content: Content) -> some View {
-        content
-            .background {
-                RelayMaterialBackground(material: .thinMaterial, cornerRadius: cornerRadius,
-                                        lightOpacity: 0.78, darkOpacity: 0.8)
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .strokeBorder(
-                        colorScheme == .dark ? Color.white.opacity(0.10) : Color.white.opacity(0.60),
-                        lineWidth: 0.75
-                    )
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(colorScheme == .dark ? 0.20 : 0.06), lineWidth: 0.5)
-            }
-            .shadow(
-                color: Color.black.opacity(colorScheme == .dark ? 0.20 : 0.04),
-                radius: 8,
-                x: 0,
-                y: 2
-            )
-    }
-}
-
-private struct RelayInsetSurfaceModifier: ViewModifier {
-    let cornerRadius: CGFloat
-    @Environment(\.colorScheme) private var colorScheme
-
-    func body(content: Content) -> some View {
-        content
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .strokeBorder(
-                        colorScheme == .dark ? Color.white.opacity(0.08) : Color.primary.opacity(0.08),
-                        lineWidth: 0.5
-                    )
-            }
-    }
-}
-
-private struct RelayFloatingBarModifier: ViewModifier {
-    let cornerRadius: CGFloat
-    @Environment(\.colorScheme) private var colorScheme
-
-    func body(content: Content) -> some View {
-        content
-            .background {
-                RelayMaterialBackground(material: .regularMaterial, cornerRadius: cornerRadius,
-                                        lightOpacity: 0.8, darkOpacity: 0.8)
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .strokeBorder(
-                        colorScheme == .dark ? Color.white.opacity(0.16) : Color.white.opacity(0.75),
-                        lineWidth: 1.0
-                    )
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(colorScheme == .dark ? 0.25 : 0.08), lineWidth: 0.5)
-            }
-            .shadow(
-                color: Color.black.opacity(colorScheme == .dark ? 0.40 : 0.12),
-                radius: 20,
-                x: 0,
-                y: 10
-            )
-    }
-}
-
-// MARK: - Capsule & Interactive Button Styles
-
-/// Compact desktop capsule with inverted monochrome and 96% press feedback.
+/// Press feedback is immediate; the release settles without overshoot.
+/// Only the release is animated, so a new press never waits for an animation.
 public struct RelayPrimaryCapsuleButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
-    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     public let height: CGFloat
     public let isLoading: Bool
-
     public init(height: CGFloat = RelayVisualStyle.buttonHeight, isLoading: Bool = false) {
-        self.height = height
-        self.isLoading = isLoading
+        self.height = height; self.isLoading = isLoading
     }
-
     public func makeBody(configuration: Configuration) -> some View {
-        let isPressed = configuration.isPressed
-        let backgroundFill = colorScheme == .dark ? Color.white : Color.black
-        let foreground = colorScheme == .dark ? Color.black : Color.white
-
         HStack(spacing: 6) {
-            if isLoading {
-                ProgressView()
-                    .controlSize(.small)
-                    .tint(foreground)
-                Text("处理中…")
-            } else {
-                configuration.label
-            }
+            if isLoading { ProgressView().controlSize(.small); Text("处理中…") }
+            else { configuration.label }
         }
-        .font(.system(size: RelayVisualStyle.buttonFontSize, weight: .semibold))
-        .foregroundColor(foreground)
-        .padding(.horizontal, 12)
-        .frame(minWidth: 56)
-        .frame(height: height)
-        .background(backgroundFill)
-        .clipShape(Capsule())
+        .font(.system(size: 12, weight: .semibold))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 15)
+        .frame(minHeight: height)
+        .background(configuration.role == .destructive ? Color.red : .accentColor, in: Capsule())
         .contentShape(Capsule())
-        .overlay { Capsule().fill(Color.black.opacity(isPressed && isEnabled ? 0.05 : 0)).allowsHitTesting(false) }
-        .opacity(isEnabled || isLoading ? 1 : 0.3)
-        .scaleEffect(isPressed && isEnabled && !reduceMotion ? 0.96 : 1.0)
-        .animation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 1), value: isPressed)
+        .brightness(configuration.isPressed ? -0.08 : 0)
+        .opacity(isEnabled || isLoading ? 1 : 0.4)
+        .scaleEffect(configuration.isPressed && !reduceMotion ? 0.98 : 1)
+        .animation(configuration.isPressed || reduceMotion ? nil : .spring(response: 0.25, dampingFraction: 1), value: configuration.isPressed)
         .allowsHitTesting(!isLoading)
     }
 }
 
-/// Compact, content-width frosted glass capsule.
 public struct RelaySecondaryCapsuleButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
-    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     public let height: CGFloat
     public let isLoading: Bool
-
     public init(height: CGFloat = RelayVisualStyle.buttonHeight, isLoading: Bool = false) {
-        self.height = height
-        self.isLoading = isLoading
+        self.height = height; self.isLoading = isLoading
     }
-
     public func makeBody(configuration: Configuration) -> some View {
-        let isPressed = configuration.isPressed
-
         HStack(spacing: 6) {
-            if isLoading {
-                ProgressView().controlSize(.small)
-                Text("处理中…")
-            } else {
-                configuration.label
-            }
+            if isLoading { ProgressView().controlSize(.small); Text("处理中…") }
+            else { configuration.label }
         }
-            .font(.system(size: RelayVisualStyle.buttonFontSize, weight: .medium))
-            .foregroundColor(configuration.role == .destructive ? RelayVisualStyle.destructiveColor : .primary)
-            .padding(.horizontal, 12)
-            .frame(minWidth: 56)
-            .frame(height: height)
-            .background {
-                RelayMaterialBackground(material: .thinMaterial, cornerRadius: height / 2,
-                                        lightOpacity: 0.8, darkOpacity: 0.08)
-            }
-            .overlay {
-                Capsule()
-                    .strokeBorder(
-                        colorScheme == .dark ? Color.white.opacity(0.12) : Color.white.opacity(0.70),
-                        lineWidth: 1
-                    )
-            }
-            .overlay {
-                Capsule()
-                    .strokeBorder(Color.primary.opacity(colorScheme == .dark ? 0.20 : 0.08), lineWidth: 0.5)
-            }
-            .contentShape(Capsule())
-            .opacity(isEnabled || isLoading ? (isPressed ? 0.95 : 1) : 0.3)
-            .scaleEffect(isPressed && isEnabled && !reduceMotion ? 0.96 : 1.0)
-            .animation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 1), value: isPressed)
-            .allowsHitTesting(!isLoading)
+        .font(.system(size: 12, weight: .medium))
+        .foregroundStyle(configuration.role == .destructive ? Color.red : Color.accentColor)
+        .padding(.horizontal, 13)
+        .frame(minHeight: height)
+        .background(Color(nsColor: .controlBackgroundColor), in: Capsule())
+        .overlay { Capsule().strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5).allowsHitTesting(false) }
+        .contentShape(Capsule())
+        .brightness(configuration.isPressed ? -0.05 : 0)
+        .opacity(isEnabled || isLoading ? 1 : 0.4)
+        .scaleEffect(configuration.isPressed && !reduceMotion ? 0.98 : 1)
+        .animation(configuration.isPressed || reduceMotion ? nil : .spring(response: 0.25, dampingFraction: 1), value: configuration.isPressed)
+        .allowsHitTesting(!isLoading)
     }
 }
 
-/// Desktop circular icon button with linear styling and press feedback.
 public struct RelayCircularIconButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     public let diameter: CGFloat
     public let isSelected: Bool
-
     public init(diameter: CGFloat = RelayVisualStyle.iconButtonDiameter, isSelected: Bool = false) {
-        self.diameter = diameter
-        self.isSelected = isSelected
+        self.diameter = diameter; self.isSelected = isSelected
     }
-
     public func makeBody(configuration: Configuration) -> some View {
-        let isPressed = configuration.isPressed
-
         configuration.label
-            .font(.system(size: 12, weight: .regular))
-            .symbolVariant(isSelected ? .fill : .none)
-            .foregroundColor(isSelected ? RelayVisualStyle.accentColor : .primary)
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
             .frame(width: diameter, height: diameter)
-            .background(
-                Circle()
-                    .fill(isPressed ? Color.primary.opacity(0.10) : (isSelected ? RelayVisualStyle.accentColor.opacity(0.12) : Color.clear))
-            )
-            .overlay {
-                Circle()
-                    .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
-            }
-            .opacity(isEnabled ? 1.0 : 0.3)
+            .background(Color.primary.opacity(configuration.isPressed ? 0.12 : 0.04), in: Circle())
             .contentShape(Circle())
-            .scaleEffect(isPressed && isEnabled && !reduceMotion ? 0.96 : 1.0)
-            .animation(reduceMotion ? nil : .spring(response: 0.25, dampingFraction: 1), value: isPressed)
+            .opacity(isEnabled ? 1 : 0.4)
     }
 }
 
+/// Rows give local feedback without scaling the surrounding list or typography.
 public struct RelayCardButtonStyle: ButtonStyle {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
     public func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .contentShape(RoundedRectangle(cornerRadius: RelayVisualStyle.radiusCard))
-            .brightness(configuration.isPressed ? -0.03 : 0)
-            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.98 : 1)
-            .animation(reduceMotion ? nil : .spring(response: 0.25, dampingFraction: 1), value: configuration.isPressed)
+            .background(Color.accentColor.opacity(configuration.isPressed ? 0.09 : 0),
+                        in: RoundedRectangle(cornerRadius: RelayVisualStyle.radiusCard))
     }
 }
 
 public struct RelayTextButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
-
     public func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: RelayVisualStyle.buttonFontSize, weight: .medium))
-            .foregroundStyle(configuration.role == .destructive ? RelayVisualStyle.destructiveColor : RelayVisualStyle.accentColor)
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(configuration.role == .destructive ? Color.red : Color.accentColor)
             .padding(.horizontal, 6)
             .frame(minHeight: RelayVisualStyle.buttonHeight)
-            .background(configuration.isPressed ? RelayVisualStyle.accentColor.opacity(0.1) : .clear, in: Capsule())
+            .background(Color.accentColor.opacity(configuration.isPressed ? 0.1 : 0), in: Capsule())
             .contentShape(Capsule())
-            .opacity(isEnabled ? 1 : 0.3)
+            .opacity(isEnabled ? 1 : 0.4)
     }
 }
 
 private struct RelayInputSurfaceModifier: ViewModifier {
     let isFocused: Bool
     let cornerRadius: CGFloat
-    @Environment(\.colorScheme) private var colorScheme
-
+    @Environment(\.colorSchemeContrast) private var contrast
     func body(content: Content) -> some View {
         content
-            .background(Color(red: 118 / 255, green: 118 / 255, blue: 128 / 255)
-                .opacity(colorScheme == .dark ? 0.24 : 0.12), in: RoundedRectangle(cornerRadius: cornerRadius))
+            .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: cornerRadius))
             .overlay {
                 RoundedRectangle(cornerRadius: cornerRadius)
-                    .strokeBorder(isFocused ? RelayVisualStyle.accentColor : .clear, lineWidth: 2)
+                    .strokeBorder(isFocused ? Color.accentColor : Color.primary.opacity(contrast == .increased ? 0.45 : 0.1),
+                                  lineWidth: isFocused ? 2 : 0.5)
                     .allowsHitTesting(false)
             }
     }
@@ -372,13 +196,11 @@ private struct RelayInputSurfaceModifier: ViewModifier {
 private struct RelayFormFieldModifier: ViewModifier {
     @FocusState private var isFocused: Bool
     @Environment(\.isEnabled) private var isEnabled
-
     func body(content: Content) -> some View {
-        content
-            .textFieldStyle(.plain)
+        content.textFieldStyle(.plain)
             .font(.system(size: RelayVisualStyle.bodyFontSize))
             .focused($isFocused)
-            .padding(.horizontal, 8)
+            .padding(.horizontal, 10)
             .frame(minHeight: RelayVisualStyle.inputHeight)
             .modifier(RelayInputSurfaceModifier(isFocused: isFocused, cornerRadius: RelayVisualStyle.radiusSmall))
             .opacity(isEnabled ? 1 : 0.5)
@@ -388,51 +210,57 @@ private struct RelayFormFieldModifier: ViewModifier {
 struct RelaySearchField: View {
     @Binding var text: String
     @FocusState private var isFocused: Bool
-
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 7) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField("搜索账号", text: $text)
-                .textFieldStyle(.plain)
-                .focused($isFocused)
-                .accessibilityLabel("搜索账号、服务商或分组")
+            TextField("搜索站点或账户", text: $text)
+                .textFieldStyle(.plain).focused($isFocused)
+                .accessibilityLabel("搜索账户、站点、服务商或分组")
             if !text.isEmpty {
                 Button { text = "" } label: { Image(systemName: "xmark") }
                     .buttonStyle(RelayCircularIconButtonStyle(diameter: 20))
                     .accessibilityLabel("清除搜索")
             }
         }
-        .font(.system(size: 11))
-        .padding(.horizontal, 8)
+        .font(.system(size: 12)).padding(.horizontal, 10)
         .frame(height: RelayVisualStyle.inputHeight)
-        .modifier(RelayInputSurfaceModifier(isFocused: isFocused, cornerRadius: RelayVisualStyle.inputHeight / 2))
+        .modifier(RelayInputSurfaceModifier(isFocused: isFocused, cornerRadius: 10))
     }
 }
 
-// MARK: - View Extensions
+struct RelayProviderIcon: View {
+    let kind: ProviderKind
+    var size: CGFloat = 34
+    private var symbol: String {
+        switch kind {
+        case .deepseek: return "water.waves"
+        case .pipio: return "p.square.fill"
+        case .workbuddy2api: return "bolt.fill"
+        case .custom: return "network"
+        }
+    }
+    var body: some View {
+        Image(systemName: symbol)
+            .font(.system(size: size * 0.48, weight: .medium))
+            .foregroundStyle(kind == .workbuddy2api ? Color.secondary : .accentColor)
+            .frame(width: size, height: size)
+            .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: size * 0.3))
+            .accessibilityHidden(true)
+    }
+}
 
 public extension View {
-    /// Native material container used by the main dashboard and auxiliary pages.
     func relayPanelSurface(cornerRadius: CGFloat = RelayVisualStyle.panelCornerRadius) -> some View {
-        modifier(RelayPanelSurfaceModifier(cornerRadius: cornerRadius)).relayInitialFocus()
+        modifier(RelaySurface(kind: .panel, cornerRadius: cornerRadius)).relayInitialFocus()
     }
-
-    /// Native material card used for summary, metric and account tiles.
     func relayGlassTile(cornerRadius: CGFloat = RelayVisualStyle.cardCornerRadius) -> some View {
-        modifier(RelayGlassTileModifier(cornerRadius: cornerRadius))
+        modifier(RelaySurface(kind: .content, cornerRadius: cornerRadius))
     }
-
-    /// Subtle nested surface for content that sits inside a glass card.
     func relayInsetSurface(cornerRadius: CGFloat = RelayVisualStyle.radiusSmall) -> some View {
-        modifier(RelayInsetSurfaceModifier(cornerRadius: cornerRadius))
+        modifier(RelaySurface(kind: .inset, cornerRadius: cornerRadius))
     }
-
-    /// Floating Action Bar (FAB) container with soft diffusion shadow and frosted glass background.
     func relayFloatingBarSurface(cornerRadius: CGFloat = RelayVisualStyle.radiusFAB) -> some View {
-        modifier(RelayFloatingBarModifier(cornerRadius: cornerRadius))
+        modifier(RelaySurface(kind: .toolbar, cornerRadius: cornerRadius))
     }
-
-    func relayFormField() -> some View {
-        modifier(RelayFormFieldModifier())
-    }
+    func relayFormField() -> some View { modifier(RelayFormFieldModifier()) }
 }

@@ -31,7 +31,6 @@ private struct RelayAuxiliaryPanel<Content: View>: View {
     var body: some View {
         content
             .frame(width: size.width, height: size.height)
-            .relayPanelSurface(cornerRadius: RelayVisualStyle.auxiliaryPanelCornerRadius)
             .clipShape(RoundedRectangle(cornerRadius: RelayVisualStyle.auxiliaryPanelCornerRadius, style: .continuous))
             .preferredColorScheme(preferredColorScheme)
     }
@@ -90,7 +89,7 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate, NSPopover
         popover.behavior = .applicationDefined
         popover.animates = false
         popover.delegate = self
-        popover.contentSize = NSSize(width: RelayVisualStyle.panelWidth, height: 520)
+        popover.contentSize = NSSize(width: RelayVisualStyle.panelWidth, height: RelayVisualStyle.panelHeight)
         popover.contentViewController = NSHostingController(
             rootView: MainPopoverView(
                 store: store,
@@ -102,7 +101,8 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate, NSPopover
                     self?.showAccountDetailWindow(accountID: account.id)
                 },
                 onPresentEdit: { [weak self] account in self?.showAccountEditWindow(account: account) },
-                onPresentConsumptionOverview: { [weak self] in self?.showConsumptionOverviewWindow() }
+                onPresentConsumptionOverview: { [weak self] in self?.showConsumptionOverviewWindow() },
+                onPresentAccountManagement: { [weak self] in self?.showSettingsWindow(manageAccounts: true) }
             )
         )
 
@@ -417,7 +417,7 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate, NSPopover
     }
 
     private func showAddAccountWindow() {
-        presentAuxiliaryWindow(title: "添加服务商账号", size: NSSize(width: RelayVisualStyle.panelWidth, height: 520)) {
+        presentAuxiliaryWindow(title: "添加服务商账号", size: NSSize(width: RelayVisualStyle.formPanelWidth, height: RelayVisualStyle.formPanelHeight)) {
             AccountAddModalView(
                 onDismiss: { [weak self] in self?.closeAuxiliaryWindow() },
                 onSave: { [weak self] draft in
@@ -438,8 +438,8 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate, NSPopover
         }
     }
 
-    private func showSettingsWindow() {
-        presentAuxiliaryWindow(title: "Relay 设置", size: NSSize(width: RelayVisualStyle.panelWidth, height: 520)) {
+    private func showSettingsWindow(manageAccounts: Bool = false) {
+        presentAuxiliaryWindow(title: "Relay 设置", size: NSSize(width: RelayVisualStyle.settingsPanelWidth, height: RelayVisualStyle.settingsPanelHeight)) {
             SettingsWindowView(
                 initialSettings: self.store.settings,
                 initialGlobalShortcutConfiguration: GlobalShortcutConfigurationStore.load(),
@@ -455,13 +455,14 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate, NSPopover
                 updateState: self.updateState,
                 store: self.store,
                 onClose: { [weak self] in self?.closeAuxiliaryWindow() },
-                onSave: { [weak self] settings in self?.store.updateSettings(settings) }
+                onSave: { [weak self] settings in self?.store.updateSettings(settings) },
+                initiallyManageAccounts: manageAccounts
             )
         }
     }
 
     private func showAccountDetailWindow(accountID: String) {
-        presentAuxiliaryWindow(title: "账号详情", size: NSSize(width: RelayVisualStyle.panelWidth, height: 520)) {
+        presentAuxiliaryWindow(title: "账号详情", size: NSSize(width: RelayVisualStyle.detailPanelWidth, height: RelayVisualStyle.detailPanelHeight)) {
             AccountDetailContainerView(
                 store: self.store,
                 accountID: accountID,
@@ -475,7 +476,7 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate, NSPopover
     }
 
     private func showAccountEditWindow(account: AccountModel) {
-        presentAuxiliaryWindow(title: "编辑账号", size: NSSize(width: RelayVisualStyle.panelWidth, height: 520)) {
+        presentAuxiliaryWindow(title: "编辑账号", size: NSSize(width: RelayVisualStyle.formPanelWidth, height: RelayVisualStyle.formPanelHeight)) {
             AccountEditContainerView(
                 store: self.store,
                 account: account,

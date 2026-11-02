@@ -769,8 +769,11 @@ public final class RelayStore: ObservableObject {
         }
     }
 
-    public func creditTotal(for kind: ProviderKind = .workbuddy2api) -> CreditDashboardTotal {
-        let gateways = accounts.filter { $0.kind == kind && $0.isEnabled && !$0.isHidden }
+    public func creditTotal(for kind: ProviderKind = .workbuddy2api, accountIDs: Set<UUID>? = nil) -> CreditDashboardTotal {
+        let gateways = accounts.filter {
+            $0.kind == kind && $0.isEnabled && !$0.isHidden &&
+            (accountIDs == nil || UUID(uuidString: $0.id).map { accountIDs!.contains($0) } == true)
+        }
         guard !gateways.isEmpty else { return CreditDashboardTotal(value: nil, isComplete: true) }
         var excluded = Set<UUID>()
         var total = Decimal.zero
@@ -807,6 +810,15 @@ public final class RelayStore: ObservableObject {
         let ids = Set(accounts.filter { $0.kind == kind && $0.isEnabled && !$0.isHidden }.compactMap { UUID(uuidString: $0.id) })
         return DashboardAggregator.todaySpendTotal(snapshots: snapshots.filter { ids.contains($0.accountID) },
             targetCurrency: settings.baseCurrency, now: presentationDate, expectedAccountIDs: ids,
+            calendar: calendar, manualUSDToCNY: manualExchangeRates)
+    }
+
+    /// Site-scoped totals share the dashboard's clock, FX and completeness rules.
+    /// Search only changes which rows are visible, never the members of this set.
+    public func todaySpendTotal(forAccountIDs ids: Set<UUID>) -> DashboardTotal {
+        let eligible = ids.intersection(expectedAccountIDs)
+        return DashboardAggregator.todaySpendTotal(snapshots: snapshots.filter { eligible.contains($0.accountID) },
+            targetCurrency: settings.baseCurrency, now: presentationDate, expectedAccountIDs: eligible,
             calendar: calendar, manualUSDToCNY: manualExchangeRates)
     }
 

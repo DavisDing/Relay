@@ -52,7 +52,8 @@ public struct SettingsWindowView: View {
         updateState: RelayUpdateState = RelayUpdateState(),
         store: RelayStore,
         onClose: @escaping () -> Void = {},
-        onSave: @escaping (RelaySettings) -> Void = { _ in }
+        onSave: @escaping (RelaySettings) -> Void = { _ in },
+        initiallyManageAccounts: Bool = false
     ) {
         self.schemaVersion = initialSettings.schemaVersion
         self.initialGlobalShortcutConfiguration = initialGlobalShortcutConfiguration
@@ -66,6 +67,7 @@ public struct SettingsWindowView: View {
         self._updateState = ObservedObject(wrappedValue: updateState)
         self.onClose = onClose
         self.onSave = onSave
+        _selectedTab = State(initialValue: initiallyManageAccounts ? .accountManagement : .general)
         _showTodayInMenuBar = State(initialValue: initialSettings.showTodayInMenuBar)
         _baseCurrency = State(initialValue: initialSettings.baseCurrency)
         _lowBalanceThreshold = State(initialValue: NSDecimalNumber(decimal: initialSettings.defaultLowBalanceThreshold).stringValue)
@@ -90,7 +92,7 @@ public struct SettingsWindowView: View {
         VStack(spacing: 0) {
             ZStack {
                 Text("设置")
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.system(size: 23, weight: .semibold))
 
                 HStack {
                     Button(action: onClose) {
@@ -104,7 +106,7 @@ public struct SettingsWindowView: View {
             }
             .frame(height: RelayVisualStyle.navigationHeight)
             .padding(.horizontal, 16)
-            .padding(.top, 8)
+            .padding(.top, 18)
 
             SettingsTabBar(selectedTab: $selectedTab)
 
@@ -112,7 +114,6 @@ public struct SettingsWindowView: View {
                 .background(RelayInitialFocus().id(selectedTab).frame(width: 0, height: 0).accessibilityHidden(true))
                 .disabled(!store.storageAvailability.isAvailable && selectedTab != .about)
                 .frame(maxHeight: .infinity)
-                .relayGlassTile()
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
 
@@ -126,12 +127,11 @@ public struct SettingsWindowView: View {
                     .buttonStyle(RelayPrimaryCapsuleButtonStyle())
                     .frame(width: 56)
             }
-            .padding(4)
-            .relayFloatingBarSurface()
-            .padding(.horizontal, 16)
-            .padding(.vertical, 6)
+            .padding(14)
+            .background(.bar)
+            .padding(.top, 12)
         }
-        .frame(width: RelayVisualStyle.panelWidth, height: 520)
+        .frame(width: RelayVisualStyle.settingsPanelWidth, height: RelayVisualStyle.settingsPanelHeight)
         .relayPanelSurface(cornerRadius: RelayVisualStyle.panelCornerRadius)
         .preferredColorScheme(preferredColorScheme)
         .alert("确认删除账号？", isPresented: Binding(

@@ -89,19 +89,19 @@ public struct AccountEditModalView: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 18) {
             HStack(spacing: 8) {
                 Button(action: onDismiss) { Image(systemName: "chevron.left") }
                     .buttonStyle(RelayCircularIconButtonStyle())
                     .help("返回首页")
                     .accessibilityLabel("返回首页")
-                Text("编辑账号").font(.system(size: 16, weight: .semibold))
+                Text("编辑账号").font(.system(size: 22, weight: .semibold))
                 Spacer()
             }
             .frame(height: RelayVisualStyle.navigationHeight)
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 18) {
                     if account.kind == .workbuddy2api {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("网关地址").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
@@ -176,12 +176,12 @@ public struct AccountEditModalView: View {
                 .buttonStyle(RelayPrimaryCapsuleButtonStyle(isLoading: isSaving))
                 .disabled(isSaving)
             }
-            .padding(4)
-            .relayFloatingBarSurface()
+            .padding(12)
+            .background(.bar, in: RoundedRectangle(cornerRadius: 12))
         }
         .padding(20)
-        .frame(width: RelayVisualStyle.panelWidth)
-        .frame(maxHeight: .infinity)
+        .frame(width: RelayVisualStyle.formPanelWidth)
+        .frame(height: RelayVisualStyle.formPanelHeight)
         .relayPanelSurface(cornerRadius: RelayVisualStyle.panelCornerRadius)
     }
 
