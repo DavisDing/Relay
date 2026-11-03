@@ -47,11 +47,10 @@ public struct WorkBuddy2APIAdapter: ProviderAdapter {
         let children = try result.accounts.map { item -> ProviderSubAccountSnapshot in
             guard !item.uid.isEmpty, seen.insert(item.uid).inserted else { throw ProviderError.incompatibleResponse }
             let name = item.nickname?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let usableName = name?.isEmpty == false && !name!.contains("***") ? name : nil
             let reason = item.manualDisabled ? item.manualReason : (item.disabled ? item.disabledReason : item.reason)
             return ProviderSubAccountSnapshot(
                 parentAccountID: account.id, externalID: item.uid,
-                displayName: usableName ?? item.uid,
+                displayName: name?.isEmpty == false ? name! : item.uid,
                 availablePoints: item.credits.map { Decimal($0) },
                 disabled: item.disabled, manualDisabled: item.manualDisabled,
                 cooling: item.cooling, statusMessage: reason,
