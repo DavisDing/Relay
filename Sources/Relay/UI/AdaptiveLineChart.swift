@@ -8,11 +8,14 @@ public struct AdaptiveLineChart: View {
     public let dataPoints: [DailySpendPoint]
     public let unit: String
     public var onSelect: (DailySpendPoint?) -> Void
+    public var isSelectable: Bool
     @State private var selectedPointID: String?
 
-    public init(dataPoints: [DailySpendPoint], unit: String = "$", onSelect: @escaping (DailySpendPoint?) -> Void = { _ in }) {
+    public init(dataPoints: [DailySpendPoint], unit: String = "$", isSelectable: Bool = true,
+                onSelect: @escaping (DailySpendPoint?) -> Void = { _ in }) {
         self.dataPoints = dataPoints
         self.unit = unit
+        self.isSelectable = isSelectable
         self.onSelect = onSelect
     }
 
@@ -34,7 +37,7 @@ public struct AdaptiveLineChart: View {
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
             } else {
-                if let selected = selectedPoint {
+                if isSelectable, let selected = selectedPoint {
                     HStack(spacing: 6) {
                         Text("\(selected.dateString):")
                             .font(.system(size: 11, weight: .medium))
@@ -132,10 +135,8 @@ public struct AdaptiveLineChart: View {
                             .contentShape(Rectangle())
                             .frame(width: plot.width, height: plot.height)
                             .offset(x: plot.minX, y: plot.minY)
-                            .gesture(DragGesture(minimumDistance: 0)
-                                .onChanged { value in
-                                    select(at: value.location.x, positions: positions)
-                                })
+                            .gesture(isSelectable ? DragGesture(minimumDistance: 0)
+                                .onChanged { value in select(at: value.location.x, positions: positions) } : nil)
                             .accessibilityHidden(true)
 
                         ForEach(dataPoints.indices.filter { labels.contains($0) }, id: \.self) { index in
@@ -158,11 +159,13 @@ public struct AdaptiveLineChart: View {
                 }
             }
         }
-        .help("点击或拖动选择已知日期；仅展示已记录数据，缺失日期不代表零消耗。")
+        .help(isSelectable ? "点击或拖动选择已知日期；仅展示已记录数据，缺失日期不代表零消耗。"
+                           : "仅展示已记录数据，缺失日期不代表零消耗。")
         .accessibilityLabel("每日消耗趋势")
         .accessibilityValue(accessibilitySummary)
         .accessibilityHint("可调整以选择前后日期；未记录日期为未知，不代表零消耗。")
         .accessibilityAdjustableAction { direction in
+            guard isSelectable else { return }
             switch direction {
             case .increment: moveSelection(by: 1)
             case .decrement: moveSelection(by: -1)

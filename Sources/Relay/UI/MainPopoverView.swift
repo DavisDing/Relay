@@ -240,8 +240,8 @@ public struct MainPopoverView: View {
                                 .font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1)
                         }
                         Spacer(minLength: 6)
-                        Text(siteValue(site)).font(.system(size: site.kind == .workbuddy2api ? 11 : 15, weight: .medium))
-                            .foregroundStyle(site.kind == .workbuddy2api ? Color.secondary : Color.primary).monospacedDigit()
+                        Text(siteValue(site)).font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(.primary).monospacedDigit()
                             .lineLimit(1).minimumScaleFactor(0.75)
                             .layoutPriority(1)
                             .help(siteValue(site, compact: false))
@@ -350,7 +350,7 @@ public struct MainPopoverView: View {
                     }
                     Spacer(minLength: 4)
                     Text(accountValue(account))
-                        .font(.system(size: 13, weight: .medium)).monospacedDigit().lineLimit(1)
+                        .font(.system(size: 13, weight: .medium)).foregroundStyle(.primary).monospacedDigit().lineLimit(1)
                         .layoutPriority(1).help(accountValue(account, compact: false))
                     Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold)).foregroundStyle(.tertiary)
                 }

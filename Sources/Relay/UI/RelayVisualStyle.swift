@@ -5,11 +5,11 @@ import SwiftUI
 public enum RelayVisualStyle {
     public static let panelWidth: CGFloat = 320
     public static let panelHeight: CGFloat = 480
-    public static let detailPanelWidth: CGFloat = 420
+    public static let detailPanelWidth: CGFloat = 350
     public static let detailPanelHeight: CGFloat = 500
-    public static let formPanelWidth: CGFloat = 360
+    public static let formPanelWidth: CGFloat = 320
     public static let formPanelHeight: CGFloat = 480
-    public static let settingsPanelWidth: CGFloat = 380
+    public static let settingsPanelWidth: CGFloat = 320
     public static let settingsPanelHeight: CGFloat = 500
     public static let auxiliaryPanelCornerRadius: CGFloat = 16
     public static let buttonHeight: CGFloat = 26

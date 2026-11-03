@@ -59,7 +59,6 @@ public struct AccountDetailView: View {
     public let historyRecords: [DailyUsageRecord]?
     public let monthlyBudget: MoneyValue?
     public let budgetSnapshot: ProviderSnapshot?
-    @State private var selectedHistoryPointID: String?
     public var onClose: () -> Void
     public var onSubAccountAction: (ProviderSubAccountAction, UUID, String) async throws -> Void
     @State private var confirmingAction: ProviderSubAccountAction?
@@ -290,7 +289,7 @@ public struct AccountDetailView: View {
             } else {
                 AdaptiveLineChart(dataPoints: displayedHistoryPoints,
                     unit: account.kind == .workbuddy2api ? "积分" : account.currency.symbol,
-                    onSelect: { selectedHistoryPointID = $0?.id })
+                    isSelectable: false)
                     .frame(height: 116)
                     .padding(.top, 4)
             }
@@ -337,13 +336,7 @@ public struct AccountDetailView: View {
         }
     }
 
-    private var selectedModelDate: Date {
-        if let selectedHistoryPointID,
-           let record = historyRecords?.first(where: { $0.id == selectedHistoryPointID }) {
-            return record.day
-        }
-        return historyCalendar.startOfDay(for: Date())
-    }
+    private var selectedModelDate: Date { historyCalendar.startOfDay(for: Date()) }
 
     private var selectedModelDateLabel: String {
         if account.kind == .workbuddy2api { return "进程累计" }
