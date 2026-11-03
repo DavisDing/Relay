@@ -125,7 +125,7 @@ public enum DataTransferService {
         let accountKeys: Set<String> = ["id", "displayName", "providerKind", "siteOrigin", "credentialReference", "isEnabled", "isHidden",
             "lowBalanceThreshold", "manualUSDToCNY", "monthlyBudget", "groupName", "isPinned", "sortOrder", "createdAt", "updatedAt"]
         let settingKeys: Set<String> = ["schemaVersion", "refreshIntervalSeconds", "showTodayInMenuBar", "baseCurrency",
-            "defaultLowBalanceThreshold", "historyRetention", "iCloudFileSyncEnabled"]
+            "defaultLowBalanceThreshold", "historyRetention", "iCloudFileSyncEnabled", "rateRefreshInterval"]
         guard Set(settings.keys).isSubset(of: settingKeys), accounts.allSatisfy({ Set($0.keys).isSubset(of: accountKeys) }) else {
             throw DataTransferError.forbiddenField
         }

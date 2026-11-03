@@ -205,7 +205,11 @@ public final class RefreshCoordinator {
             credential: credential,
             adapter: adapter,
             persistedRate: oldSnapshot?.rate,
-            forceRefresh: forceRateRefresh
+            persistedRateIsStale: oldSnapshot?.freshness == .stale,
+            forceRefresh: forceRateRefresh,
+            refreshInterval: try repository.settings().rateRefreshInterval,
+            calendar: calendar,
+            now: clock.now()
         )
         try Task.checkCancellation()
         let fetched = try await adapter.fetchSnapshot(
@@ -423,7 +427,8 @@ public final class RefreshCoordinator {
             try await historyRequestGate.acquire(account.siteOrigin)
             do {
                 let rate = try await rateService.resolve(account: account, credential: credential,
-                    adapter: adapter, persistedRate: persistedRate, forceRefresh: false, now: clock.now()).rate
+                    adapter: adapter, persistedRate: persistedRate, forceRefresh: false,
+                    refreshInterval: try repository.settings().rateRefreshInterval, calendar: calendar, now: clock.now()).rate
                 try Task.checkCancellation()
                 let result = try await adapter.fetchDailyUsage(for: account, credential: credential,
                     rate: rate, endingAt: endingAt, days: days, calendar: calendar)
@@ -452,7 +457,8 @@ public final class RefreshCoordinator {
             do {
                 if resolvedRate == nil {
                     resolvedRate = try await rateService.resolve(account: account, credential: credential,
-                        adapter: adapter, persistedRate: persistedRate, forceRefresh: false, now: clock.now()).rate
+                        adapter: adapter, persistedRate: persistedRate, forceRefresh: false,
+                        refreshInterval: try repository.settings().rateRefreshInterval, calendar: calendar, now: clock.now()).rate
                 }
                 try Task.checkCancellation()
                 let endingAt = account.providerKind == .pipio ? calendar.date(byAdding: .day, value: 1, to: day)! : day

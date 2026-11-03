@@ -25,7 +25,8 @@ public enum DashboardAggregator {
         targetCurrency: Currency,
         now: Date = Date(),
         expectedAccountIDs: Set<UUID>? = nil,
-        manualUSDToCNY: [UUID: Decimal] = [:]
+        manualUSDToCNY: [UUID: Decimal] = [:],
+        maximumAge: TimeInterval = 600
     ) -> DashboardTotal {
         aggregate(
             snapshots: snapshots,
@@ -33,6 +34,7 @@ public enum DashboardAggregator {
             now: now,
             expectedAccountIDs: expectedAccountIDs,
             manualUSDToCNY: manualUSDToCNY,
+            maximumAge: maximumAge,
             value: { $0.balance }
         )
     }
@@ -43,7 +45,9 @@ public enum DashboardAggregator {
         now: Date = Date(),
         expectedAccountIDs: Set<UUID>? = nil,
         calendar: Calendar = .current,
-        manualUSDToCNY: [UUID: Decimal] = [:]
+        manualUSDToCNY: [UUID: Decimal] = [:],
+        maximumAge: TimeInterval = 600,
+        providerKinds: [UUID: ProviderKind] = [:]
     ) -> DashboardTotal {
         aggregate(
             snapshots: snapshots,
@@ -51,7 +55,13 @@ public enum DashboardAggregator {
             now: now,
             expectedAccountIDs: expectedAccountIDs,
             manualUSDToCNY: manualUSDToCNY,
-            value: { $0.todaySpend(on: now, calendar: calendar) }
+            maximumAge: maximumAge,
+            value: { snapshot in
+                let dailyCalendar = providerKinds[snapshot.accountID].map {
+                    BudgetService.calendar(for: $0, fallback: calendar)
+                } ?? calendar
+                return snapshot.todaySpend(on: now, calendar: dailyCalendar)
+            }
         )
     }
 
@@ -61,6 +71,7 @@ public enum DashboardAggregator {
         now: Date,
         expectedAccountIDs: Set<UUID>?,
         manualUSDToCNY: [UUID: Decimal],
+        maximumAge: TimeInterval,
         value: (ProviderSnapshot) -> MoneyValue?
     ) -> DashboardTotal {
         let expected = expectedAccountIDs ?? Set(snapshots.map(\.accountID))
@@ -72,7 +83,8 @@ public enum DashboardAggregator {
         var excluded = expected.subtracting(snapshots.map(\.accountID))
 
         for snapshot in snapshots where expected.contains(snapshot.accountID) {
-            guard let money = value(snapshot),
+            guard snapshot.isCurrent(at: now, maximumAge: maximumAge),
+                  let money = value(snapshot), !money.amount.isNaN, money.amount >= 0,
                   let converted = convert(money, using: snapshot.rate, target: targetCurrency, now: now, manualUSDToCNY: manualUSDToCNY[snapshot.accountID]) else {
                 excluded.insert(snapshot.accountID)
                 continue

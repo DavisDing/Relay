@@ -50,6 +50,6 @@ public enum ConfigurationDiffService {
     private static func settingsFields(_ settings: RelaySettings) -> [String: String] {
         ["刷新间隔（秒）": String(settings.refreshIntervalSeconds), "菜单栏今日消费": settings.showTodayInMenuBar ? "显示" : "隐藏",
          "基础币种": settings.baseCurrency.rawValue, "默认低余额阈值": NSDecimalNumber(decimal: settings.defaultLowBalanceThreshold).stringValue,
-         "历史保留": settings.historyRetention.rawValue]
+         "历史保留": settings.historyRetention.rawValue, "额度/汇率刷新": settings.rateRefreshInterval.displayName]
     }
 }

@@ -29,6 +29,7 @@ final class DetailFailureRepository: LocalRepository {
     let base = InMemoryLocalRepository()
     var failAccountReads = false
     var failSettingsReads = false
+    var failSettingsWrites = false
     var failSnapshotID: UUID?
     var failHistoryID: UUID?
 
@@ -56,7 +57,10 @@ final class DetailFailureRepository: LocalRepository {
         if failSettingsReads { throw LocalRepositoryError.unavailable }
         return try base.settings()
     }
-    func updateSettings(_ settings: RelaySettings) throws { try base.updateSettings(settings) }
+    func updateSettings(_ settings: RelaySettings) throws {
+        if failSettingsWrites { throw LocalRepositoryError.unavailable }
+        try base.updateSettings(settings)
+    }
     func syncData() throws -> RelaySyncData { try base.syncData() }
     func mergeSyncData(_ data: RelaySyncData) throws { try base.mergeSyncData(data) }
 }

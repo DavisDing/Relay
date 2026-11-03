@@ -186,6 +186,12 @@ public struct AccountRate: Codable, Sendable, Equatable {
         guard let expiresAt else { return false }
         return expiresAt <= date
     }
+
+    func applying(_ interval: RateRefreshInterval, calendar: Calendar) -> AccountRate {
+        AccountRate(accountID: accountID, source: source, nativeCurrency: nativeCurrency,
+            quotaPerUnit: quotaPerUnit, amountMultiplier: amountMultiplier, conversionToCNY: conversionToCNY,
+            fetchedAt: fetchedAt, expiresAt: interval.nextRefresh(after: fetchedAt, calendar: calendar))
+    }
 }
 
 public struct ProviderCapabilities: OptionSet, Codable, Sendable {
@@ -446,6 +452,11 @@ public struct ProviderSnapshot: Codable, Sendable, Equatable {
 }
 
 public extension ProviderSnapshot {
+    func isCurrent(at date: Date, maximumAge: TimeInterval = 600) -> Bool {
+        freshness != .stale && fetchedAt <= date.addingTimeInterval(60)
+            && date.timeIntervalSince(fetchedAt) <= maximumAge
+    }
+
     func todaySpend(on date: Date, calendar: Calendar) -> MoneyValue? {
         calendar.isDate(fetchedAt, inSameDayAs: date) ? todaySpend : nil
     }
@@ -475,6 +486,15 @@ public enum RateRefreshInterval: String, Codable, CaseIterable, Sendable {
     case monthly
     case manual
 
+    public var displayName: String {
+        switch self {
+        case .daily: return "每天"
+        case .weekly: return "每周"
+        case .monthly: return "每月"
+        case .manual: return "仅手动"
+        }
+    }
+
     public func nextRefresh(after date: Date, calendar: Calendar = .current) -> Date? {
         switch self {
         case .daily: return calendar.date(byAdding: .day, value: 1, to: date)
@@ -497,6 +517,7 @@ public struct RelaySettings: Codable, Sendable, Equatable {
 
     public var schemaVersion: Int
     public var refreshIntervalSeconds: Int
+    public var rateRefreshInterval: RateRefreshInterval
     public var showTodayInMenuBar: Bool
     public var baseCurrency: Currency
     public var defaultLowBalanceThreshold: Decimal
@@ -506,6 +527,7 @@ public struct RelaySettings: Codable, Sendable, Equatable {
     public init(
         schemaVersion: Int = Self.currentSchemaVersion,
         refreshIntervalSeconds: Int = 300,
+        rateRefreshInterval: RateRefreshInterval = .weekly,
         showTodayInMenuBar: Bool = true,
         baseCurrency: Currency = .cny,
         defaultLowBalanceThreshold: Decimal = 20,
@@ -514,11 +536,29 @@ public struct RelaySettings: Codable, Sendable, Equatable {
     ) {
         self.schemaVersion = schemaVersion
         self.refreshIntervalSeconds = max(60, refreshIntervalSeconds)
+        self.rateRefreshInterval = rateRefreshInterval
         self.showTodayInMenuBar = showTodayInMenuBar
         self.baseCurrency = baseCurrency
         self.defaultLowBalanceThreshold = max(0, defaultLowBalanceThreshold)
         self.historyRetention = historyRetention
         self.iCloudFileSyncEnabled = iCloudFileSyncEnabled
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion, refreshIntervalSeconds, rateRefreshInterval, showTodayInMenuBar
+        case baseCurrency, defaultLowBalanceThreshold, historyRetention, iCloudFileSyncEnabled
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try c.decode(Int.self, forKey: .schemaVersion)
+        refreshIntervalSeconds = try c.decode(Int.self, forKey: .refreshIntervalSeconds)
+        rateRefreshInterval = try c.decodeIfPresent(RateRefreshInterval.self, forKey: .rateRefreshInterval) ?? .weekly
+        showTodayInMenuBar = try c.decode(Bool.self, forKey: .showTodayInMenuBar)
+        baseCurrency = try c.decode(Currency.self, forKey: .baseCurrency)
+        defaultLowBalanceThreshold = try c.decode(Decimal.self, forKey: .defaultLowBalanceThreshold)
+        historyRetention = try c.decode(HistoryRetention.self, forKey: .historyRetention)
+        iCloudFileSyncEnabled = try c.decode(Bool.self, forKey: .iCloudFileSyncEnabled)
     }
 }
 

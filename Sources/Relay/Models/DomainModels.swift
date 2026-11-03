@@ -157,11 +157,13 @@ public struct DailySpendPoint: Identifiable, Sendable {
     public let id: String
     public let dateString: String
     public let amount: Decimal
+    public let day: Date?
     
-    public init(id: String = UUID().uuidString, dateString: String, amount: Decimal) {
+    public init(id: String = UUID().uuidString, dateString: String, amount: Decimal, day: Date? = nil) {
         self.id = id
         self.dateString = dateString
         self.amount = amount
+        self.day = day
     }
 }
 

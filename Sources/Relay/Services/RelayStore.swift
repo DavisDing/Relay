@@ -192,7 +192,12 @@ public final class RelayStore: ObservableObject {
         activeAccountMutations += 1
         defer { activeAccountMutations -= 1 }
         globalErrorMessage = nil
-        let account = try await accountService.addAccount(draft)
+        let account: AccountConfiguration
+        do { account = try await accountService.addAccount(draft) }
+        catch {
+            if !(error is CancellationError) { globalErrorMessage = Self.userFacingMessage(for: error) }
+            throw error
+        }
         accountErrors.removeValue(forKey: account.id.uuidString)
         lastSyncedAt = Date()
         reloadFromRepository()
@@ -406,19 +411,25 @@ public final class RelayStore: ObservableObject {
             accountErrors.removeValue(forKey: accountID.uuidString)
             reloadFromRepository()
         } catch {
-            globalErrorMessage = Self.userFacingMessage(for: error)
+            if !(error is CancellationError) { globalErrorMessage = Self.userFacingMessage(for: error) }
             throw error
         }
     }
 
-    public func updateSettings(_ newSettings: RelaySettings) {
-        guard storageAvailability.isAvailable, !isApplyingTransferredData else { return }
+    @discardableResult
+    public func updateSettings(_ newSettings: RelaySettings) -> String? {
+        guard storageAvailability.isAvailable, !isApplyingTransferredData else {
+            return storageAvailability.message ?? "正在应用导入数据，请稍后保存。"
+        }
         do {
             try repository.updateSettings(newSettings)
             globalErrorMessage = nil
             reloadFromRepository()
+            return nil
         } catch {
-            globalErrorMessage = Self.userFacingMessage(for: error)
+            let message = Self.userFacingMessage(for: error)
+            globalErrorMessage = message
+            return message
         }
     }
 
@@ -607,6 +618,10 @@ public final class RelayStore: ObservableObject {
         detailConfigurations.first { $0.id == id }
     }
 
+    public func accountSnapshot(id: UUID) -> ProviderSnapshot? {
+        detailSnapshots.first { $0.accountID == id }
+    }
+
     @discardableResult
     public func updateAccountPreferences(id: UUID, monthlyBudget: MoneyValue?, groupName: String?, isPinned: Bool) -> String? {
         guard storageAvailability.isAvailable, !isApplyingTransferredData else { return storageAvailability.message ?? "正在应用导入数据，请稍后。" }
@@ -628,7 +643,8 @@ public final class RelayStore: ObservableObject {
     }
 
     public func dailyUsage(accountID: UUID, limit: Int? = 30) -> [DailyUsageRecord] {
-        (try? repository.dailyUsage(accountID: accountID, limit: limit)) ?? []
+        let records = detailHistory[accountID] ?? []
+        return limit.map { Array(records.suffix(max(0, $0))) } ?? records
     }
 
     /// Resolve by stable identity on every view update, including gateway children
@@ -644,14 +660,8 @@ public final class RelayStore: ObservableObject {
             account = makeSubAccountModel(child, parent: parent)
         }
         guard let snapshotID = account.parentAccountID ?? UUID(uuidString: account.id) else { return nil }
-        let points = (detailHistory[snapshotID] ?? []).suffix(7).compactMap { record -> DailySpendPoint? in
-            guard let spend = record.spend else { return nil }
-            return DailySpendPoint(
-                id: record.id,
-                dateString: record.day.formatted(.dateTime.month(.twoDigits).day(.twoDigits)),
-                amount: spend.amount
-            )
-        }
+        let points = DailyModelUsageService.trendPoints(accountID: snapshotID, provider: account.kind,
+            records: detailHistory[snapshotID] ?? [], currency: account.currency, now: presentationDate, calendar: calendar)
         let snapshot = detailSnapshots.first(where: { $0.accountID == snapshotID })
         let models = snapshot?.modelUsages.map { ModelUsageItem.items(from: $0, currency: account.currency) }
         return AccountDetailData(
@@ -719,6 +729,12 @@ public final class RelayStore: ObservableObject {
             guard let id = UUID(uuidString: account.id), let rate = account.manualUSDToCNY else { return nil }
             return (id, rate)
         })
+    }
+
+    private var maximumSnapshotAge: TimeInterval { Double(max(120, settings.refreshIntervalSeconds * 2)) }
+
+    private var providerKinds: [UUID: ProviderKind] {
+        Dictionary(uniqueKeysWithValues: detailConfigurations.map { ($0.id, $0.providerKind) })
     }
 
     /// Home projection: gateway configurations remain editable in settings, while
@@ -803,14 +819,15 @@ public final class RelayStore: ObservableObject {
         let ids = Set(accounts.filter { $0.kind == kind && $0.isEnabled && !$0.isHidden }.compactMap { UUID(uuidString: $0.id) })
         return DashboardAggregator.balanceTotal(snapshots: snapshots.filter { ids.contains($0.accountID) },
             targetCurrency: settings.baseCurrency, now: presentationDate, expectedAccountIDs: ids,
-            manualUSDToCNY: manualExchangeRates)
+            manualUSDToCNY: manualExchangeRates, maximumAge: maximumSnapshotAge)
     }
 
     public func todaySpendTotal(for kind: ProviderKind) -> DashboardTotal {
         let ids = Set(accounts.filter { $0.kind == kind && $0.isEnabled && !$0.isHidden }.compactMap { UUID(uuidString: $0.id) })
         return DashboardAggregator.todaySpendTotal(snapshots: snapshots.filter { ids.contains($0.accountID) },
             targetCurrency: settings.baseCurrency, now: presentationDate, expectedAccountIDs: ids,
-            calendar: calendar, manualUSDToCNY: manualExchangeRates)
+            calendar: calendar, manualUSDToCNY: manualExchangeRates,
+            maximumAge: maximumSnapshotAge, providerKinds: providerKinds)
     }
 
     /// Site-scoped totals share the dashboard's clock, FX and completeness rules.
@@ -819,22 +836,23 @@ public final class RelayStore: ObservableObject {
         let eligible = ids.intersection(expectedAccountIDs)
         return DashboardAggregator.balanceTotal(snapshots: snapshots.filter { eligible.contains($0.accountID) },
             targetCurrency: settings.baseCurrency, now: presentationDate, expectedAccountIDs: eligible,
-            manualUSDToCNY: manualExchangeRates)
+            manualUSDToCNY: manualExchangeRates, maximumAge: maximumSnapshotAge)
     }
 
     public func todaySpendTotal(forAccountIDs ids: Set<UUID>) -> DashboardTotal {
         let eligible = ids.intersection(expectedAccountIDs)
         return DashboardAggregator.todaySpendTotal(snapshots: snapshots.filter { eligible.contains($0.accountID) },
             targetCurrency: settings.baseCurrency, now: presentationDate, expectedAccountIDs: eligible,
-            calendar: calendar, manualUSDToCNY: manualExchangeRates)
+            calendar: calendar, manualUSDToCNY: manualExchangeRates,
+            maximumAge: maximumSnapshotAge, providerKinds: providerKinds)
     }
 
     public var balanceTotalCNY: DashboardTotal {
-        DashboardAggregator.balanceTotal(snapshots: snapshots, targetCurrency: settings.baseCurrency, now: presentationDate, expectedAccountIDs: expectedAccountIDs, manualUSDToCNY: manualExchangeRates)
+        DashboardAggregator.balanceTotal(snapshots: snapshots, targetCurrency: settings.baseCurrency, now: presentationDate, expectedAccountIDs: expectedAccountIDs, manualUSDToCNY: manualExchangeRates, maximumAge: maximumSnapshotAge)
     }
 
     public var todaySpendTotalCNY: DashboardTotal {
-        DashboardAggregator.todaySpendTotal(snapshots: snapshots, targetCurrency: settings.baseCurrency, now: presentationDate, expectedAccountIDs: expectedAccountIDs, calendar: calendar, manualUSDToCNY: manualExchangeRates)
+        DashboardAggregator.todaySpendTotal(snapshots: snapshots, targetCurrency: settings.baseCurrency, now: presentationDate, expectedAccountIDs: expectedAccountIDs, calendar: calendar, manualUSDToCNY: manualExchangeRates, maximumAge: maximumSnapshotAge, providerKinds: providerKinds)
     }
 
     /// Each provider's local day follows the same calendar as its detail page.
@@ -957,7 +975,7 @@ public final class RelayStore: ObservableObject {
             for configuration in configurations {
                 let snapshot = try repository.snapshot(accountID: configuration.id)
                 if let snapshot { loadedSnapshots.append(snapshot) }
-                loadedHistory[configuration.id] = try repository.dailyUsage(accountID: configuration.id, limit: 30)
+                loadedHistory[configuration.id] = try repository.dailyUsage(accountID: configuration.id, limit: nil)
                 loadedAccounts.append(makeAccountModel(
                     configuration: configuration,
                     snapshot: snapshot,
@@ -1144,7 +1162,9 @@ public final class RelayStore: ObservableObject {
         } else if let errorMessage {
             status = .error(errorMessage)
         } else if let snapshot {
-            if let threshold = configuration.lowBalanceThreshold,
+            if !snapshot.isCurrent(at: now, maximumAge: maximumSnapshotAge) {
+                status = .warning("使用上次成功数据")
+            } else if let threshold = configuration.lowBalanceThreshold,
                let balance = snapshot.balance?.amount, balance < threshold {
                 status = .warning("余额低于阈值")
             } else {
@@ -1159,6 +1179,8 @@ public final class RelayStore: ObservableObject {
             status = .warning("尚未同步")
         }
 
+        let dailyCalendar = BudgetService.calendar(for: configuration.providerKind, fallback: calendar)
+        let sameMonth = snapshot.map { dailyCalendar.isDate($0.fetchedAt, equalTo: now, toGranularity: .month) } ?? false
         return AccountModel(
             id: configuration.id.uuidString,
             name: configuration.displayName,
@@ -1166,8 +1188,8 @@ public final class RelayStore: ObservableObject {
             baseURL: configuration.siteOrigin.absoluteString,
             balance: snapshot?.balance?.amount,
             currency: snapshot?.balance?.currency ?? snapshot?.rate.nativeCurrency ?? .cny,
-            todaySpend: snapshot?.todaySpend(on: now, calendar: calendar)?.amount,
-            monthSpend: snapshot?.monthSpend?.amount,
+            todaySpend: snapshot?.todaySpend(on: now, calendar: dailyCalendar)?.amount,
+            monthSpend: sameMonth ? snapshot?.monthSpend?.amount : nil,
             status: status,
             lastUpdated: snapshot?.fetchedAt,
             isEnabled: configuration.isEnabled,

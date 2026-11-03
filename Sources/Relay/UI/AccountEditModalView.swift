@@ -4,6 +4,7 @@ import SwiftUI
 struct AccountEditContainerView: View {
     @ObservedObject var store: RelayStore
     let account: AccountModel
+    var closeHandler: RelayPageCloseHandler? = nil
     let onDismiss: () -> Void
     let onSave: (String, Decimal?, ProviderCredential?, ManualExchangeRateUpdate, String?, OptionalStringUpdate, AccountPreferencesUpdate) async throws -> Void
     var body: some View {
@@ -18,7 +19,7 @@ struct AccountEditContainerView: View {
             onCancelHistoryBackfill: {
                 guard let id else { return }
                 store.cancelHistoryBackfill(accountID: id)
-            }, onDismiss: onDismiss, onSave: onSave)
+            }, closeHandler: closeHandler, onDismiss: onDismiss, onSave: onSave)
     }
 }
 
@@ -48,6 +49,8 @@ public struct AccountEditModalView: View {
     @State private var clearDeepSeekUserToken = false
     @State private var isSaving = false
     @State private var errorMessage: String?
+    @State private var saveTask: Task<Void, Never>?
+    private let closeHandler: RelayPageCloseHandler?
 
     public init(
         account: AccountModel,
@@ -55,10 +58,12 @@ public struct AccountEditModalView: View {
         historyBackfillState: HistoryBackfillState? = nil,
         onHistoryBackfill: @escaping (Int) -> Void = { _ in },
         onCancelHistoryBackfill: @escaping () -> Void = {},
+        closeHandler: RelayPageCloseHandler? = nil,
         onDismiss: @escaping () -> Void = {},
         onSave: @escaping (String, Decimal?, ProviderCredential?, ManualExchangeRateUpdate, String?, OptionalStringUpdate, AccountPreferencesUpdate) async throws -> Void = { _, _, _, _, _, _, _ in }
     ) {
         self.account = account
+        self.closeHandler = closeHandler
         self.historyBackfillState = historyBackfillState
         self.onHistoryBackfill = onHistoryBackfill
         self.onCancelHistoryBackfill = onCancelHistoryBackfill
@@ -90,7 +95,7 @@ public struct AccountEditModalView: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            RelayPageHeader(title: "编辑账户", onBack: onDismiss)
+            RelayPageHeader(title: "编辑账户", onBack: cancelForm)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
@@ -162,7 +167,7 @@ public struct AccountEditModalView: View {
 
             RelayPageFooter {
                 Spacer(minLength: 4)
-                Button("取消", action: onDismiss)
+                Button("取消", action: cancelForm)
                     .buttonStyle(RelayTextButtonStyle())
                     .keyboardShortcut(.cancelAction)
                 Button {
@@ -177,6 +182,11 @@ public struct AccountEditModalView: View {
         .frame(width: RelayVisualStyle.formPanelWidth)
         .frame(height: RelayVisualStyle.formPanelHeight)
         .relayPanelSurface(cornerRadius: RelayVisualStyle.panelCornerRadius)
+        .onAppear { closeHandler?.prepareToClose = { saveTask?.cancel(); return true } }
+        .onDisappear {
+            saveTask?.cancel()
+            closeHandler?.prepareToClose = nil
+        }
     }
 
     private var hasUnsavedHistoryConfiguration: Bool {
@@ -297,15 +307,20 @@ public struct AccountEditModalView: View {
 
         isSaving = true
         errorMessage = nil
-        Task { @MainActor in
+        saveTask?.cancel()
+        saveTask = Task { @MainActor in
             do {
                 try await onSave(name, account.kind == .workbuddy2api ? nil : parsedThreshold, credential, rateUpdate,
                     account.kind == .workbuddy2api && gatewayURL != account.baseURL ? gatewayURL : nil,
                     tokenUpdate, preferences)
+                guard !Task.isCancelled else { return }
                 isSaving = false
+                saveTask = nil
                 onDismiss()
             } catch {
+                if Task.isCancelled { return }
                 isSaving = false
+                saveTask = nil
                 if let localized = error as? LocalizedError, let message = localized.errorDescription {
                     errorMessage = message
                 } else {
@@ -313,5 +328,11 @@ public struct AccountEditModalView: View {
                 }
             }
         }
+    }
+
+    private func cancelForm() {
+        saveTask?.cancel()
+        saveTask = nil
+        onDismiss()
     }
 }

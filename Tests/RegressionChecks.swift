@@ -195,6 +195,7 @@ struct RegressionChecks {
         try await StrengtheningChecks.run()
         try await SyncSafetyChecks.run()
         try await AccountFormPreferencesChecks.run()
+        try await UnfinishedFeatureChecks.run()
         try await TransferIntegrationChecks.run()
         try FeaturePersistenceChecks.run()
         try await BackupMigrationChecks.run()

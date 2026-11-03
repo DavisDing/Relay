@@ -26,7 +26,8 @@ struct AccountDetailContainerView: View {
                 health: historyID.map { store.health(for: $0) },
                 historyRecords: historyID.map { store.dailyUsage(accountID: $0, limit: nil) },
                 monthlyBudget: configuration?.monthlyBudget,
-                budgetSnapshot: historyID.flatMap { id in store.snapshots.first { $0.accountID == id } },
+                budgetSnapshot: historyID.flatMap { store.accountSnapshot(id: $0) },
+                presentationDate: store.presentationDate,
                 onClose: onClose,
                 onSubAccountAction: onSubAccountAction
             )
@@ -59,11 +60,13 @@ public struct AccountDetailView: View {
     public let historyRecords: [DailyUsageRecord]?
     public let monthlyBudget: MoneyValue?
     public let budgetSnapshot: ProviderSnapshot?
+    public let presentationDate: Date
     public var onClose: () -> Void
     public var onSubAccountAction: (ProviderSubAccountAction, UUID, String) async throws -> Void
     @State private var confirmingAction: ProviderSubAccountAction?
     @State private var actionError: String?
     @State private var isActing = false
+    @State private var selectedTrendDay: Date?
 
     public init(
         account: AccountModel,
@@ -77,6 +80,7 @@ public struct AccountDetailView: View {
         historyRecords: [DailyUsageRecord]? = nil,
         monthlyBudget: MoneyValue? = nil,
         budgetSnapshot: ProviderSnapshot? = nil,
+        presentationDate: Date = Date(),
         onClose: @escaping () -> Void = {},
         onSubAccountAction: @escaping (ProviderSubAccountAction, UUID, String) async throws -> Void = { _, _, _ in }
     ) {
@@ -91,6 +95,7 @@ public struct AccountDetailView: View {
         self.historyRecords = historyRecords
         self.monthlyBudget = monthlyBudget
         self.budgetSnapshot = budgetSnapshot
+        self.presentationDate = presentationDate
         self.onClose = onClose
         self.onSubAccountAction = onSubAccountAction
     }
@@ -113,6 +118,7 @@ public struct AccountDetailView: View {
                         trendSection
                     }
 
+                    usageMetrics
                     if account.kind == .deepseek, deepSeekUsageReport?.coverage == .unsupported {
                         DeepSeekUsageSection(report: deepSeekUsageReport)
                     }
@@ -121,7 +127,7 @@ public struct AccountDetailView: View {
                         processSince: modelStatsSince,
                         unavailableMessage: account.kind == .workbuddy2api
                             ? "暂未获取网关累计模型统计，请刷新账户。"
-                            : historyCalendar.isDateInToday(selectedModelDate)
+                            : historyCalendar.isDate(selectedModelDate, inSameDayAs: presentationDate)
                                 ? "当天暂无可用模型明细，请刷新账户。"
                                 : "该日期暂无可用模型明细，可在编辑账户中回填历史。")
                     if account.kind != .workbuddy2api, monthlyBudget != nil, let id = UUID(uuidString: account.id) {
@@ -142,6 +148,11 @@ public struct AccountDetailView: View {
         }
         .frame(width: RelayVisualStyle.detailPanelWidth, height: RelayVisualStyle.detailPanelHeight)
         .relayPanelSurface(cornerRadius: RelayVisualStyle.panelCornerRadius)
+        .onChange(of: displayedHistoryPoints.map(\.id)) { _, _ in
+            if let selectedTrendDay, !displayedHistoryPoints.contains(where: { $0.day == selectedTrendDay }) {
+                self.selectedTrendDay = nil
+            }
+        }
         .alert(confirmingAction == .enable ? "确认启用内部账号？" : "确认手动停用内部账号？",
                isPresented: Binding(get: { confirmingAction != nil }, set: { if !$0 { confirmingAction = nil } })) {
             Button("取消", role: .cancel) { confirmingAction = nil }
@@ -246,23 +257,79 @@ public struct AccountDetailView: View {
     }
 
     private var metrics: some View {
-        HStack(alignment: .top, spacing: 16) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("可用余额").font(.system(size: 10)).foregroundStyle(.secondary)
-                Text(account.balance.map { RelayNumberFormatter.money($0, currency: account.currency) } ?? "—")
-                    .font(.system(size: 28, weight: .semibold)).tracking(-1)
-                    .monospacedDigit().lineLimit(1).minimumScaleFactor(0.65)
-                Text(account.currency.rawValue + " · 当前快照")
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text("今日消费").font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+                HStack(alignment: .center, spacing: 8) {
+                    Text(account.todaySpend.map { RelayNumberFormatter.money($0, currency: account.currency) } ?? "—")
+                        .font(.system(size: 28, weight: .semibold)).tracking(-0.8)
+                        .monospacedDigit().lineLimit(1).minimumScaleFactor(0.6)
+                    Spacer(minLength: 0)
+                    if let change = dayOverDayChange {
+                        VStack(alignment: .trailing, spacing: 3) {
+                            Image(systemName: change.delta >= 0 ? "arrow.up.right" : "arrow.down.right")
+                                .font(.system(size: 10, weight: .semibold))
+                            Text(RelayNumberFormatter.percent(abs(change.delta / change.previous)))
+                                .font(.system(size: 11, weight: .semibold)).monospacedDigit()
+                        }
+                        .foregroundStyle(change.delta > 0 ? Color.red : change.delta < 0 ? Color.green : Color.secondary)
+                        .fixedSize()
+                        .help("较昨日消费变化")
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("较昨日消费\(change.delta > 0 ? "增加" : change.delta < 0 ? "减少" : "持平") \(RelayNumberFormatter.percent(abs(change.delta / change.previous)))")
+                    }
+                }
+                Text(dayOverDayChange == nil ? "供应商当日口径" : "较昨日 · 供应商当日口径")
                     .font(.system(size: 10)).foregroundStyle(.secondary)
-            }.frame(maxWidth: .infinity, alignment: .leading)
-            MetricCard(title: "今日消费",
-                value: account.todaySpend.map { RelayNumberFormatter.money($0, currency: account.currency) } ?? "—",
-                subTitle: "供应商当日口径")
-            MetricCard(title: "本月消费",
-                value: account.monthSpend.map { RelayNumberFormatter.money($0, currency: account.currency) } ?? "—",
-                subTitle: monthlyBudget.map { "预算 " + RelayNumberFormatter.money($0.amount, currency: $0.currency) } ?? "供应商账单周期")
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            .background(Color.accentColor.opacity(0.055), in: RoundedRectangle(cornerRadius: 12))
+
+            HStack(alignment: .top, spacing: 12) {
+                MetricCard(title: "可用余额",
+                    value: account.balance.map { RelayNumberFormatter.money($0, currency: account.currency) } ?? "—",
+                    subTitle: account.currency.rawValue + " · 当前快照")
+                Rectangle().fill(Color.secondary.opacity(0.18)).frame(width: 0.5, height: 42)
+                MetricCard(title: "本月消费",
+                    value: account.monthSpend.map { RelayNumberFormatter.money($0, currency: account.currency) } ?? "—",
+                    subTitle: monthlyBudget.map { "预算 " + RelayNumberFormatter.money($0.amount, currency: $0.currency) } ?? "供应商账单周期",
+                    budgetUsage: budgetUsage, budgetStatusText: budgetStatusText)
+            }
         }
-        .padding(.top, 8)
+        .padding(.top, 4)
+    }
+
+    private var dayOverDayChange: (previous: Decimal, delta: Decimal)? {
+        guard let today = account.todaySpend, !today.isNaN,
+              let accountID = historyAccountID,
+              let yesterdayDate = historyCalendar.date(byAdding: .day, value: -1,
+                  to: historyCalendar.startOfDay(for: presentationDate)),
+              let yesterday = historyRecords?.first(where: {
+                  $0.accountID == accountID && historyCalendar.isDate($0.day, inSameDayAs: yesterdayDate)
+              })?.spend,
+              yesterday.currency == account.currency, !today.isNaN, !yesterday.amount.isNaN,
+              yesterday.amount > 0 else { return nil }
+        return (yesterday.amount, today - yesterday.amount)
+    }
+
+    private var budgetUsage: Decimal? {
+        guard let budget = monthlyBudget, let spend = account.monthSpend,
+              budget.currency == account.currency,
+              !budget.amount.isNaN, budget.amount > 0,
+              !spend.isNaN, spend >= 0 else { return nil }
+        return spend / budget.amount
+    }
+
+    private var budgetStatusText: String? {
+        guard let budget = monthlyBudget, let spend = account.monthSpend,
+              budget.currency == account.currency, budget.amount > 0,
+              !budget.amount.isNaN, !spend.isNaN else { return nil }
+        let difference = budget.amount - spend
+        if difference >= 0 {
+            return "已用 \(RelayNumberFormatter.percent(budgetUsage ?? .zero)) · 剩余 \(RelayNumberFormatter.money(difference, currency: budget.currency))"
+        }
+        return "已用 \(RelayNumberFormatter.percent(budgetUsage ?? .zero)) · 超出 \(RelayNumberFormatter.money(-difference, currency: budget.currency))"
     }
 
     private var trendSection: some View {
@@ -288,8 +355,9 @@ public struct AccountDetailView: View {
                 .background(.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
             } else {
                 AdaptiveLineChart(dataPoints: displayedHistoryPoints,
-                    unit: account.kind == .workbuddy2api ? "积分" : account.currency.symbol,
-                    isSelectable: false)
+                    unit: account.kind == .workbuddy2api ? "积分" : account.currency.symbol) { point in
+                        selectedTrendDay = point?.day
+                    }
                     .frame(height: 116)
                     .padding(.top, 4)
             }
@@ -310,25 +378,15 @@ public struct AccountDetailView: View {
 
     private var displayedHistoryPoints: [DailySpendPoint] {
         guard let historyRecords, let id = historyAccountID else { return Array(spendPoints.suffix(7)) }
-        let calendar = historyCalendar
-        let today = calendar.startOfDay(for: Date())
-        guard let firstDay = calendar.date(byAdding: .day, value: -6, to: today),
-              let afterToday = calendar.date(byAdding: .day, value: 1, to: today) else { return [] }
-        let formatter = DateFormatter(); formatter.calendar = calendar
-        formatter.timeZone = calendar.timeZone; formatter.dateFormat = "MM/dd"
-        return historyRecords.filter {
-            $0.accountID == id && $0.day >= firstDay && $0.day < afterToday && $0.spend?.currency == account.currency
-        }.sorted { $0.day < $1.day }.compactMap { record in
-            guard let spend = record.spend else { return nil }
-            return DailySpendPoint(id: record.id, dateString: formatter.string(from: record.day), amount: spend.amount)
-        }
+        return DailyModelUsageService.trendPoints(accountID: id, provider: account.kind, records: historyRecords,
+            currency: account.currency, now: presentationDate, calendar: historyCalendar)
     }
 
     @ViewBuilder
     private var historyCoverageControls: some View {
         if let historyRecords, let id = historyAccountID {
             let coverage = HistoryCoverage.calculate(records: historyRecords, accountID: id,
-                days: 7, calendar: historyCalendar, currency: account.currency)
+                days: 7, now: presentationDate, calendar: historyCalendar, currency: account.currency)
             if !coverage.isComplete {
                 Text("有效金额 \(coverage.knownDays)/7 天 · 缺失日期为未知")
                     .font(.system(size: 10)).foregroundStyle(.secondary)
@@ -336,11 +394,11 @@ public struct AccountDetailView: View {
         }
     }
 
-    private var selectedModelDate: Date { historyCalendar.startOfDay(for: Date()) }
+    private var selectedModelDate: Date { selectedTrendDay ?? historyCalendar.startOfDay(for: presentationDate) }
 
     private var selectedModelDateLabel: String {
         if account.kind == .workbuddy2api { return "进程累计" }
-        if historyCalendar.isDateInToday(selectedModelDate) { return "今日" }
+        if historyCalendar.isDate(selectedModelDate, inSameDayAs: presentationDate) { return "今日" }
         let formatter = DateFormatter()
         formatter.calendar = historyCalendar; formatter.timeZone = historyCalendar.timeZone
         formatter.dateFormat = "MM/dd"
@@ -354,6 +412,38 @@ public struct AccountDetailView: View {
             day: selectedModelDate, records: historyRecords ?? [], snapshot: budgetSnapshot,
             calendar: historyCalendar)
         return models.map { ModelUsageItem.items(from: $0, currency: account.currency) }
+    }
+
+    private var usageMetrics: some View {
+        let snapshot = budgetSnapshot
+        let requestCount = snapshot?.requestCount.flatMap { $0 >= 0 ? $0 : nil }
+        let sameMonth = snapshot.map { historyCalendar.isDate($0.fetchedAt, equalTo: presentationDate, toGranularity: .month) } ?? false
+        let requests = account.kind == .deepseek && !sameMonth ? nil : requestCount
+        let models = historyAccountID.flatMap { id in
+            DailyModelUsageService.models(accountID: id, provider: account.kind, day: selectedModelDate,
+                records: historyRecords ?? [], snapshot: snapshot, calendar: historyCalendar)
+        }
+        let tokens = account.kind == .workbuddy2api
+            ? (snapshot?.modelUsages == nil ? nil : snapshot?.workBuddyStats?.total.totalTokens)
+            : DailyModelUsageService.tokenCount(models)
+        return VStack(alignment: .leading, spacing: 5) {
+            HStack {
+                Text(account.kind == .deepseek ? "本月请求" : account.kind == .workbuddy2api ? "进程累计请求" : "账户累计请求")
+                Spacer()
+                Text(requests.map { $0.formatted() } ?? "—").monospacedDigit()
+            }
+            HStack {
+                Text(account.kind == .workbuddy2api ? "进程累计 Token" : selectedModelDateLabel + "已获取模型 Token")
+                Spacer()
+                Text(tokens.flatMap { $0 >= 0 ? RelayNumberFormatter.tokens($0) : nil } ?? "—").monospacedDigit()
+                    .help(tokens.map { $0.formatted() } ?? "Token 用量未知")
+            }
+            if account.kind == .workbuddy2api {
+                Text("网关全部账号统计，不分摊至子账户。")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+            }
+        }
+        .font(.system(size: 11)).foregroundStyle(.secondary)
     }
 
     private var accountWebsiteURL: URL? {
@@ -416,14 +506,27 @@ private struct MetricCard: View {
     let title: String
     let value: String
     let subTitle: String
+    var budgetUsage: Decimal? = nil
+    var budgetStatusText: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(title).font(.system(size: 10)).foregroundStyle(.secondary)
-            Text(value).font(.system(size: 20, weight: .semibold)).tracking(-0.5)
-                .monospacedDigit().lineLimit(1).minimumScaleFactor(0.65)
-            Text(subTitle).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(2)
+            Text(title).font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
+            Text(value).font(.system(size: 15, weight: .semibold)).tracking(-0.3)
+                .monospacedDigit().lineLimit(1).minimumScaleFactor(0.6)
+            if let budgetUsage {
+                ProgressView(value: min(1, max(0, NSDecimalNumber(decimal: budgetUsage).doubleValue)))
+                    .controlSize(.small)
+                    .tint(budgetUsage >= 1 ? .orange : .accentColor)
+                    .accessibilityLabel("月预算使用进度")
+                if let budget = budgetStatusText {
+                    Text(budget).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.7)
+                }
+            } else {
+                Text(subTitle).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.75)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 2)
     }
+
 }

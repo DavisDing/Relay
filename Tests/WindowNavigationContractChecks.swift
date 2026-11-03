@@ -168,6 +168,37 @@ struct WindowNavigationContractChecks {
             reopenedOwner?.close()
             try await eventually("controller close of \(name) returns home") { try currentWindow() == nil && popover.isShown }
         }
+        // All close paths must allow the settings page to retain its draft on
+        // a storage failure, including AppKit controller close and replacement.
+        settings()
+        try await settle()
+        guard let failedSettingsWindow = try currentWindow() else {
+            throw NavigationCheckFailure(message: "Missing settings failure fixture")
+        }
+        repository.failSettingsWrites = true
+        let beforeSettingsFailure = store.settings
+        failedSettingsWindow.performClose(nil)
+        try await settle()
+        try check(try currentWindow() === failedSettingsWindow && failedSettingsWindow.isVisible,
+                  "Failed settings save blocks native close")
+        try check(!popover.isShown && store.settings == beforeSettingsFailure, "Settings failure retains the current page and saved values")
+        try check(accessibleText(in: failedSettingsWindow.contentView!).contains(where: { $0.contains("未保存更改") }),
+                  "Settings save error is visible on the page")
+        let failedOwner: NSWindowController? = try field("auxiliaryWindowController", in: controller)
+        failedOwner?.close()
+        try check(try currentWindow() === failedSettingsWindow && failedSettingsWindow.isVisible,
+                  "Failed settings save blocks Done/controller close")
+        edit(account)
+        try check(try currentWindow() === failedSettingsWindow, "Failed settings save blocks replacing its page")
+        controller.close()
+        try check(try currentWindow() === failedSettingsWindow, "Hiding failed settings retains its draft")
+        controller.toggle()
+        try await settle()
+        repository.failSettingsWrites = false
+        failedSettingsWindow.close()
+        try await eventually("retry saves settings and returns home") { try currentWindow() == nil && popover.isShown }
+        print("PASSED: settings save failure retains its page for native/controller close and page replacement; retry recovers")
+
         // Verify SwiftUI observes changes while the real detail window stays open.
         // This exercises the hosted container, not only the store projection.
         detail(account)

@@ -3,6 +3,7 @@ import SwiftUI
 @MainActor
 struct SettingsDataPage: View {
     @Binding var refreshIntervalMinutes: String
+    @Binding var rateRefreshInterval: RateRefreshInterval
     @Binding var historyRetention: HistoryRetention
     @AppStorage("budgetNotificationsEnabled") private var budgetNotificationsEnabled = false
 
@@ -21,6 +22,12 @@ struct SettingsDataPage: View {
                     Text("分钟").foregroundStyle(.secondary)
                 }
                 SettingsHint("刷新失败时保留上一份可用快照，不用 0 覆盖未知数据。")
+                Picker("额度/汇率刷新", selection: $rateRefreshInterval) {
+                    ForEach(RateRefreshInterval.allCases, id: \.self) { interval in
+                        Text(interval.displayName).tag(interval)
+                    }
+                }
+                SettingsHint("失败保留上次值并标记过期；仅手动时，使用首页刷新按钮更新。")
             }
 
             Divider().opacity(0.4)

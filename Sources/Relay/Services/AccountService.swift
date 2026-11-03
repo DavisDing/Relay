@@ -74,7 +74,9 @@ public final class AccountService {
         let adapter = try adapters.adapter(for: account.providerKind)
 
         // Validate against the provider before persisting any local state.
+        let interval = try repository.settings().rateRefreshInterval
         let rate = try await adapter.fetchAccountRate(for: account, credential: draft.credential)
+            .applying(interval, calendar: calendar)
         try await adapter.validateAccount(account, credential: draft.credential)
         let snapshot = try await adapter.fetchSnapshot(
             for: account,
@@ -242,21 +244,26 @@ public final class AccountService {
         }
 
         let credentialChanged = effectiveCredential != nil && effectiveCredential != previousCredential
+        var rateToSeed: AccountRate?
         if credentialNeedsRead || replacementBaseURL != nil {
             guard let credential = effectiveCredential else { throw CredentialStoreError.notFound }
             let adapter = try adapters.adapter(for: account.providerKind)
+            let interval = try repository.settings().rateRefreshInterval
             let rate = try await adapter.fetchAccountRate(for: account, credential: credential)
+                .applying(interval, calendar: calendar)
             try await adapter.validateAccount(account, credential: credential)
+            try Task.checkCancellation()
             if credentialChanged {
                 try await credentialStore.save(credential, reference: account.credentialReference)
             }
-            if rate.accountID == account.id { await rateService.seed(rate) }
+            if rate.accountID == account.id { rateToSeed = rate }
         }
 
         account.displayName = name
         account.lowBalanceThreshold = account.providerKind == .workbuddy2api ? nil : lowBalanceThreshold
         account.updatedAt = nextUpdateDate(after: account.updatedAt)
         do {
+            try Task.checkCancellation()
             try repository.upsertAccount(account)
         } catch {
             if credentialChanged {
@@ -272,6 +279,7 @@ public final class AccountService {
             }
             throw error
         }
+        if let rateToSeed { await rateService.seed(rateToSeed) }
     }
 
     public func performSubAccountAction(parentID: UUID, externalID: String, action: ProviderSubAccountAction) async throws {

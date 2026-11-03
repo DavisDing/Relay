@@ -10,8 +10,14 @@ import SwiftUI
 /// applications: the transient popover can close or lose key-window status as
 /// soon as a sheet is interacted with.
 private final class RelayPanelWindow: NSWindow {
+    var prepareToClose: (() -> Bool)?
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+
+    override func close() {
+        guard prepareToClose?() ?? true else { return }
+        super.close()
+    }
 }
 
 private struct RelayAuxiliaryPanel<Content: View>: View {
@@ -46,6 +52,7 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate, NSPopover
     private var resignActiveObserver: NSObjectProtocol?
     private var appearanceObserver: NSObjectProtocol?
     private var auxiliaryWindowController: NSWindowController?
+    private var auxiliaryCloseHandler: RelayPageCloseHandler?
     private let onApplyGlobalShortcut: ((GlobalShortcutConfiguration) -> GlobalShortcutRegistrationOutcome)?
     private let updateState: RelayUpdateState
 
@@ -355,8 +362,10 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate, NSPopover
     private func presentAuxiliaryWindow<Content: View>(
         title: String,
         size: NSSize,
+        closeHandler: RelayPageCloseHandler? = nil,
         @ViewBuilder content: () -> Content
     ) {
+        guard auxiliaryCloseHandler?.requestClose() ?? true else { return }
         // Capture the dashboard content frame before dismissing its popover.
         let anchor: NSRect? = popover.contentViewController.map { controller in
             let view = controller.view
@@ -367,8 +376,11 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate, NSPopover
         // Replacing a page is not user navigation back to the dashboard.
         // Detach before closing so the old window cannot schedule a return home.
         auxiliaryWindowController?.window?.delegate = nil
+        (auxiliaryWindowController?.window as? RelayPanelWindow)?.prepareToClose = nil
+        auxiliaryCloseHandler?.prepareToClose = nil
         auxiliaryWindowController?.close()
         auxiliaryWindowController = nil
+        auxiliaryCloseHandler = closeHandler
 
         let window = RelayPanelWindow(
             contentRect: NSRect(origin: .zero, size: size),
@@ -382,6 +394,7 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate, NSPopover
         window.isOpaque = false
         window.backgroundColor = .clear
         window.hasShadow = true
+        window.prepareToClose = { [weak closeHandler] in closeHandler?.requestClose() ?? true }
         window.contentViewController = NSHostingController(
             rootView: RelayAuxiliaryPanel(size: size) {
                 AnyView(content())
@@ -417,8 +430,10 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate, NSPopover
     }
 
     private func showAddAccountWindow() {
-        presentAuxiliaryWindow(title: "添加服务商账号", size: NSSize(width: RelayVisualStyle.formPanelWidth, height: RelayVisualStyle.formPanelHeight)) {
+        let closeHandler = RelayPageCloseHandler()
+        presentAuxiliaryWindow(title: "添加服务商账号", size: NSSize(width: RelayVisualStyle.formPanelWidth, height: RelayVisualStyle.formPanelHeight), closeHandler: closeHandler) {
             AccountAddModalView(
+                closeHandler: closeHandler,
                 onDismiss: { [weak self] in self?.closeAuxiliaryWindow() },
                 onSave: { [weak self] draft in
                     guard let self else { return }
@@ -439,7 +454,8 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate, NSPopover
     }
 
     private func showSettingsWindow(manageAccounts: Bool = false) {
-        presentAuxiliaryWindow(title: "Relay 设置", size: NSSize(width: RelayVisualStyle.settingsPanelWidth, height: RelayVisualStyle.settingsPanelHeight)) {
+        let closeHandler = RelayPageCloseHandler()
+        presentAuxiliaryWindow(title: "Relay 设置", size: NSSize(width: RelayVisualStyle.settingsPanelWidth, height: RelayVisualStyle.settingsPanelHeight), closeHandler: closeHandler) {
             SettingsWindowView(
                 initialSettings: self.store.settings,
                 initialGlobalShortcutConfiguration: GlobalShortcutConfigurationStore.load(),
@@ -454,8 +470,12 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate, NSPopover
                 },
                 updateState: self.updateState,
                 store: self.store,
+                closeHandler: closeHandler,
                 onClose: { [weak self] in self?.closeAuxiliaryWindow() },
-                onSave: { [weak self] settings in self?.store.updateSettings(settings) },
+                onSave: { [weak self] settings in
+                    guard let self else { return "Relay 已关闭，设置未保存。" }
+                    return self.store.updateSettings(settings)
+                },
                 initiallyManageAccounts: manageAccounts
             )
         }
@@ -476,10 +496,12 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate, NSPopover
     }
 
     private func showAccountEditWindow(account: AccountModel) {
-        presentAuxiliaryWindow(title: "编辑账号", size: NSSize(width: RelayVisualStyle.formPanelWidth, height: RelayVisualStyle.formPanelHeight)) {
+        let closeHandler = RelayPageCloseHandler()
+        presentAuxiliaryWindow(title: "编辑账号", size: NSSize(width: RelayVisualStyle.formPanelWidth, height: RelayVisualStyle.formPanelHeight), closeHandler: closeHandler) {
             AccountEditContainerView(
                 store: self.store,
                 account: account,
+                closeHandler: closeHandler,
                 onDismiss: { [weak self] in self?.closeAuxiliaryWindow() },
                 onSave: { [weak self] name, threshold, credential, rateUpdate, baseURL, tokenUpdate, preferences in
                     guard let self, let id = UUID(uuidString: account.id) else { return }
@@ -502,6 +524,8 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate, NSPopover
         guard let window = notification.object as? NSWindow,
               window === auxiliaryWindowController?.window else { return }
         auxiliaryWindowController = nil
+        auxiliaryCloseHandler?.prepareToClose = nil
+        auxiliaryCloseHandler = nil
         let request = UUID()
         pendingDashboardReturn = request
         // Wait for AppKit to finish closing any auxiliary page, not just details.

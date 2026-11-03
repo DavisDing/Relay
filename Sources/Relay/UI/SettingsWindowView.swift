@@ -10,6 +10,8 @@ public struct SettingsWindowView: View {
     @State private var baseCurrency: Currency
     @State private var lowBalanceThreshold: String
     @State private var refreshIntervalMinutes: String
+    @State private var rateRefreshInterval: RateRefreshInterval
+    @State private var settingsSaveError: String?
     @State private var historyRetention: HistoryRetention
     @State private var enableICloudFileSync: Bool
     @State private var iCloudDirectoryURL: URL?
@@ -36,9 +38,10 @@ public struct SettingsWindowView: View {
     private let initialGlobalShortcutConfiguration: GlobalShortcutConfiguration
     private let onApplyGlobalShortcut: ((GlobalShortcutConfiguration) -> GlobalShortcutRegistrationOutcome)?
     private let onEditAccount: ((AccountModel) -> Void)?
+    private let closeHandler: RelayPageCloseHandler?
 
     public var onClose: () -> Void
-    public var onSave: (RelaySettings) -> Void
+    public var onSave: (RelaySettings) -> String?
 
     @MainActor
     public init(
@@ -51,8 +54,9 @@ public struct SettingsWindowView: View {
         onEditAccount: ((AccountModel) -> Void)? = nil,
         updateState: RelayUpdateState = RelayUpdateState(),
         store: RelayStore,
+        closeHandler: RelayPageCloseHandler? = nil,
         onClose: @escaping () -> Void = {},
-        onSave: @escaping (RelaySettings) -> Void = { _ in },
+        onSave: @escaping (RelaySettings) -> String? = { _ in nil },
         initiallyManageAccounts: Bool = false
     ) {
         self.schemaVersion = initialSettings.schemaVersion
@@ -63,6 +67,7 @@ public struct SettingsWindowView: View {
         self.onResolveSyncConflict = onResolveSyncConflict
         self.onEditAccount = onEditAccount
         self.store = store
+        self.closeHandler = closeHandler
         self.storageWasAvailableOnOpen = store.storageAvailability.isAvailable
         self._updateState = ObservedObject(wrappedValue: updateState)
         self.onClose = onClose
@@ -73,15 +78,11 @@ public struct SettingsWindowView: View {
         _lowBalanceThreshold = State(initialValue: NSDecimalNumber(decimal: initialSettings.defaultLowBalanceThreshold).stringValue)
         let initialMinutes = max(1, initialSettings.refreshIntervalSeconds / 60)
         _refreshIntervalMinutes = State(initialValue: String(initialMinutes))
+        _rateRefreshInterval = State(initialValue: initialSettings.rateRefreshInterval)
         _historyRetention = State(initialValue: initialSettings.historyRetention)
         _enableICloudFileSync = State(initialValue: initialSettings.iCloudFileSyncEnabled)
         _iCloudDirectoryURL = State(initialValue: FileSyncService.configuredDirectoryURL())
         _launchAtLoginEnabled = State(initialValue: LaunchAtLoginService.isEnabled)
-    }
-
-    private var normalizedRefreshIntervalMinutes: Int {
-        let value = Int(refreshIntervalMinutes.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 5
-        return max(1, value)
     }
 
     private var preferredColorScheme: ColorScheme? {
@@ -90,7 +91,7 @@ public struct SettingsWindowView: View {
 
     public var body: some View {
         VStack(spacing: 0) {
-            RelayPageHeader(title: "设置", onBack: onClose)
+            RelayPageHeader(title: "设置", onBack: closeSettings)
 
             SettingsTabBar(selectedTab: $selectedTab)
 
@@ -101,13 +102,17 @@ public struct SettingsWindowView: View {
                 .padding(.horizontal, 12)
                 .padding(.top, 8)
 
+            if let settingsSaveError {
+                Text(settingsSaveError).font(.system(size: 11)).foregroundStyle(.red)
+                    .padding(.horizontal, 14).padding(.vertical, 4)
+            }
             RelayPageFooter {
                 Text(store.storageAvailability.isAvailable && storageWasAvailableOnOpen ? "关闭时自动保存" : "本地数据未载入，设置不保存")
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer()
-                Button("完成", action: onClose)
+                Button("完成", action: closeSettings)
                     .buttonStyle(RelayTextButtonStyle())
             }
         }
@@ -134,22 +139,42 @@ public struct SettingsWindowView: View {
             baseCurrency = settings.baseCurrency
             lowBalanceThreshold = NSDecimalNumber(decimal: settings.defaultLowBalanceThreshold).stringValue
             refreshIntervalMinutes = String(max(1, settings.refreshIntervalSeconds / 60))
+            rateRefreshInterval = settings.rateRefreshInterval
             historyRetention = settings.historyRetention
             enableICloudFileSync = settings.iCloudFileSyncEnabled
         }
-        .onDisappear {
-            guard store.storageAvailability.isAvailable && storageWasAvailableOnOpen else { return }
-            let parsedThreshold = Decimal(string: lowBalanceThreshold, locale: Locale(identifier: "en_US_POSIX")) ?? 20
-            onSave(RelaySettings(
+        .onAppear { closeHandler?.prepareToClose = saveSettings }
+        .onDisappear { closeHandler?.prepareToClose = nil }
+    }
+
+    private func closeSettings() {
+        if closeHandler != nil { onClose() }
+        else if saveSettings() { onClose() }
+    }
+
+    private func saveSettings() -> Bool {
+        guard storageWasAvailableOnOpen else { return true }
+        guard let minutes = Int(refreshIntervalMinutes.trimmingCharacters(in: .whitespacesAndNewlines)),
+              (1...1440).contains(minutes) else {
+            settingsSaveError = "自动刷新间隔须为 1～1440 分钟。"
+            return false
+        }
+        guard let parsedThreshold = Decimal(string: lowBalanceThreshold.trimmingCharacters(in: .whitespacesAndNewlines), locale: Locale(identifier: "en_US_POSIX")),
+              !parsedThreshold.isNaN, parsedThreshold >= 0 else {
+            settingsSaveError = "低余额阈值须为非负数。"
+            return false
+        }
+        settingsSaveError = onSave(RelaySettings(
                 schemaVersion: schemaVersion,
-                refreshIntervalSeconds: max(60, normalizedRefreshIntervalMinutes * 60),
+                refreshIntervalSeconds: minutes * 60,
+                rateRefreshInterval: rateRefreshInterval,
                 showTodayInMenuBar: showTodayInMenuBar,
                 baseCurrency: baseCurrency,
                 defaultLowBalanceThreshold: parsedThreshold,
                 historyRetention: historyRetention,
                 iCloudFileSyncEnabled: enableICloudFileSync
             ))
-        }
+        return settingsSaveError == nil
     }
 
     // Drafts and in-flight operation state stay at window scope so switching tabs
@@ -169,6 +194,7 @@ public struct SettingsWindowView: View {
         case .data:
             SettingsDataPage(
                 refreshIntervalMinutes: $refreshIntervalMinutes,
+                rateRefreshInterval: $rateRefreshInterval,
                 historyRetention: $historyRetention
             )
         case .shortcuts:

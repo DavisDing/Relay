@@ -20,18 +20,22 @@ public struct AccountAddModalView: View {
     @State private var isSaving = false
     @State private var statusMessage: String?
     @State private var errorMessage: String?
+    @State private var activeOperation: Task<Void, Never>?
+    private let closeHandler: RelayPageCloseHandler?
 
     public var onDismiss: () -> Void
     public var onSave: (AccountDraft) async throws -> Void
     public var onProbe: (AccountDraft) async throws -> ProviderSnapshot
 
     public init(
+        closeHandler: RelayPageCloseHandler? = nil,
         onDismiss: @escaping () -> Void = {},
         onSave: @escaping (AccountDraft) async throws -> Void = { _ in },
         onProbe: @escaping (AccountDraft) async throws -> ProviderSnapshot = { _ in
             throw ProviderError.unsupportedProvider
         }
     ) {
+        self.closeHandler = closeHandler
         self.onDismiss = onDismiss
         self.onSave = onSave
         self.onProbe = onProbe
@@ -39,7 +43,7 @@ public struct AccountAddModalView: View {
 
     public var body: some View {
         VStack(spacing: 0) {
-            RelayPageHeader(title: "添加账户", onBack: onDismiss)
+            RelayPageHeader(title: "添加账户", onBack: cancelForm)
 
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 12) {
@@ -98,6 +102,8 @@ public struct AccountAddModalView: View {
                 .padding(.horizontal, 14).padding(.bottom, 10)
             }
 
+            .disabled(isSaving || isTesting)
+
             RelayPageFooter {
                 Button(action: testConnection) {
                     HStack(spacing: 5) {
@@ -110,7 +116,7 @@ public struct AccountAddModalView: View {
 
                 Spacer(minLength: 4)
 
-                Button("取消", action: onDismiss)
+                Button("取消", action: cancelForm)
                     .buttonStyle(RelayTextButtonStyle())
                     .keyboardShortcut(.cancelAction)
 
@@ -121,6 +127,13 @@ public struct AccountAddModalView: View {
         }
         .frame(width: RelayVisualStyle.formPanelWidth, height: RelayVisualStyle.formPanelHeight)
         .relayPanelSurface(cornerRadius: RelayVisualStyle.panelCornerRadius)
+        .onAppear {
+            closeHandler?.prepareToClose = { activeOperation?.cancel(); return true }
+        }
+        .onDisappear {
+            activeOperation?.cancel()
+            closeHandler?.prepareToClose = nil
+        }
     }
 
     private var pipioFormSection: some View {
@@ -246,14 +259,18 @@ public struct AccountAddModalView: View {
         errorMessage = nil
         statusMessage = nil
         isTesting = true
-        Task {
+        activeOperation?.cancel()
+        activeOperation = Task { @MainActor in
             do {
                 let snapshot = try await onProbe(try makeDraft())
+                try Task.checkCancellation()
                 statusMessage = probeDescription(snapshot)
             } catch {
+                if Task.isCancelled { return }
                 errorMessage = userFacingMessage(error)
             }
             isTesting = false
+            activeOperation = nil
         }
     }
 
@@ -261,15 +278,26 @@ public struct AccountAddModalView: View {
         errorMessage = nil
         statusMessage = nil
         isSaving = true
-        Task {
+        activeOperation?.cancel()
+        activeOperation = Task { @MainActor in
             do {
                 try await onSave(try makeDraft())
+                guard !Task.isCancelled else { return }
+                activeOperation = nil
                 onDismiss()
             } catch {
+                if Task.isCancelled { return }
                 errorMessage = userFacingMessage(error)
                 isSaving = false
+                activeOperation = nil
             }
         }
+    }
+
+    private func cancelForm() {
+        activeOperation?.cancel()
+        activeOperation = nil
+        onDismiss()
     }
 
     private func probeDescription(_ snapshot: ProviderSnapshot) -> String {
