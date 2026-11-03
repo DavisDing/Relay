@@ -128,6 +128,11 @@ public struct MainPopoverView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     siteToolbar
+                    ForEach(Array(store.gatewayNotices.enumerated()), id: \.offset) { _, notice in
+                        Label(notice, systemImage: "info.circle")
+                            .font(.system(size: 11)).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     if showSearch { RelaySearchField(text: $accountSearch) }
                     if let accountGroup {
                         HStack {
@@ -155,9 +160,9 @@ public struct MainPopoverView: View {
                 if let onPresentConsumptionOverview { onPresentConsumptionOverview() }
                 else { showConsumptionOverview = true }
             } label: {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("今日消费").font(.system(size: 11)).foregroundStyle(.secondary)
-                    HStack(alignment: .center, spacing: 12) {
+                HStack(alignment: .center, spacing: 0) {
+                    VStack(spacing: 7) {
+                        Text("今日消费").font(.system(size: 11)).foregroundStyle(.secondary)
                         HStack(alignment: .firstTextBaseline, spacing: 4) {
                             Text(store.settings.baseCurrency.symbol)
                                 .font(.system(size: 18)).foregroundStyle(.secondary)
@@ -165,18 +170,27 @@ public struct MainPopoverView: View {
                                 .font(.system(size: 32, weight: .semibold)).tracking(-1)
                         }
                             .monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
-                        Spacer(minLength: 0)
+                        Text(todaySpend == nil ? "消费数据不完整，暂不合计"
+                             : "\(visibleParents.filter { $0.isEnabled && $0.kind != .workbuddy2api }.count) 个计费账户 · \(store.settings.baseCurrency.rawValue)")
+                            .font(.system(size: 10)).foregroundStyle(.secondary)
+                            .lineLimit(1).minimumScaleFactor(0.8)
+                    }
+                    .frame(maxWidth: .infinity)
+                    VStack(spacing: 6) {
                         if !homeAmountsHidden {
                             RelaySpendSparkline(values: store.dashboardSpendTrend)
-                                .frame(width: 92, height: 38)
+                                .frame(height: 42)
+                            Text("近 7 日").font(.system(size: 9)).foregroundStyle(.tertiary)
                         }
-                        Image(systemName: "chevron.right").font(.system(size: 10, weight: .medium)).foregroundStyle(.tertiary)
                     }
-                    Text(todaySpend == nil ? "消费数据不完整，暂不合计"
-                         : "\(visibleParents.filter { $0.isEnabled && $0.kind != .workbuddy2api }.count) 个计费账户 · \(store.settings.baseCurrency.rawValue)")
-                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                    .padding(.horizontal, 14)
+                    .frame(maxWidth: .infinity)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 6)
+                .padding(.vertical, 6)
+                .overlay(alignment: .trailing) {
+                    Image(systemName: "chevron.right").font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.tertiary).accessibilityHidden(true)
+                }
             }
             .buttonStyle(RelayCardButtonStyle())
             .accessibilityLabel("今日消费 " + money(todaySpend, currency: store.settings.baseCurrency))
@@ -437,7 +451,7 @@ public struct MainPopoverView: View {
             Text(hidden ? "所有账户均已隐藏" : "从一个账户开始").font(.system(size: 20, weight: .semibold))
             Text(hidden ? "账户仍在后台刷新，可在设置的账户管理中取消隐藏。" : "连接 Pipio、DeepSeek 或 workbuddy2api，集中查看余额与用量。凭据仅留在本机。")
                 .font(.system(size: 13)).foregroundStyle(.secondary).multilineTextAlignment(.center)
-            Button(hidden ? "管理账户" : "添加账户", action: hidden ? onPresentSettings : onPresentAddAccount)
+            Button(hidden ? "管理账户" : "添加账户", action: hidden ? (onPresentAccountManagement ?? onPresentSettings) : onPresentAddAccount)
                 .buttonStyle(RelayPrimaryCapsuleButtonStyle())
         }.padding(32).frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -449,31 +463,5 @@ public struct MainPopoverView: View {
     private func healthMessage(_ account: AccountModel) -> String? { healthPresentation(account).summary }
     private func statusColor(_ status: AccountStatus) -> Color {
         switch status { case .ok: return .secondary; case .warning, .retrying: return .orange; case .error: return .red }
-    }
-}
-
-/// A small, non-interactive overview. Nil days break the path rather than joining unknown data.
-private struct RelaySpendSparkline: View {
-    let values: [Decimal?]
-    var body: some View {
-        Canvas { context, size in
-            let known = values.compactMap { $0.map { NSDecimalNumber(decimal: $0).doubleValue } }
-            guard let low = known.min(), let high = known.max(), values.count > 1 else { return }
-            let span = max(high - low, max(abs(high) * 0.1, 1))
-            var path = Path()
-            var connected = false
-            for (index, amount) in values.enumerated() {
-                guard let amount else { connected = false; continue }
-                let value = NSDecimalNumber(decimal: amount).doubleValue
-                let point = CGPoint(x: CGFloat(index) / CGFloat(values.count - 1) * size.width,
-                    y: 3 + (1 - (value - low) / span) * (size.height - 6))
-                if connected { path.addLine(to: point) } else { path.move(to: point) }
-                connected = true
-                context.fill(Path(ellipseIn: CGRect(x: point.x - 1, y: point.y - 1, width: 2, height: 2)),
-                             with: .color(.accentColor))
-            }
-            context.stroke(path, with: .color(.accentColor), style: StrokeStyle(lineWidth: 1.25, lineCap: .round, lineJoin: .round))
-        }
-        .accessibilityHidden(true)
     }
 }

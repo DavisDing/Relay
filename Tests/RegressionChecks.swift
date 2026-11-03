@@ -184,6 +184,7 @@ struct RegressionChecks {
     }
 
     @MainActor static func run() async throws {
+        try await AuditRegressionChecks.run()
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("relay-fixtures-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -716,6 +717,9 @@ struct RegressionChecks {
                                adapters: ProviderAdapterRegistry(adapters: []), automaticallyRefresh: false)
         let all = store.dailyUsage(accountID: owner.id, limit: nil)
         try check(all.count == 40, "nil limit must return all retained history through RelayStore")
+        try check(store.dailyUsage(accountID: owner.id, limit: 0) == all &&
+                  store.dailyUsage(accountID: owner.id, limit: -10) == all,
+                  "Nonpositive limits match the repository's unlimited-history contract")
         try check(store.dailyUsage(accountID: owner.id) == Array(all.suffix(30)), "default limit must remain the latest 30 records")
         try check(store.dailyUsage(accountID: owner.id, limit: 7) == Array(all.suffix(7)), "explicit limit must preserve chronological ordering")
         try check(all.last?.day == today && all.last?.spend?.amount == 0, "unlimited history must include today's reliable zero")

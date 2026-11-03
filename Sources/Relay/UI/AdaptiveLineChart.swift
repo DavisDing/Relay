@@ -37,15 +37,19 @@ public struct AdaptiveLineChart: View {
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
             } else {
-                if isSelectable, let selected = selectedPoint {
+                if isSelectable, let readout = selectedPoint ?? dataPoints.last {
                     HStack(spacing: 6) {
-                        Text("\(selected.dateString):")
+                        Text(readout.dateString)
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(.secondary)
-                        Text(amountText(selected))
+                        Text(amountText(readout))
                             .font(.system(size: 11, weight: .bold))
                             .foregroundStyle(Color.accentColor)
+                        Spacer(minLength: 0)
+                        Text(selectedPoint == nil ? "最近记录" : "所选日期")
+                            .font(.system(size: 9)).foregroundStyle(.tertiary)
                     }
+                    .frame(height: 14)
                     .padding(.horizontal, 4)
                     .accessibilityElement(children: .combine)
                 }
@@ -70,7 +74,7 @@ public struct AdaptiveLineChart: View {
                         x: .value("日期", point.dateString),
                         y: .value("消耗金额", point.amount)
                     )
-                    .interpolationMethod(.catmullRom)
+                    .interpolationMethod(.monotone)
                     .foregroundStyle(Color.accentColor)
                     .lineStyle(StrokeStyle(lineWidth: 2.2, lineCap: .round, lineJoin: .round))
                     .accessibilityHidden(true)
@@ -79,7 +83,7 @@ public struct AdaptiveLineChart: View {
                         x: .value("日期", point.dateString),
                         y: .value("消耗金额", point.amount)
                     )
-                    .interpolationMethod(.catmullRom)
+                    .interpolationMethod(.monotone)
                     .foregroundStyle(LinearGradient(
                         colors: [Color.accentColor.opacity(0.12), Color.accentColor.opacity(0.01)],
                         startPoint: .top,
@@ -172,7 +176,8 @@ public struct AdaptiveLineChart: View {
             @unknown default: break
             }
         }
-        .focusable()
+        .focusable(isSelectable)
+        .focusEffectDisabled()
         .onMoveCommand { direction in
             switch direction {
             case .left: moveSelection(by: -1)
@@ -216,7 +221,7 @@ public struct AdaptiveLineChart: View {
     }
 
     private func moveSelection(by offset: Int) {
-        guard !dataPoints.isEmpty else { return }
+        guard isSelectable, !dataPoints.isEmpty else { return }
         let index = selectedIndex.map { min(max(0, $0 + offset), dataPoints.count - 1) }
             ?? (offset > 0 ? 0 : dataPoints.count - 1)
         selectedPointID = dataPoints[index].id

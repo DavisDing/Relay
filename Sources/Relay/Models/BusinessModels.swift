@@ -183,14 +183,19 @@ public struct AccountRate: Codable, Sendable, Equatable {
     }
 
     public func isExpired(at date: Date = Date()) -> Bool {
-        guard let expiresAt else { return false }
-        return expiresAt <= date
+        // Legacy/manual FX entries may have no stored deadline. Scheduling
+        // must never turn a provider conversion into an unlimited guarantee.
+        let deadline = expiresAt ?? (conversionToCNY != nil && nativeCurrency == .usd
+            ? RateRefreshInterval.weekly.nextRefresh(after: fetchedAt) : nil)
+        return deadline.map { $0 <= date } ?? false
     }
 
     func applying(_ interval: RateRefreshInterval, calendar: Calendar) -> AccountRate {
         AccountRate(accountID: accountID, source: source, nativeCurrency: nativeCurrency,
             quotaPerUnit: quotaPerUnit, amountMultiplier: amountMultiplier, conversionToCNY: conversionToCNY,
-            fetchedAt: fetchedAt, expiresAt: interval.nextRefresh(after: fetchedAt, calendar: calendar))
+            fetchedAt: fetchedAt, expiresAt: interval == .manual
+                ? (expiresAt ?? RateRefreshInterval.weekly.nextRefresh(after: fetchedAt, calendar: calendar))
+                : interval.nextRefresh(after: fetchedAt, calendar: calendar))
     }
 }
 
@@ -514,6 +519,11 @@ public enum HistoryRetention: String, Codable, CaseIterable, Sendable {
 
 public struct RelaySettings: Codable, Sendable, Equatable {
     public static let currentSchemaVersion = 1
+    public static let refreshIntervalRange = 60...86_400
+    public var snapshotMaximumAge: TimeInterval { max(120, Double(refreshIntervalSeconds) * 2) }
+    public var refreshSleepNanoseconds: UInt64 {
+        UInt64(min(max(refreshIntervalSeconds, Self.refreshIntervalRange.lowerBound), Self.refreshIntervalRange.upperBound)) * 1_000_000_000
+    }
 
     public var schemaVersion: Int
     public var refreshIntervalSeconds: Int
@@ -535,7 +545,7 @@ public struct RelaySettings: Codable, Sendable, Equatable {
         iCloudFileSyncEnabled: Bool = false
     ) {
         self.schemaVersion = schemaVersion
-        self.refreshIntervalSeconds = max(60, refreshIntervalSeconds)
+        self.refreshIntervalSeconds = min(max(60, refreshIntervalSeconds), Self.refreshIntervalRange.upperBound)
         self.rateRefreshInterval = rateRefreshInterval
         self.showTodayInMenuBar = showTodayInMenuBar
         self.baseCurrency = baseCurrency
@@ -553,6 +563,10 @@ public struct RelaySettings: Codable, Sendable, Equatable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         schemaVersion = try c.decode(Int.self, forKey: .schemaVersion)
         refreshIntervalSeconds = try c.decode(Int.self, forKey: .refreshIntervalSeconds)
+        guard Self.refreshIntervalRange.contains(refreshIntervalSeconds) else {
+            throw DecodingError.dataCorruptedError(forKey: .refreshIntervalSeconds, in: c,
+                debugDescription: "Refresh interval must be between 60 and 86400 seconds")
+        }
         rateRefreshInterval = try c.decodeIfPresent(RateRefreshInterval.self, forKey: .rateRefreshInterval) ?? .weekly
         showTodayInMenuBar = try c.decode(Bool.self, forKey: .showTodayInMenuBar)
         baseCurrency = try c.decode(Currency.self, forKey: .baseCurrency)

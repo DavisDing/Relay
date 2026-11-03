@@ -72,10 +72,10 @@ public struct ModelAnalysisPanel: View {
                             .accessibilityLabel("缓存占比：" + (row.item.cacheHitRate.map(RelayNumberFormatter.percent) ?? "未知"))
                         let unitCost = row.costPerMillionTokens.map { amountText($0.amount, currency: $0.currency) }
                         let spend = row.item.cost.map { amountText($0, currency: row.item.currency) }
-                        column(unitCost ?? "--")
+                        column(row.costPerMillionTokens.map { compactAmountText($0.amount, currency: $0.currency) } ?? "--")
                             .help(unitCostTitle + "：" + (unitCost ?? "未知"))
                             .accessibilityLabel(unitCostTitle + "：" + (unitCost ?? "未知"))
-                        column(spend ?? "--")
+                        column(row.item.cost.map { compactAmountText($0, currency: row.item.currency) } ?? "--")
                             .help(spendTitle + "：" + (spend ?? "未知")
                                 + "；" + shareTitle + (row.spendShare.map { "：" + RelayNumberFormatter.percent($0) } ?? "未知"))
                             .accessibilityLabel(spendTitle + "：" + (spend ?? "未知"))
@@ -106,6 +106,11 @@ public struct ModelAnalysisPanel: View {
         guard !amount.isNaN, amount >= 0 else { return "--" }
         return scope == .processCredits ? RelayNumberFormatter.decimal(amount)
             : RelayNumberFormatter.money(amount, currency: currency)
+    }
+
+    private func compactAmountText(_ amount: Decimal, currency: Currency) -> String {
+        guard !amount.isNaN, amount >= 0 else { return "--" }
+        return RelayNumberFormatter.modelMetric(amount, currency: scope == .processCredits ? nil : currency)
     }
 
     private func column(_ text: String) -> some View {

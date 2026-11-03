@@ -168,23 +168,27 @@ enum UnfinishedFeatureChecks {
         try check(dailyCalls == 1 && daily.rate.expiresAt == now.addingTimeInterval(86_400), "Shortening the interval refreshes immediately and persists the new due date")
         let monthly = try await service.resolve(account: account, credential: credential, adapter: adapter, persistedRate: nil,
             forceRefresh: false, refreshInterval: .monthly, calendar: calendar, now: now)
-        try check(monthly.rate.expiresAt == calendar.date(byAdding: .month, value: 1, to: now), "Monthly is a calendar month, including short months")
+        try check(monthly.rate == daily.rate, "Changing the schedule alone must not rewrite an existing validity deadline")
+        let monthlyFetched = try await RateService().resolve(account: account, credential: credential, adapter: adapter, persistedRate: nil,
+            forceRefresh: true, refreshInterval: .monthly, calendar: calendar, now: now)
+        try check(monthlyFetched.rate.expiresAt == calendar.date(byAdding: .month, value: 1, to: now), "New monthly values use a calendar month, including short months")
         let manual = try await service.resolve(account: account, credential: credential, adapter: adapter, persistedRate: nil,
             forceRefresh: false, refreshInterval: .manual, calendar: calendar, now: now.addingTimeInterval(90 * 86_400))
         let manualCalls = await adapter.calls
-        try check(manualCalls == 1 && manual.rate.expiresAt == nil, "Manual mode never automatically refreshes an existing value")
+        try check(manualCalls == 2 && manual.rate == daily.rate && manual.isStale, "Manual mode skips requests while preserving expiry and the original value")
         _ = try await service.resolve(account: account, credential: credential, adapter: adapter, persistedRate: nil,
             forceRefresh: true, refreshInterval: .manual, now: now)
         let forcedCalls = await adapter.calls
-        try check(forcedCalls == 2, "Explicit refresh works in manual mode")
+        try check(forcedCalls == 3, "Explicit refresh works in manual mode")
         await adapter.setFailure(true)
         let failure = try await service.resolve(account: account, credential: credential, adapter: adapter, persistedRate: nil,
             forceRefresh: false, refreshInterval: .daily, now: now.addingTimeInterval(2 * 86_400))
-        try check(failure.isStale && failure.rate.fetchedAt == now, "Failed refresh retains the last successful value and marks it stale")
+        try check(failure.refreshFailed && !failure.isStale && failure.rate.fetchedAt == now,
+                  "Failed refresh is separate from the retained value's validity")
         let restarted = RateService()
         let retainedFailure = try await restarted.resolve(account: account, credential: credential, adapter: adapter,
-            persistedRate: failure.rate, persistedRateIsStale: true, forceRefresh: false, refreshInterval: .manual, now: now)
-        try check(retainedFailure.isStale, "Manual mode must not clear a persisted failed-rate state after restart")
+            persistedRate: failure.rate, forceRefresh: false, refreshInterval: .manual, now: now.addingTimeInterval(8 * 86_400))
+        try check(retainedFailure.isStale, "Restart/manual mode must preserve the original expiry")
     }
 
     private static func cancellation() async throws {

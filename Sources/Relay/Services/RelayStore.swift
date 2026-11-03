@@ -236,7 +236,7 @@ public final class RelayStore: ObservableObject {
             state.freshness = snapshot.freshness
         }
         if let lastSuccessAt = state.lastSuccessAt,
-           presentationDate.timeIntervalSince(lastSuccessAt) > Double(max(120, settings.refreshIntervalSeconds * 2)),
+           presentationDate.timeIntervalSince(lastSuccessAt) > settings.snapshotMaximumAge,
            state.freshness == .fresh { state.freshness = .stale }
         return state
     }
@@ -643,8 +643,9 @@ public final class RelayStore: ObservableObject {
     }
 
     public func dailyUsage(accountID: UUID, limit: Int? = 30) -> [DailyUsageRecord] {
-        let records = detailHistory[accountID] ?? []
-        return limit.map { Array(records.suffix(max(0, $0))) } ?? records
+        let records = (detailHistory[accountID] ?? []).sorted { $0.day < $1.day }
+        guard let limit, limit > 0 else { return records }
+        return Array(records.suffix(limit))
     }
 
     /// Resolve by stable identity on every view update, including gateway children
@@ -731,7 +732,7 @@ public final class RelayStore: ObservableObject {
         })
     }
 
-    private var maximumSnapshotAge: TimeInterval { Double(max(120, settings.refreshIntervalSeconds * 2)) }
+    private var maximumSnapshotAge: TimeInterval { settings.snapshotMaximumAge }
 
     private var providerKinds: [UUID: ProviderKind] {
         Dictionary(uniqueKeysWithValues: detailConfigurations.map { ($0.id, $0.providerKind) })
@@ -900,7 +901,7 @@ public final class RelayStore: ObservableObject {
     private func startAutomaticRefresh(refreshImmediately: Bool = false) {
         guard automaticallyRefresh && storageAvailability.isAvailable && !isApplyingTransferredData else { return }
         refreshLoopTask?.cancel()
-        let interval = UInt64(max(60, settings.refreshIntervalSeconds)) * 1_000_000_000
+        let interval = settings.refreshSleepNanoseconds
         refreshLoopTask = Task { @MainActor [weak self] in
             if refreshImmediately { self?.enqueueAutomaticRefreshes() }
             while !Task.isCancelled {
@@ -1038,7 +1039,7 @@ public final class RelayStore: ObservableObject {
     private func nextBudgetEvent(for id: UUID, at now: Date) -> BudgetAlertEvent? {
         guard let account = detailConfigurations.first(where: { $0.id == id }), account.isEnabled, !account.isHidden,
               let snapshot = detailSnapshots.first(where: { $0.accountID == id }),
-              now.timeIntervalSince(snapshot.fetchedAt) <= Double(max(120, settings.refreshIntervalSeconds * 2)),
+              now.timeIntervalSince(snapshot.fetchedAt) <= settings.snapshotMaximumAge,
               snapshot.fetchedAt <= now.addingTimeInterval(60) else { return nil }
         return BudgetService.nextAlert(accountID: id, accountName: account.displayName,
             isEnabled: account.isEnabled, budget: account.monthlyBudget, snapshot: snapshot,

@@ -379,15 +379,6 @@ svg_opt_c = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" w
 </svg>
 """
 
-with open("assets/icons/Relay-AppIcon-OptionA.svg", "w") as f:
-    f.write(svg_opt_a.strip())
-
-with open("assets/icons/Relay-AppIcon-OptionB.svg", "w") as f:
-    f.write(svg_opt_b.strip())
-
-with open("assets/icons/Relay-AppIcon-OptionC.svg", "w") as f:
-    f.write(svg_opt_c.strip())
-
 # The user specifically requested:
 # "文件：Relay-AppIcon-1024.png"
 # "同时尽量提供一份可编辑 SVG 源文件"

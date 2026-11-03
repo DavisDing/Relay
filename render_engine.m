@@ -574,14 +574,6 @@ int main(void) {
         // 1. Render Option A (Recommended Primary)
         CGImageRef imgA = renderOptionA();
         saveCGImageToPNG(imgA, @"assets/icons/Relay-AppIcon-1024.png");
-        saveCGImageToPNG(imgA, @"assets/icons/Relay-AppIcon-OptionA-1024.png");
-
-        // 2. Render Option B & C
-        CGImageRef imgB = renderOptionB();
-        saveCGImageToPNG(imgB, @"assets/icons/Relay-AppIcon-OptionB-1024.png");
-
-        CGImageRef imgC = renderOptionC();
-        saveCGImageToPNG(imgC, @"assets/icons/Relay-AppIcon-OptionC-1024.png");
 
         // 3. Multi-resolution scaled exports for Option A (16, 32, 128, 256, 512)
         size_t sizes[] = { 16, 32, 128, 256, 512 };
@@ -593,20 +585,6 @@ int main(void) {
             CGImageRelease(scaled);
         }
 
-        // Multi-resolution for Option B and Option C previews
-        for (int i = 0; i < 5; i++) {
-            size_t s = sizes[i];
-            CGImageRef scaledB = createResizedImage(imgB, s, s);
-            NSString *pb = [NSString stringWithFormat:@"assets/icons/Relay-OptionB-%zux%zu.png", s, s];
-            saveCGImageToPNG(scaledB, pb);
-            CGImageRelease(scaledB);
-
-            CGImageRef scaledC = createResizedImage(imgC, s, s);
-            NSString *pc = [NSString stringWithFormat:@"assets/icons/Relay-OptionC-%zux%zu.png", s, s];
-            saveCGImageToPNG(scaledC, pc);
-            CGImageRelease(scaledC);
-        }
-
         // 4. Light and Dark Background Previews (For inspection & presentation)
         CGImageRef lightPrevA = renderOnBackground(imgA, 1024, NO);
         saveCGImageToPNG(lightPrevA, @"assets/icons/Relay-AppIcon-Preview-Light.png");
@@ -616,25 +594,7 @@ int main(void) {
         saveCGImageToPNG(darkPrevA, @"assets/icons/Relay-AppIcon-Preview-Dark.png");
         CGImageRelease(darkPrevA);
 
-        CGImageRef lightPrevB = renderOnBackground(imgB, 1024, NO);
-        saveCGImageToPNG(lightPrevB, @"assets/icons/Relay-OptionB-Preview-Light.png");
-        CGImageRelease(lightPrevB);
-
-        CGImageRef darkPrevB = renderOnBackground(imgB, 1024, YES);
-        saveCGImageToPNG(darkPrevB, @"assets/icons/Relay-OptionB-Preview-Dark.png");
-        CGImageRelease(darkPrevB);
-
-        CGImageRef lightPrevC = renderOnBackground(imgC, 1024, NO);
-        saveCGImageToPNG(lightPrevC, @"assets/icons/Relay-OptionC-Preview-Light.png");
-        CGImageRelease(lightPrevC);
-
-        CGImageRef darkPrevC = renderOnBackground(imgC, 1024, YES);
-        saveCGImageToPNG(darkPrevC, @"assets/icons/Relay-OptionC-Preview-Dark.png");
-        CGImageRelease(darkPrevC);
-
         CGImageRelease(imgA);
-        CGImageRelease(imgB);
-        CGImageRelease(imgC);
 
         NSLog(@"All master icons and preview tiers successfully rendered.");
     }

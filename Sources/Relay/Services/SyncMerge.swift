@@ -6,6 +6,9 @@ enum SyncMerge {
     static func merge(_ local: RelaySyncData, _ remote: RelaySyncData) throws -> RelaySyncData {
         guard local.schemaVersion == RelaySyncData.currentSchemaVersion,
               remote.schemaVersion == RelaySyncData.currentSchemaVersion,
+              local.settings.schemaVersion == RelaySettings.currentSchemaVersion,
+              RelaySettings.refreshIntervalRange.contains(local.settings.refreshIntervalSeconds),
+              RelaySettings.refreshIntervalRange.contains(remote.settings.refreshIntervalSeconds),
               remote.settings.schemaVersion == RelaySettings.currentSchemaVersion else {
             throw LocalRepositoryError.corruptData
         }

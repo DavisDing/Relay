@@ -352,8 +352,13 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate, NSPopover
     }
 
     @objc private func quitFromMenu(_ sender: Any?) {
-        store.cancelRefreshes()
         NSApplication.shared.terminate(nil)
+    }
+
+    func prepareForTermination() -> Bool {
+        guard auxiliaryCloseHandler?.requestTermination() ?? true else { return false }
+        store.cancelRefreshes()
+        return true
     }
 
     // Every auxiliary page returns home on explicit close; hiding remains separate.
@@ -378,6 +383,7 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate, NSPopover
         auxiliaryWindowController?.window?.delegate = nil
         (auxiliaryWindowController?.window as? RelayPanelWindow)?.prepareToClose = nil
         auxiliaryCloseHandler?.prepareToClose = nil
+        auxiliaryCloseHandler?.prepareToTerminate = nil
         auxiliaryWindowController?.close()
         auxiliaryWindowController = nil
         auxiliaryCloseHandler = closeHandler
@@ -525,6 +531,7 @@ public final class RelayMenuBarController: NSObject, NSWindowDelegate, NSPopover
               window === auxiliaryWindowController?.window else { return }
         auxiliaryWindowController = nil
         auxiliaryCloseHandler?.prepareToClose = nil
+        auxiliaryCloseHandler?.prepareToTerminate = nil
         auxiliaryCloseHandler = nil
         let request = UUID()
         pendingDashboardReturn = request

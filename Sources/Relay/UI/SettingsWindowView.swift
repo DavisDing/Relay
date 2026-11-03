@@ -12,6 +12,7 @@ public struct SettingsWindowView: View {
     @State private var refreshIntervalMinutes: String
     @State private var rateRefreshInterval: RateRefreshInterval
     @State private var settingsSaveError: String?
+    @State private var discardChanges = false
     @State private var historyRetention: HistoryRetention
     @State private var enableICloudFileSync: Bool
     @State private var iCloudDirectoryURL: URL?
@@ -112,6 +113,10 @@ public struct SettingsWindowView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer()
+                if settingsSaveError != nil {
+                    Button("放弃更改", action: discardAndClose)
+                        .buttonStyle(RelayTextButtonStyle())
+                }
                 Button("完成", action: closeSettings)
                     .buttonStyle(RelayTextButtonStyle())
             }
@@ -143,8 +148,14 @@ public struct SettingsWindowView: View {
             historyRetention = settings.historyRetention
             enableICloudFileSync = settings.iCloudFileSyncEnabled
         }
-        .onAppear { closeHandler?.prepareToClose = saveSettings }
-        .onDisappear { closeHandler?.prepareToClose = nil }
+        .onAppear {
+            closeHandler?.prepareToClose = saveSettings
+            closeHandler?.prepareToTerminate = { saveSettings() || confirmDiscard() }
+        }
+        .onDisappear {
+            closeHandler?.prepareToClose = nil
+            closeHandler?.prepareToTerminate = nil
+        }
     }
 
     private func closeSettings() {
@@ -153,7 +164,7 @@ public struct SettingsWindowView: View {
     }
 
     private func saveSettings() -> Bool {
-        guard storageWasAvailableOnOpen else { return true }
+        guard !discardChanges, storageWasAvailableOnOpen else { return true }
         guard let minutes = Int(refreshIntervalMinutes.trimmingCharacters(in: .whitespacesAndNewlines)),
               (1...1440).contains(minutes) else {
             settingsSaveError = "自动刷新间隔须为 1～1440 分钟。"
@@ -175,6 +186,17 @@ public struct SettingsWindowView: View {
                 iCloudFileSyncEnabled: enableICloudFileSync
             ))
         return settingsSaveError == nil
+    }
+
+    private func confirmDiscard() -> Bool {
+        let confirm = closeHandler?.confirmDiscard ?? RelayPageCloseHandler.showDiscardConfirmation
+        return confirm((settingsSaveError ?? "设置未保存。") + " 放弃仅丢弃尚未保存的设置；已立即生效的本机偏好和操作将保留。")
+    }
+
+    private func discardAndClose() {
+        guard confirmDiscard() else { return }
+        discardChanges = true
+        onClose()
     }
 
     // Drafts and in-flight operation state stay at window scope so switching tabs

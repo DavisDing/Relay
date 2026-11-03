@@ -3,6 +3,7 @@ import AppKit
 
 @main
 struct RelayApp: App {
+    @NSApplicationDelegateAdaptor(RelayApplicationDelegate.self) private var appDelegate
     @StateObject private var store: RelayStore
     private let menuBarController: RelayMenuBarController
     private let globalShortcutService: GlobalShortcutService
@@ -53,6 +54,7 @@ struct RelayApp: App {
         controller = resolvedController
         self.menuBarController = resolvedController
         self.globalShortcutService = resolvedService
+        appDelegate.menuBarController = resolvedController
         _ = resolvedService.start(configuration: initialConfiguration)
     }
 
@@ -66,7 +68,6 @@ struct RelayApp: App {
         .commands {
             CommandGroup(replacing: .appTermination) {
                 Button("退出 Relay") {
-                    store.cancelRefreshes()
                     NSApplication.shared.terminate(nil)
                 }
                 .keyboardShortcut("q")

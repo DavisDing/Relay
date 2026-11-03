@@ -50,6 +50,8 @@ public struct AccountEditModalView: View {
     @State private var isSaving = false
     @State private var errorMessage: String?
     @State private var saveTask: Task<Void, Never>?
+    @State private var initialFormValues: [String]?
+    @State private var didSave = false
     private let closeHandler: RelayPageCloseHandler?
 
     public init(
@@ -182,7 +184,10 @@ public struct AccountEditModalView: View {
         .frame(width: RelayVisualStyle.formPanelWidth)
         .frame(height: RelayVisualStyle.formPanelHeight)
         .relayPanelSurface(cornerRadius: RelayVisualStyle.panelCornerRadius)
-        .onAppear { closeHandler?.prepareToClose = { saveTask?.cancel(); return true } }
+        .onAppear {
+            if initialFormValues == nil { initialFormValues = formValues }
+            closeHandler?.prepareToClose = prepareToClose
+        }
         .onDisappear {
             saveTask?.cancel()
             closeHandler?.prepareToClose = nil
@@ -316,6 +321,7 @@ public struct AccountEditModalView: View {
                 guard !Task.isCancelled else { return }
                 isSaving = false
                 saveTask = nil
+                didSave = true
                 onDismiss()
             } catch {
                 if Task.isCancelled { return }
@@ -331,8 +337,22 @@ public struct AccountEditModalView: View {
     }
 
     private func cancelForm() {
+        if closeHandler != nil { onDismiss() }
+        else if prepareToClose() { onDismiss() }
+    }
+
+    private var formValues: [String] {
+        [displayName, threshold, manualRate, gatewayURL, monthlyBudget, budgetCurrency.rawValue,
+         groupName, String(isPinned), replacementSecret, replacementUserID,
+         replacementDeepSeekUserToken, String(clearDeepSeekUserToken)]
+    }
+
+    private func prepareToClose() -> Bool {
+        if !didSave && (formValues != initialFormValues || isSaving) {
+            let confirm = closeHandler?.confirmDiscard ?? RelayPageCloseHandler.showDiscardConfirmation
+            guard confirm("账户更改尚未保存。放弃后将取消在途操作并丢弃输入。") || didSave else { return false }
+        }
         saveTask?.cancel()
-        saveTask = nil
-        onDismiss()
+        return true
     }
 }

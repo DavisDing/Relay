@@ -16,6 +16,16 @@ enum RelayNumberFormatter {
 
     /// Base-1000 display for home balances and credits, always retaining two decimals.
     static func compactDecimal(_ amount: Decimal) -> String {
+        compactDecimal(amount, narrow: false)
+    }
+
+    /// Three significant digits fit the model table; full amounts stay in help/accessibility.
+    static func modelMetric(_ amount: Decimal, currency: Currency? = nil) -> String {
+        guard !amount.isNaN else { return "--" }
+        return (currency?.symbol ?? "") + compactDecimal(amount, narrow: true)
+    }
+
+    private static func compactDecimal(_ amount: Decimal, narrow: Bool) -> String {
         guard !amount.isNaN else { return "—" }
         let units = ["", "K", "M", "B", "T", "P", "E"]
         var value = amount
@@ -25,12 +35,16 @@ enum RelayNumberFormatter {
             unit += 1
         }
         var rounded = Decimal()
-        NSDecimalRound(&rounded, &value, 2, .plain)
+        let places = narrow ? (abs(value) >= 100 ? 0 : abs(value) >= 10 ? 1 : 2) : 2
+        NSDecimalRound(&rounded, &value, places, .plain)
         if abs(rounded) >= 1000 && unit < units.count - 1 {
             rounded /= 1000
             unit += 1
         }
-        return (compactFormatter.string(from: rounded as NSDecimalNumber) ?? "—") + units[unit]
+        if abs(rounded) >= 1000 {
+            return (narrow ? narrowScientificFormatter : scientificFormatter).string(from: amount as NSDecimalNumber) ?? "—"
+        }
+        return ((narrow ? tokenFormatter : compactFormatter).string(from: rounded as NSDecimalNumber) ?? "—") + units[unit]
     }
 
     static func compactMoney(_ amount: Decimal, currency: Currency) -> String {
@@ -45,6 +59,24 @@ enum RelayNumberFormatter {
         formatter.usesGroupingSeparator = false
         formatter.minimumFractionDigits = 2
         formatter.maximumFractionDigits = 2
+        return formatter
+    }()
+
+    private static let scientificFormatter: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.numberStyle = .scientific
+        formatter.positiveFormat = "0.00E0"
+        formatter.negativeFormat = "-0.00E0"
+        return formatter
+    }()
+
+    private static let narrowScientificFormatter: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.numberStyle = .scientific
+        formatter.positiveFormat = "0.##E0"
+        formatter.negativeFormat = "-0.##E0"
         return formatter
     }()
 

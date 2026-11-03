@@ -21,6 +21,8 @@ public struct AccountAddModalView: View {
     @State private var statusMessage: String?
     @State private var errorMessage: String?
     @State private var activeOperation: Task<Void, Never>?
+    @State private var initialFormValues: [String]?
+    @State private var didSave = false
     private let closeHandler: RelayPageCloseHandler?
 
     public var onDismiss: () -> Void
@@ -128,7 +130,8 @@ public struct AccountAddModalView: View {
         .frame(width: RelayVisualStyle.formPanelWidth, height: RelayVisualStyle.formPanelHeight)
         .relayPanelSurface(cornerRadius: RelayVisualStyle.panelCornerRadius)
         .onAppear {
-            closeHandler?.prepareToClose = { activeOperation?.cancel(); return true }
+            if initialFormValues == nil { initialFormValues = formValues }
+            closeHandler?.prepareToClose = prepareToClose
         }
         .onDisappear {
             activeOperation?.cancel()
@@ -284,6 +287,7 @@ public struct AccountAddModalView: View {
                 try await onSave(try makeDraft())
                 guard !Task.isCancelled else { return }
                 activeOperation = nil
+                didSave = true
                 onDismiss()
             } catch {
                 if Task.isCancelled { return }
@@ -295,9 +299,23 @@ public struct AccountAddModalView: View {
     }
 
     private func cancelForm() {
+        if closeHandler != nil { onDismiss() }
+        else if prepareToClose() { onDismiss() }
+    }
+
+    private var formValues: [String] {
+        [accountName, selectedProvider.rawValue, pipioBaseURL, pipioUserId, pipioToken,
+         deepseekBaseURL, deepseekApiKey, deepseekUserToken, workbuddyBaseURL, workbuddyApiKey,
+         monthlyBudget, budgetCurrency.rawValue, groupName, String(isPinned)]
+    }
+
+    private func prepareToClose() -> Bool {
+        if !didSave && (formValues != initialFormValues || isTesting || isSaving) {
+            let confirm = closeHandler?.confirmDiscard ?? RelayPageCloseHandler.showDiscardConfirmation
+            guard confirm("账户尚未保存。放弃后将取消在途操作并丢弃输入。") || didSave else { return false }
+        }
         activeOperation?.cancel()
-        activeOperation = nil
-        onDismiss()
+        return true
     }
 
     private func probeDescription(_ snapshot: ProviderSnapshot) -> String {

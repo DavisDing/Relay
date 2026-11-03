@@ -4,6 +4,10 @@ private struct SiteGroupFailure: Error, CustomStringConvertible { let descriptio
 
 @MainActor
 enum SiteAccountGroupChecks {
+    private static func check(_ result: Bool, _ message: String) throws {
+        if !result { throw SiteGroupFailure(description: message) }
+    }
+
     static func run() throws {
         func check(_ result: @autoclosure () -> Bool, _ message: String) throws {
             if !result() { throw SiteGroupFailure(description: message) }
@@ -48,6 +52,8 @@ enum SiteAccountGroupChecks {
         try check(gwGroups.count == 2 && gwGroups[0].accounts.map(\.id) == [child.id] && gwGroups[0].warningCount == 1,
                   "Gateway children stay with their origin and preserve failure status")
         try check(gwGroups[1].accounts.map(\.id) == [gateway2.id], "Gateways with unavailable or empty children remain reachable")
+
+        try providerCalendarTrend()
 
         // Exercise the actual store projection and aggregation used by the home UI.
         let repo = InMemoryLocalRepository()
@@ -146,5 +152,30 @@ enum SiteAccountGroupChecks {
             }
         }
         print("PASS: site identity, filtering, gateway visibility, ordering and site totals")
+    }
+
+    private static func providerCalendarTrend() throws {
+        let local = TimeZone(secondsFromGMT: -8 * 3600)!
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = local
+        let now = calendar.date(from: DateComponents(year: 2026, month: 4, day: 1, hour: 23, minute: 30))!
+        let providerCalendar = BudgetService.calendar(for: .deepseek)
+        let providerToday = providerCalendar.startOfDay(for: now)
+        let providerYesterday = providerCalendar.date(byAdding: .day, value: -1, to: providerToday)!
+        let repository = InMemoryLocalRepository()
+        let account = AccountConfiguration(displayName: "DeepSeek timezone", providerKind: .deepseek,
+                                           siteOrigin: URL(string: "https://example.invalid")!)
+        try repository.upsertAccount(account)
+        try repository.upsertSnapshot(ProviderSnapshot(accountID: account.id,
+            balance: MoneyValue(amount: 10, currency: .cny), todaySpend: MoneyValue(amount: 3, currency: .cny),
+            monthSpend: nil, requestCount: nil, capabilities: [.balance, .todayUsage], freshness: .fresh,
+            fetchedAt: now, rate: AccountRate(accountID: account.id, source: .providerNativeCurrency, nativeCurrency: .cny)))
+        try repository.upsertDailyUsage(DailyUsageRecord(accountID: account.id, day: providerYesterday,
+            spend: MoneyValue(amount: 2, currency: .cny)))
+        let store = RelayStore(repository: repository, credentialStore: InMemoryCredentialStore(),
+            adapters: ProviderAdapterRegistry(adapters: []), calendar: calendar, automaticallyRefresh: false)
+        store.updateTemporalPresentation(at: now)
+        try check(store.dashboardSpendTrend[5] == 2 && store.dashboardSpendTrend[6] == 3,
+                  "DeepSeek history and live today share UTC+8 days when the Mac is on UTC-8")
     }
 }

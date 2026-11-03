@@ -220,9 +220,12 @@ public struct AccountDetailView: View {
                 Text(account.kind.displayName + " · " + SiteAccountGroup.displayAddress(for: account))
                     .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
             }
+            .layoutPriority(1)
             Spacer(minLength: 8)
             Label(compactFooterText, systemImage: statusSymbol)
                 .font(.system(size: 10, weight: .medium))
+                .lineLimit(1).truncationMode(.tail)
+                .frame(maxWidth: 104)
                 .foregroundStyle(statusColor).padding(.horizontal, 10).padding(.vertical, 6)
                 .background(statusColor.opacity(0.07), in: Capsule())
                 .help(footerDetailText).accessibilityLabel(footerDetailText)
@@ -258,29 +261,39 @@ public struct AccountDetailView: View {
 
     private var metrics: some View {
         VStack(alignment: .leading, spacing: 10) {
-            VStack(alignment: .leading, spacing: 5) {
-                Text("今日消费").font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
-                HStack(alignment: .center, spacing: 8) {
+            HStack(alignment: .center, spacing: 12) {
+                VStack(spacing: 6) {
+                    Text("今日消费").font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
                     Text(account.todaySpend.map { RelayNumberFormatter.money($0, currency: account.currency) } ?? "—")
                         .font(.system(size: 28, weight: .semibold)).tracking(-0.8)
                         .monospacedDigit().lineLimit(1).minimumScaleFactor(0.6)
-                    Spacer(minLength: 0)
+                    Text("供应商当日口径")
+                        .font(.system(size: 9)).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                VStack(spacing: 6) {
+                    RelaySpendSparkline(values: summaryTrendValues).frame(height: 32)
                     if let change = dayOverDayChange {
-                        VStack(alignment: .trailing, spacing: 3) {
-                            Image(systemName: change.delta >= 0 ? "arrow.up.right" : "arrow.down.right")
-                                .font(.system(size: 10, weight: .semibold))
-                            Text(RelayNumberFormatter.percent(abs(change.delta / change.previous)))
-                                .font(.system(size: 11, weight: .semibold)).monospacedDigit()
+                        HStack(spacing: 4) {
+                            HStack(spacing: 3) {
+                                Image(systemName: change.delta > 0 ? "arrow.up.right" : change.delta < 0 ? "arrow.down.right" : "arrow.right")
+                                Text(RelayNumberFormatter.percent(abs(change.delta / change.previous))).monospacedDigit()
+                            }
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(comparisonColor(change.delta))
+                            .padding(.horizontal, 6).padding(.vertical, 3)
+                            .background(comparisonColor(change.delta).opacity(0.08), in: Capsule())
+                            Text("较昨日").font(.system(size: 9)).foregroundStyle(.secondary)
                         }
-                        .foregroundStyle(change.delta > 0 ? Color.red : change.delta < 0 ? Color.green : Color.secondary)
-                        .fixedSize()
+                        .lineLimit(1).minimumScaleFactor(0.8)
                         .help("较昨日消费变化")
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel("较昨日消费\(change.delta > 0 ? "增加" : change.delta < 0 ? "减少" : "持平") \(RelayNumberFormatter.percent(abs(change.delta / change.previous)))")
+                    } else {
+                        Text("近 7 日").font(.system(size: 9)).foregroundStyle(.secondary)
                     }
                 }
-                Text(dayOverDayChange == nil ? "供应商当日口径" : "较昨日 · 供应商当日口径")
-                    .font(.system(size: 10)).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(12)
@@ -298,6 +311,21 @@ public struct AccountDetailView: View {
             }
         }
         .padding(.top, 4)
+    }
+
+    private func comparisonColor(_ delta: Decimal) -> Color {
+        delta > 0 ? .red : delta < 0 ? .green : .secondary
+    }
+
+    private var summaryTrendValues: [Decimal?] {
+        let points = displayedHistoryPoints
+        let today = historyCalendar.startOfDay(for: presentationDate)
+        return (-6...0).map { offset in
+            guard let day = historyCalendar.date(byAdding: .day, value: offset, to: today) else { return nil }
+            return points.first { point in
+                point.day.map { historyCalendar.isDate($0, inSameDayAs: day) } ?? false
+            }?.amount
+        }
     }
 
     private var dayOverDayChange: (previous: Decimal, delta: Decimal)? {
@@ -327,9 +355,9 @@ public struct AccountDetailView: View {
               !budget.amount.isNaN, !spend.isNaN else { return nil }
         let difference = budget.amount - spend
         if difference >= 0 {
-            return "已用 \(RelayNumberFormatter.percent(budgetUsage ?? .zero)) · 剩余 \(RelayNumberFormatter.money(difference, currency: budget.currency))"
+            return "剩余 \(RelayNumberFormatter.money(difference, currency: budget.currency))"
         }
-        return "已用 \(RelayNumberFormatter.percent(budgetUsage ?? .zero)) · 超出 \(RelayNumberFormatter.money(-difference, currency: budget.currency))"
+        return "超出 \(RelayNumberFormatter.money(-difference, currency: budget.currency))"
     }
 
     private var trendSection: some View {
@@ -358,7 +386,7 @@ public struct AccountDetailView: View {
                     unit: account.kind == .workbuddy2api ? "积分" : account.currency.symbol) { point in
                         selectedTrendDay = point?.day
                     }
-                    .frame(height: 116)
+                    .frame(height: 132)
                     .padding(.top, 4)
             }
         }
@@ -510,7 +538,7 @@ private struct MetricCard: View {
     var budgetStatusText: String? = nil
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(spacing: 7) {
             Text(title).font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
             Text(value).font(.system(size: 15, weight: .semibold)).tracking(-0.3)
                 .monospacedDigit().lineLimit(1).minimumScaleFactor(0.6)
@@ -518,15 +546,21 @@ private struct MetricCard: View {
                 ProgressView(value: min(1, max(0, NSDecimalNumber(decimal: budgetUsage).doubleValue)))
                     .controlSize(.small)
                     .tint(budgetUsage >= 1 ? .orange : .accentColor)
+                    .frame(maxWidth: 112)
                     .accessibilityLabel("月预算使用进度")
                 if let budget = budgetStatusText {
-                    Text(budget).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.7)
+                    VStack(spacing: 2) {
+                        Text("已用 " + RelayNumberFormatter.percent(budgetUsage))
+                        Text(budget)
+                    }
+                    .font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
                 }
             } else {
                 Text(subTitle).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.75)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 2)
+        .multilineTextAlignment(.center)
+        .frame(maxWidth: .infinity).padding(.top, 2)
     }
 
 }

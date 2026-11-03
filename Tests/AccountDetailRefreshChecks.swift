@@ -32,6 +32,7 @@ final class DetailFailureRepository: LocalRepository {
     var failSettingsWrites = false
     var failSnapshotID: UUID?
     var failHistoryID: UUID?
+    var reverseHistory = false
 
     func fetchAccounts() throws -> [AccountConfiguration] {
         if failAccountReads { throw LocalRepositoryError.unavailable }
@@ -50,7 +51,8 @@ final class DetailFailureRepository: LocalRepository {
     }
     func dailyUsage(accountID: UUID, limit: Int?) throws -> [DailyUsageRecord] {
         if failHistoryID == accountID { throw LocalRepositoryError.unavailable }
-        return try base.dailyUsage(accountID: accountID, limit: limit)
+        let records = try base.dailyUsage(accountID: accountID, limit: limit)
+        return reverseHistory ? Array(records.reversed()) : records
     }
     func upsertDailyUsage(_ record: DailyUsageRecord) throws { try base.upsertDailyUsage(record) }
     func settings() throws -> RelaySettings {

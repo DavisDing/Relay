@@ -205,7 +205,6 @@ public final class RefreshCoordinator {
             credential: credential,
             adapter: adapter,
             persistedRate: oldSnapshot?.rate,
-            persistedRateIsStale: oldSnapshot?.freshness == .stale,
             forceRefresh: forceRateRefresh,
             refreshInterval: try repository.settings().rateRefreshInterval,
             calendar: calendar,
@@ -244,21 +243,9 @@ public final class RefreshCoordinator {
         } else {
             fetchedWithStats = fetched
         }
-        let snapshot = rateResolution.isStale ? ProviderSnapshot(
-            accountID: fetchedWithStats.accountID,
-            balance: fetchedWithStats.balance,
-            todaySpend: fetchedWithStats.todaySpend,
-            monthSpend: fetchedWithStats.monthSpend,
-            requestCount: fetchedWithStats.requestCount,
-            modelUsages: fetchedWithStats.modelUsages,
-            capabilities: fetchedWithStats.capabilities,
-            freshness: .stale,
-            fetchedAt: fetchedWithStats.fetchedAt,
-            rate: fetchedWithStats.rate,
-            creditMetrics: fetchedWithStats.creditMetrics,
-            subAccounts: fetchedWithStats.subAccounts,
-            workBuddyStats: fetchedWithStats.workBuddyStats
-        ) : fetchedWithStats
+        // Rate freshness is independent of the native balance/usage response.
+        // Cross-currency aggregation checks the rate's validity separately.
+        let snapshot = fetchedWithStats
         var dailyRecord: DailyUsageRecord?
         if account.providerKind == .workbuddy2api, let currentStats = snapshot.workBuddyStats {
             let previousStats = oldSnapshot?.workBuddyStats

@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 
 enum MenuBarPresentationChecks {
     static func run() throws {
@@ -19,6 +19,15 @@ enum MenuBarPresentationChecks {
         try verify(RelayNumberFormatter.compactMoney(1000, currency: .cny) == "¥1.00K",
                    "Compact money retains its currency")
         try verify(RelayNumberFormatter.compactDecimal(.nan) == "—", "Invalid amounts remain unknown")
+        let huge = RelayNumberFormatter.compactDecimal(Decimal(string: "1e30")!)
+        try verify(huge.count <= 10 && huge.contains("E"), "Unbounded magnitudes use a compact scientific fallback")
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        for text in [RelayNumberFormatter.tokens(1_420_000), RelayNumberFormatter.modelMetric(1_420_000, currency: .cny),
+                     RelayNumberFormatter.modelMetric(999_994, currency: .usd),
+                     RelayNumberFormatter.modelMetric(Decimal(string: "1e127")!, currency: .usd)] {
+            let width = (text as NSString).size(withAttributes: [.font: font]).width
+            try verify(width * 0.8 <= 40.4, "Narrow model metric fits at its supported scale: \(text)")
+        }
 
         let normal = MenuBarStatusPresentation(todaySpendAmount: Decimal(string: "1234.567"))
         try verify(normal.title == "1,234.57", "Only today's numeric spend, rounded to two decimals")
