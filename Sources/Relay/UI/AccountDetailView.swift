@@ -107,14 +107,13 @@ public struct AccountDetailView: View {
                 accessoryLabel: "打开账户官网", onAccessory: openAccountWebsite)
 
             ScrollView(.vertical, showsIndicators: true) {
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 10) {
                     accountIdentity
                     if account.kind == .workbuddy2api {
                         creditDetails
                         trendSection
                     } else {
                         metrics
-                        Divider().opacity(0.5)
                         trendSection
                     }
 
@@ -137,8 +136,11 @@ public struct AccountDetailView: View {
                         }
                         .font(.system(size: 11)).foregroundStyle(.secondary)
                     }
+                    if account.kind == .workbuddy2api, account.parentAccountID != nil {
+                        subAccountManagement
+                    }
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, 14)
                 .padding(.top, 4)
                 .padding(.bottom, 12)
             }
@@ -198,11 +200,7 @@ public struct AccountDetailView: View {
             if health.freshness == .stale { return "缓存数据" }
             if health.freshness == .partial { return "部分数据" }
         }
-        guard let updated = account.lastUpdated else { return "未刷新" }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = Calendar.current.isDateInToday(updated) ? "HH:mm" : "MM/dd HH:mm"
-        return "更新 " + formatter.string(from: updated)
+        return account.lastUpdated == nil ? "未刷新" : "已更新"
     }
 
     private var footerDetailText: String {
@@ -213,34 +211,51 @@ public struct AccountDetailView: View {
     }
 
     private var accountIdentity: some View {
-        HStack(spacing: 10) {
-            RelayProviderIcon(kind: account.kind, size: 30)
+        HStack(spacing: 9) {
+            RelayProviderIcon(kind: account.kind, size: 28)
             VStack(alignment: .leading, spacing: 4) {
-                Text(account.name).font(.system(size: 18, weight: .semibold)).tracking(-0.5).lineLimit(1)
+                Text(account.name).font(.system(size: 15, weight: .semibold)).tracking(-0.3).lineLimit(1)
+                    .help(account.name)
                 Text(account.kind.displayName + " · " + SiteAccountGroup.displayAddress(for: account))
-                    .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+                    .font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1)
             }
             .layoutPriority(1)
-            Spacer(minLength: 8)
+            Spacer(minLength: 2)
             Label(compactFooterText, systemImage: statusSymbol)
-                .font(.system(size: 10, weight: .medium))
+                .font(.system(size: 9, weight: .medium))
                 .lineLimit(1).truncationMode(.tail)
-                .frame(maxWidth: 104)
-                .foregroundStyle(statusColor).padding(.horizontal, 10).padding(.vertical, 6)
+                .frame(maxWidth: 90)
+                .fixedSize(horizontal: true, vertical: false)
+                .foregroundStyle(statusColor).padding(.horizontal, 8).padding(.vertical, 4)
                 .background(statusColor.opacity(0.07), in: Capsule())
                 .help(footerDetailText).accessibilityLabel(footerDetailText)
         }
     }
 
     private var creditDetails: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("可用积分").font(.system(size: 12)).foregroundStyle(.secondary)
-            Text(account.availablePoints.map { RelayNumberFormatter.decimal($0) } ?? "—")
-                .font(.system(size: 28, weight: .semibold)).tracking(-1).monospacedDigit()
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("可用积分").font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
+                    Text(account.availablePoints.map { RelayNumberFormatter.decimal($0) } ?? "—")
+                        .font(.system(size: 32, weight: .semibold)).tracking(-0.8).monospacedDigit()
+                        .lineLimit(1).minimumScaleFactor(0.6)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "bolt.fill").font(.system(size: 24, weight: .medium))
+                    .foregroundStyle(.secondary).frame(width: 54, height: 54)
+                    .background(Color.primary.opacity(0.04), in: Circle()).accessibilityHidden(true)
+            }
             Text("网关积分独立统计，不与货币余额合计。")
-                .font(.system(size: 12)).foregroundStyle(.secondary)
-            if account.parentAccountID != nil {
-                Divider().opacity(0.5)
+                .font(.system(size: 9)).foregroundStyle(.secondary)
+        }
+        .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+        .background(cockpitSurface, in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    private var subAccountManagement: some View {
+        DisclosureGroup("子账户管理") {
+            VStack(alignment: .leading, spacing: 10) {
                 Text("内部 UID：\(account.externalID ?? "—")")
                     .font(.system(size: 11, design: .monospaced)).textSelection(.enabled)
                 Text("系统停用：\(account.disabled ? "是" : "否") · 手动停用：\(account.manualDisabled ? "是" : "否") · 冷却：\(account.cooling ? "是" : "否")")
@@ -254,32 +269,32 @@ public struct AccountDetailView: View {
                 }.buttonStyle(RelaySecondaryCapsuleButtonStyle())
                 Text("管理功能需在网关启用 admin.enabled；操作后会刷新快照。")
                     .font(.system(size: 10)).foregroundStyle(.secondary)
-            }
+            }.padding(.top, 8)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .font(.system(size: 10)).foregroundStyle(.secondary)
     }
 
     private var metrics: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .center, spacing: 12) {
-                VStack(spacing: 6) {
-                    Text("今日消费").font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
-                    Text(account.todaySpend.map { RelayNumberFormatter.money($0, currency: account.currency) } ?? "—")
-                        .font(.system(size: 28, weight: .semibold)).tracking(-0.8)
-                        .monospacedDigit().lineLimit(1).minimumScaleFactor(0.6)
-                    Text("供应商当日口径")
-                        .font(.system(size: 9)).foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity)
-                VStack(spacing: 6) {
-                    RelaySpendSparkline(values: summaryTrendValues).frame(height: 32)
+        VStack(spacing: 8) {
+            HStack(alignment: .center, spacing: 8) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("今日消费").font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
+                        .help("按供应商当日口径统计")
+                    HStack(alignment: .firstTextBaseline, spacing: 2) {
+                        if account.todaySpend != nil {
+                            Text(account.currency.symbol).font(.system(size: 20, weight: .medium)).foregroundStyle(.secondary)
+                        }
+                        Text(account.todaySpend.map(RelayNumberFormatter.decimal) ?? "—")
+                            .font(.system(size: 32, weight: .semibold)).tracking(-0.8)
+                    }
+                    .monospacedDigit().lineLimit(1).minimumScaleFactor(0.6)
                     if let change = dayOverDayChange {
                         HStack(spacing: 4) {
                             HStack(spacing: 3) {
                                 Image(systemName: change.delta > 0 ? "arrow.up.right" : change.delta < 0 ? "arrow.down.right" : "arrow.right")
                                 Text(RelayNumberFormatter.percent(abs(change.delta / change.previous))).monospacedDigit()
                             }
-                            .font(.system(size: 10, weight: .semibold))
+                            .font(.system(size: 9, weight: .semibold))
                             .foregroundStyle(comparisonColor(change.delta))
                             .padding(.horizontal, 6).padding(.vertical, 3)
                             .background(comparisonColor(change.delta).opacity(0.08), in: Capsule())
@@ -290,42 +305,95 @@ public struct AccountDetailView: View {
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel("较昨日消费\(change.delta > 0 ? "增加" : change.delta < 0 ? "减少" : "持平") \(RelayNumberFormatter.percent(abs(change.delta / change.previous)))")
                     } else {
-                        Text("近 7 日").font(.system(size: 9)).foregroundStyle(.secondary)
+                        Text("供应商当日口径").font(.system(size: 9)).foregroundStyle(.secondary)
                     }
                 }
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                budgetGauge
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(12)
-            .background(Color.accentColor.opacity(0.055), in: RoundedRectangle(cornerRadius: 12))
-
-            HStack(alignment: .top, spacing: 12) {
-                MetricCard(title: "可用余额",
-                    value: account.balance.map { RelayNumberFormatter.money($0, currency: account.currency) } ?? "—",
-                    subTitle: account.currency.rawValue + " · 当前快照")
-                Rectangle().fill(Color.secondary.opacity(0.18)).frame(width: 0.5, height: 42)
-                MetricCard(title: "本月消费",
-                    value: account.monthSpend.map { RelayNumberFormatter.money($0, currency: account.currency) } ?? "—",
-                    subTitle: monthlyBudget.map { "预算 " + RelayNumberFormatter.money($0.amount, currency: $0.currency) } ?? "供应商账单周期",
-                    budgetUsage: budgetUsage, budgetStatusText: budgetStatusText)
+            .frame(height: 74)
+            Divider().opacity(0.45)
+            HStack(spacing: 8) {
+                cockpitMetric("可用余额", value: account.balance)
+                Rectangle().fill(Color.primary.opacity(0.08)).frame(width: 0.5, height: 27)
+                cockpitMetric("本月消费", value: account.monthSpend)
             }
         }
-        .padding(.top, 4)
+        .padding(12)
+        .background(cockpitSurface, in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    private var cockpitSurface: Color {
+        Color.accentColor.opacity(contrast == .increased ? 0.12 : colorScheme == .dark ? 0.09 : 0.055)
+    }
+
+    private func cockpitMetric(_ title: String, value: Decimal?) -> some View {
+        VStack(spacing: 4) {
+            Text(title).font(.system(size: 9)).foregroundStyle(.secondary)
+            Text(value.map { RelayNumberFormatter.money($0, currency: account.currency) } ?? "—")
+                .font(.system(size: 15, weight: .semibold)).monospacedDigit()
+                .lineLimit(1).minimumScaleFactor(0.7)
+        }
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var budgetGauge: some View {
+        let state = budgetProgress
+        let ratio = state.ratio
+        let gaugeColor: Color = (ratio ?? 0) >= 1 ? .orange : .accentColor
+        return VStack(spacing: 7) {
+            ZStack {
+                Circle().stroke(Color.primary.opacity(0.08), lineWidth: 4)
+                if let ratio {
+                    Circle().trim(from: 0, to: CGFloat(min(1, max(0, NSDecimalNumber(decimal: ratio).doubleValue))))
+                        .stroke(gaugeColor, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                }
+                VStack(spacing: 3) {
+                    Text(ratio.map { ($0 * 100).formatted(.number.precision(.fractionLength(0...1))) + "%" } ?? "—")
+                        .font(.system(size: 12, weight: .semibold)).monospacedDigit()
+                        .lineLimit(1).minimumScaleFactor(0.7)
+                    Text(ratio == nil ? monthlyBudget == nil ? "未设预算" : "数据不足" : "预算已用")
+                        .font(.system(size: 8)).foregroundStyle(.secondary)
+                }.padding(5)
+            }
+            .frame(width: 54, height: 54)
+            Text(monthlyBudget.map { "月预算 " + RelayNumberFormatter.modelMetric($0.amount, currency: $0.currency) } ?? "可在编辑中设置")
+                .font(.system(size: 8.5)).foregroundStyle(.secondary)
+                .lineLimit(1).minimumScaleFactor(0.8)
+        }
+        .frame(width: 88)
+        .help(budgetGaugeDetail)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("月预算：" + budgetGaugeDetail)
+    }
+
+    private var budgetProgress: BudgetProgress {
+        guard let id = historyAccountID else { return .disabled }
+        return BudgetService.progress(budget: monthlyBudget, snapshot: budgetSnapshot, accountID: id,
+            now: presentationDate, calendar: historyCalendar)
+    }
+
+    private var budgetGaugeDetail: String {
+        switch budgetProgress {
+        case .disabled: return "未设置月预算，可在编辑账户中设置。"
+        case .unavailable(let reason): return reason
+        case let .known(spend, budget, ratio):
+            let difference = budget.amount - spend.amount
+            return "已用 " + RelayNumberFormatter.percent(ratio) + "；预算 "
+                + RelayNumberFormatter.money(budget.amount, currency: budget.currency) + "；"
+                + (difference >= 0 ? "剩余 " : "超出 ")
+                + RelayNumberFormatter.money(abs(difference), currency: budget.currency)
+                + (budgetSnapshot?.freshness == .fresh ? "" : "；上次成功的缓存数据")
+        }
     }
 
     private func comparisonColor(_ delta: Decimal) -> Color {
         delta > 0 ? .red : delta < 0 ? .green : .secondary
-    }
-
-    private var summaryTrendValues: [Decimal?] {
-        let points = displayedHistoryPoints
-        let today = historyCalendar.startOfDay(for: presentationDate)
-        return (-6...0).map { offset in
-            guard let day = historyCalendar.date(byAdding: .day, value: offset, to: today) else { return nil }
-            return points.first { point in
-                point.day.map { historyCalendar.isDate($0, inSameDayAs: day) } ?? false
-            }?.amount
-        }
     }
 
     private var dayOverDayChange: (previous: Decimal, delta: Decimal)? {
@@ -341,53 +409,34 @@ public struct AccountDetailView: View {
         return (yesterday.amount, today - yesterday.amount)
     }
 
-    private var budgetUsage: Decimal? {
-        guard let budget = monthlyBudget, let spend = account.monthSpend,
-              budget.currency == account.currency,
-              !budget.amount.isNaN, budget.amount > 0,
-              !spend.isNaN, spend >= 0 else { return nil }
-        return spend / budget.amount
-    }
-
-    private var budgetStatusText: String? {
-        guard let budget = monthlyBudget, let spend = account.monthSpend,
-              budget.currency == account.currency, budget.amount > 0,
-              !budget.amount.isNaN, !spend.isNaN else { return nil }
-        let difference = budget.amount - spend
-        if difference >= 0 {
-            return "剩余 \(RelayNumberFormatter.money(difference, currency: budget.currency))"
-        }
-        return "超出 \(RelayNumberFormatter.money(-difference, currency: budget.currency))"
-    }
-
     private var trendSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text("消费趋势")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: 11.5, weight: .semibold))
                     .help(trendExplanation).accessibilityHint(trendExplanation)
                 Spacer()
                 Text("近 7 日 · " + (account.kind == .workbuddy2api ? "积分" : account.currency.rawValue))
-                    .font(.system(size: 10, weight: .medium))
+                    .font(.system(size: 9))
                     .foregroundStyle(.secondary)
             }
 
             historyCoverageControls
             if displayedHistoryPoints.isEmpty {
-                ContentUnavailableView(
-                    "暂未积累趋势数据",
-                    systemImage: "chart.line.uptrend.xyaxis",
-                    description: Text(account.kind == .pipio ? "Pipio 未返回可用的历史统计；请稍后刷新。" : account.kind == .workbuddy2api ? "首次刷新后会保存积分增量；请继续刷新以形成趋势。" : "后续成功同步会保存当天累计，并逐日形成趋势。")
-                )
-                .frame(height: 130)
-                .background(.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
+                VStack(spacing: 7) {
+                    Image(systemName: "chart.line.uptrend.xyaxis").font(.system(size: 18)).foregroundStyle(.tertiary)
+                    Text("暂未积累趋势数据").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text(account.kind == .workbuddy2api ? "后续刷新将记录积分增量，缺日不补零。" : "成功采集后形成趋势，缺失日期为未知。")
+                        .font(.system(size: 9)).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity).frame(height: 94)
             } else {
                 AdaptiveLineChart(dataPoints: displayedHistoryPoints,
-                    unit: account.kind == .workbuddy2api ? "积分" : account.currency.symbol) { point in
+                    unit: account.kind == .workbuddy2api ? "积分" : account.currency.symbol,
+                    isCompact: true) { point in
                         selectedTrendDay = point?.day
                     }
-                    .frame(height: 132)
-                    .padding(.top, 4)
+                    .frame(height: 94)
             }
         }
     }
@@ -417,7 +466,7 @@ public struct AccountDetailView: View {
                 days: 7, now: presentationDate, calendar: historyCalendar, currency: account.currency)
             if !coverage.isComplete {
                 Text("有效金额 \(coverage.knownDays)/7 天 · 缺失日期为未知")
-                    .font(.system(size: 10)).foregroundStyle(.secondary)
+                    .font(.system(size: 9)).foregroundStyle(.secondary)
             }
         }
     }
@@ -454,24 +503,20 @@ public struct AccountDetailView: View {
         let tokens = account.kind == .workbuddy2api
             ? (snapshot?.modelUsages == nil ? nil : snapshot?.workBuddyStats?.total.totalTokens)
             : DailyModelUsageService.tokenCount(models)
-        return VStack(alignment: .leading, spacing: 5) {
-            HStack {
-                Text(account.kind == .deepseek ? "本月请求" : account.kind == .workbuddy2api ? "进程累计请求" : "账户累计请求")
-                Spacer()
-                Text(requests.map { $0.formatted() } ?? "—").monospacedDigit()
-            }
-            HStack {
-                Text(account.kind == .workbuddy2api ? "进程累计 Token" : selectedModelDateLabel + "已获取模型 Token")
-                Spacer()
-                Text(tokens.flatMap { $0 >= 0 ? RelayNumberFormatter.tokens($0) : nil } ?? "—").monospacedDigit()
-                    .help(tokens.map { $0.formatted() } ?? "Token 用量未知")
-            }
-            if account.kind == .workbuddy2api {
-                Text("网关全部账号统计，不分摊至子账户。")
-                    .font(.system(size: 10)).foregroundStyle(.secondary)
-            }
+        let requestTitle = account.kind == .deepseek ? "本月请求" : account.kind == .workbuddy2api ? "进程累计请求" : "账户累计请求"
+        let tokenTitle = account.kind == .workbuddy2api ? "进程 Token" : selectedModelDateLabel + " Token"
+        return HStack(spacing: 6) {
+            Text(requestTitle).foregroundStyle(.secondary)
+            Text(requests.map(RelayNumberFormatter.tokens) ?? "—").monospacedDigit()
+                .help((account.kind == .workbuddy2api ? "网关进程累计请求：" : account.kind == .pipio ? "账户累计请求：" : "本月请求：")
+                    + (requests.map { $0.formatted() } ?? "未知"))
+            Spacer(minLength: 2)
+            Text(tokenTitle).foregroundStyle(.secondary)
+            Text(tokens.flatMap { $0 >= 0 ? RelayNumberFormatter.tokens($0) : nil } ?? "—").monospacedDigit()
+                .help((account.kind == .workbuddy2api ? "网关全部账号本进程总 Token：" : "该日已获取模型 Token 合计：")
+                    + (tokens.map { $0.formatted() } ?? "未知"))
         }
-        .font(.system(size: 11)).foregroundStyle(.secondary)
+        .font(.system(size: 9.5)).lineLimit(1).minimumScaleFactor(0.85)
     }
 
     private var accountWebsiteURL: URL? {
@@ -528,39 +573,4 @@ public struct AccountDetailView: View {
         case .error: return .red
         }
     }
-}
-
-private struct MetricCard: View {
-    let title: String
-    let value: String
-    let subTitle: String
-    var budgetUsage: Decimal? = nil
-    var budgetStatusText: String? = nil
-
-    var body: some View {
-        VStack(spacing: 7) {
-            Text(title).font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
-            Text(value).font(.system(size: 15, weight: .semibold)).tracking(-0.3)
-                .monospacedDigit().lineLimit(1).minimumScaleFactor(0.6)
-            if let budgetUsage {
-                ProgressView(value: min(1, max(0, NSDecimalNumber(decimal: budgetUsage).doubleValue)))
-                    .controlSize(.small)
-                    .tint(budgetUsage >= 1 ? .orange : .accentColor)
-                    .frame(maxWidth: 112)
-                    .accessibilityLabel("月预算使用进度")
-                if let budget = budgetStatusText {
-                    VStack(spacing: 2) {
-                        Text("已用 " + RelayNumberFormatter.percent(budgetUsage))
-                        Text(budget)
-                    }
-                    .font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
-                }
-            } else {
-                Text(subTitle).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.75)
-            }
-        }
-        .multilineTextAlignment(.center)
-        .frame(maxWidth: .infinity).padding(.top, 2)
-    }
-
 }

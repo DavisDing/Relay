@@ -9,13 +9,15 @@ public struct AdaptiveLineChart: View {
     public let unit: String
     public var onSelect: (DailySpendPoint?) -> Void
     public var isSelectable: Bool
+    public var isCompact: Bool
     @State private var selectedPointID: String?
 
-    public init(dataPoints: [DailySpendPoint], unit: String = "$", isSelectable: Bool = true,
+    public init(dataPoints: [DailySpendPoint], unit: String = "$", isSelectable: Bool = true, isCompact: Bool = false,
                 onSelect: @escaping (DailySpendPoint?) -> Void = { _ in }) {
         self.dataPoints = dataPoints
         self.unit = unit
         self.isSelectable = isSelectable
+        self.isCompact = isCompact
         self.onSelect = onSelect
     }
 
@@ -37,7 +39,7 @@ public struct AdaptiveLineChart: View {
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
             } else {
-                if isSelectable, let readout = selectedPoint ?? dataPoints.last {
+                if isSelectable, !isCompact, let readout = selectedPoint ?? dataPoints.last {
                     HStack(spacing: 6) {
                         Text(readout.dateString)
                             .font(.system(size: 11, weight: .medium))
@@ -76,7 +78,7 @@ public struct AdaptiveLineChart: View {
                     )
                     .interpolationMethod(.monotone)
                     .foregroundStyle(Color.accentColor)
-                    .lineStyle(StrokeStyle(lineWidth: 2.2, lineCap: .round, lineJoin: .round))
+                    .lineStyle(StrokeStyle(lineWidth: isCompact ? 1.8 : 2.2, lineCap: .round, lineJoin: .round))
                     .accessibilityHidden(true)
 
                     AreaMark(
@@ -97,7 +99,7 @@ public struct AdaptiveLineChart: View {
                     y: .value("消耗金额", point.amount)
                 )
                 .foregroundStyle(Color.accentColor)
-                .symbolSize(point.id == selectedPointID ? 50 : 14)
+                .symbolSize(point.id == selectedPointID ? 40 : isCompact ? point.id == dataPoints.last?.id ? 20 : 0 : 14)
                 .accessibilityLabel(point.dateString)
                 .accessibilityValue(amountText(point))
             }
@@ -105,7 +107,7 @@ public struct AdaptiveLineChart: View {
         .chartXAxis {
             AxisMarks(values: axisDates) { _ in
                 AxisValueLabel()
-                    .font(.system(size: 10))
+                    .font(.system(size: isCompact ? 9 : 10))
                     .foregroundStyle(Color.secondary)
             }
         }
@@ -125,7 +127,7 @@ public struct AdaptiveLineChart: View {
                     let plot = geometry[anchor]
                     let positions = dataPoints.map { proxy.position(forX: $0.dateString) }
                     let widths = dataPoints.map { labelWidth($0, availableWidth: plot.width) }
-                    let labels = AdaptiveChartSelection.annotationIndices(
+                    let labels = isCompact ? Set([selectedIndex ?? dataPoints.count - 1]) : AdaptiveChartSelection.annotationIndices(
                         amounts: dataPoints.map(\.amount),
                         selectedIndex: selectedIndex,
                         positions: positions,
@@ -146,7 +148,7 @@ public struct AdaptiveLineChart: View {
                         ForEach(dataPoints.indices.filter { labels.contains($0) }, id: \.self) { index in
                             if let x = positions[index],
                                let y = proxy.position(forY: dataPoints[index].amount) {
-                                Text(amountText(dataPoints[index]))
+                                Text(annotationText(at: index))
                                     .font(.system(size: 9, weight: .semibold))
                                     .foregroundStyle(index == selectedIndex ? Color.accentColor : Color.secondary)
                                     .lineLimit(1)
@@ -208,10 +210,15 @@ public struct AdaptiveLineChart: View {
     }
 
     private func labelWidth(_ point: DailySpendPoint, availableWidth: CGFloat) -> CGFloat {
-        let text = amountText(point) as NSString
+        let text = (isCompact && point.id == selectedPointID ? point.dateString + " · " : "") + amountText(point)
         return min(max(0, availableWidth), ceil(text.size(withAttributes: [
             .font: NSFont.systemFont(ofSize: 9, weight: .semibold)
         ]).width) + 2)
+    }
+
+    private func annotationText(at index: Int) -> String {
+        let point = dataPoints[index]
+        return (isCompact && index == selectedIndex ? point.dateString + " · " : "") + amountText(point)
     }
 
     private func select(at x: CGFloat, positions: [CGFloat?]) {

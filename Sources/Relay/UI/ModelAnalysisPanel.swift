@@ -26,18 +26,30 @@ public struct ModelAnalysisPanel: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 5) {
+            Divider().opacity(0.45)
             HStack(spacing: 6) {
-                Text("模型用量").font(.system(size: 12, weight: .semibold))
-                Text(dateLabel).font(.system(size: 10)).foregroundStyle(.secondary)
+                Text("模型用量").font(.system(size: 11, weight: .semibold))
+                Text(dateLabel).font(.system(size: 9)).foregroundStyle(.secondary)
                 Spacer(minLength: 2)
                 if let items, !items.isEmpty {
-                    Picker("排序", selection: $sort) {
-                        ForEach(ModelAnalysisSort.allCases) {
-                            Text(scope == .processCredits && $0 == .spend ? "积分" : $0.rawValue).tag($0)
+                    Menu {
+                        Picker("排序", selection: $sort) {
+                            ForEach(ModelAnalysisSort.allCases) {
+                                Text(scope == .processCredits && $0 == .spend ? "积分" : $0.rawValue).tag($0)
+                            }
                         }
-                    }.labelsHidden().frame(width: 65).controlSize(.mini)
-                    Toggle("Top 5", isOn: $topFive).toggleStyle(.checkbox).font(.system(size: 10))
+                        Divider()
+                        Toggle("仅显示 Top 5", isOn: $topFive)
+                    } label: {
+                        HStack(spacing: 3) {
+                            Text((topFive ? "Top 5 · " : "按") + (scope == .processCredits && sort == .spend ? "积分" : sort.rawValue))
+                            Image(systemName: "arrow.down").font(.system(size: 8))
+                        }.font(.system(size: 9)).foregroundStyle(.secondary)
+                    }
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden).controlSize(.mini)
+                    .foregroundStyle(.secondary).tint(.secondary).fixedSize()
+                    .accessibilityLabel("模型排序与 Top 5")
                 }
             }
             if scope == .processCredits {
@@ -55,34 +67,34 @@ public struct ModelAnalysisPanel: View {
                     column(unitCostTitle)
                     column(spendTitle)
                 }
-                .font(.system(size: 9, weight: .medium)).foregroundStyle(.secondary)
-                .padding(.horizontal, 7)
+                .font(.system(size: 8, weight: .medium)).foregroundStyle(.secondary)
                 .help(scope == .processCredits
                     ? "积分/百万：本进程累计积分 ÷ 本进程总 Token × 100 万；未知值显示 --。"
                     : "费用/百万：当日消费 ÷ 当日总 Token × 100 万；未知值显示 --。")
-                ForEach(analysis.rows) { row in
-                    ModelUsageColumns {
-                        Text(row.item.modelName).font(.system(size: 12, weight: .medium))
-                            .lineLimit(1).truncationMode(.middle)
-                            .frame(maxWidth: .infinity, alignment: .leading).help(row.item.modelName)
-                        column(row.item.tokenCount.map(RelayNumberFormatter.tokens) ?? "--")
-                            .help("总 Token：\(row.item.tokens)")
-                            .accessibilityLabel("总 Token：\(row.item.tokens)")
-                        column(row.item.cacheHitRate.map(RelayNumberFormatter.percent) ?? "--")
-                            .accessibilityLabel("缓存占比：" + (row.item.cacheHitRate.map(RelayNumberFormatter.percent) ?? "未知"))
-                        let unitCost = row.costPerMillionTokens.map { amountText($0.amount, currency: $0.currency) }
-                        let spend = row.item.cost.map { amountText($0, currency: row.item.currency) }
-                        column(row.costPerMillionTokens.map { compactAmountText($0.amount, currency: $0.currency) } ?? "--")
-                            .help(unitCostTitle + "：" + (unitCost ?? "未知"))
-                            .accessibilityLabel(unitCostTitle + "：" + (unitCost ?? "未知"))
-                        column(row.item.cost.map { compactAmountText($0, currency: row.item.currency) } ?? "--")
-                            .help(spendTitle + "：" + (spend ?? "未知")
-                                + "；" + shareTitle + (row.spendShare.map { "：" + RelayNumberFormatter.percent($0) } ?? "未知"))
-                            .accessibilityLabel(spendTitle + "：" + (spend ?? "未知"))
+                VStack(spacing: 2) {
+                    ForEach(analysis.rows) { row in
+                        ModelUsageColumns {
+                            Text(row.item.modelName).font(.system(size: 9))
+                                .lineLimit(1).truncationMode(.middle)
+                                .frame(maxWidth: .infinity, alignment: .leading).help(row.item.modelName)
+                            column(row.item.tokenCount.map(RelayNumberFormatter.tokens) ?? "--")
+                                .help("总 Token：\(row.item.tokens)")
+                                .accessibilityLabel("总 Token：\(row.item.tokens)")
+                            column(row.item.cacheHitRate.map(RelayNumberFormatter.percent) ?? "--")
+                                .accessibilityLabel("缓存占比：" + (row.item.cacheHitRate.map(RelayNumberFormatter.percent) ?? "未知"))
+                            let unitCost = row.costPerMillionTokens.map { amountText($0.amount, currency: $0.currency) }
+                            let spend = row.item.cost.map { amountText($0, currency: row.item.currency) }
+                            column(row.costPerMillionTokens.map { compactAmountText($0.amount, currency: $0.currency) } ?? "--")
+                                .help(unitCostTitle + "：" + (unitCost ?? "未知"))
+                                .accessibilityLabel(unitCostTitle + "：" + (unitCost ?? "未知"))
+                            column(row.item.cost.map { compactAmountText($0, currency: row.item.currency) } ?? "--")
+                                .help(spendTitle + "：" + (spend ?? "未知")
+                                    + "；" + shareTitle + (row.spendShare.map { "：" + RelayNumberFormatter.percent($0) } ?? "未知"))
+                                .accessibilityLabel(spendTitle + "：" + (spend ?? "未知"))
+                        }
+                        .font(.system(size: 9.5)).monospacedDigit()
+                        .frame(minHeight: 18)
                     }
-                    .font(.system(size: 11)).monospacedDigit()
-                    .padding(.horizontal, 7).padding(.vertical, 7)
-                    .overlay(alignment: .bottom) { Divider().opacity(0.4) }
                 }
             } else {
                 Text(items == nil ? unavailableMessage : scope == .processCredits
@@ -110,22 +122,23 @@ public struct ModelAnalysisPanel: View {
 
     private func compactAmountText(_ amount: Decimal, currency: Currency) -> String {
         guard !amount.isNaN, amount >= 0 else { return "--" }
-        return RelayNumberFormatter.modelMetric(amount, currency: scope == .processCredits ? nil : currency)
+        return scope == .processCredits ? RelayNumberFormatter.compactDecimal(amount)
+            : RelayNumberFormatter.compactMoney(amount, currency: currency)
     }
 
     private func column(_ text: String) -> some View {
         Text(text).lineLimit(1).minimumScaleFactor(0.8)
-            .frame(maxWidth: .infinity, alignment: .center)
+            .frame(maxWidth: .infinity, alignment: .trailing)
     }
 }
 
 private struct ModelUsageColumns: Layout {
     private let spacing: CGFloat = 4
-    // Keep the model identifier at two fifths of the row. Equal metric cells
-    // and centered text give the header and numbers consistent visual spacing.
+    // A third of the row preserves identifiers; aligned numeric columns keep
+    // all five metrics readable in the 350 pt cockpit.
     private func widths(_ width: CGFloat) -> [CGFloat] {
         let available = max(0, width - spacing * 4)
-        let modelWidth = min(available, max(0, width * 0.4))
+        let modelWidth = min(available, max(0, width * 0.32))
         let metricWidth = (available - modelWidth) / 4
         return [modelWidth] + Array(repeating: metricWidth, count: 4)
     }

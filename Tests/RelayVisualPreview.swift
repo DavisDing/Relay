@@ -12,26 +12,32 @@ struct RelayVisualPreview {
         app.setActivationPolicy(.regular)
         let repository = InMemoryLocalRepository()
         let now = Date()
-        for (index, provider) in [ProviderKind.deepseek, .deepseek, .pipio].enumerated() {
-            let names = ["个人账户", "实验账户", "工作账户"]
+        for (index, provider) in [ProviderKind.deepseek, .deepseek, .pipio, .deepseek].enumerated() {
+            let names = ["个人账户", "实验账户", "工作账户", "用于检查长名称与缺失数据的账户"]
             let account = AccountConfiguration(displayName: names[index], providerKind: provider,
                 siteOrigin: URL(string: provider == .deepseek ? "https://api.deepseek.com" : "https://pipio.io")!,
-                monthlyBudget: MoneyValue(amount: 200, currency: .cny),
+                monthlyBudget: index == 1 ? nil : MoneyValue(amount: index == 2 ? 50 : 200, currency: .cny),
                 groupName: "预览示例", isPinned: index == 0, sortOrder: index)
             try repository.upsertAccount(account)
-            let todayAmounts: [Decimal] = [Decimal(string: "12.80")!, Decimal(string: "6.42")!, Decimal(string: "23.64")!]
-            let balances: [Decimal] = [Decimal(string: "1234.56")!, Decimal(string: "38.17")!, Decimal(string: "151.83")!]
+            let todayAmounts: [Decimal] = [Decimal(string: "12.80")!, Decimal(string: "6.42")!, Decimal(string: "23.64")!, 0]
+            let balances: [Decimal] = [Decimal(string: "1234.56")!, Decimal(string: "38.17")!, Decimal(string: "151.83")!, 87]
             let rate = AccountRate(accountID: account.id, source: .providerNativeCurrency, nativeCurrency: .cny)
-            let models = [ModelUsageSummary(modelName: "deepseek-chat", tokenCount: 1_420_000, requestCount: 824,
-                cacheHitRate: Decimal(string: "0.68"), spend: MoneyValue(amount: todayAmounts[index], currency: .cny))]
+            let models = zip(["deepseek-chat", "deepseek-reasoner", "其他模型"], [Decimal(string: "8.20")!, Decimal(string: "4.50")!, Decimal(string: "0.10")!])
+                .enumerated().map { modelIndex, item in
+                    ModelUsageSummary(modelName: item.0, tokenCount: [1_420_000, 460_000, 20_000][modelIndex],
+                        requestCount: [600, 200, 24][modelIndex],
+                        cacheHitRate: [Decimal(string: "0.68")!, Decimal(string: "0.43")!, Decimal(string: "0.35")!][modelIndex],
+                        spend: MoneyValue(amount: item.1 * todayAmounts[index] / Decimal(string: "12.80")!, currency: .cny))
+                }
             try repository.upsertSnapshot(ProviderSnapshot(accountID: account.id,
                 balance: MoneyValue(amount: balances[index], currency: .cny),
-                todaySpend: MoneyValue(amount: todayAmounts[index], currency: .cny),
-                monthSpend: MoneyValue(amount: Decimal(string: "86.40")!, currency: .cny), requestCount: 824,
+                todaySpend: index == 3 ? nil : MoneyValue(amount: todayAmounts[index], currency: .cny),
+                monthSpend: index == 3 ? nil : MoneyValue(amount: Decimal(string: "86.40")!, currency: .cny), requestCount: 824,
                 modelUsages: models, capabilities: [.balance, .todayUsage, .monthlyUsage, .modelUsage],
-                freshness: .fresh, rate: rate))
+                freshness: index == 3 ? .partial : .fresh, rate: rate))
             let calendar = BudgetService.calendar(for: provider)
             for offset in -6...0 {
+                if index == 3 { continue }
                 let day = calendar.date(byAdding: .day, value: offset, to: calendar.startOfDay(for: now))!
                 try repository.upsertDailyUsage(DailyUsageRecord(accountID: account.id, day: day,
                     spend: MoneyValue(amount: todayAmounts[index] + Decimal(offset % 3), currency: .cny), modelUsages: models))
@@ -41,14 +47,18 @@ struct RelayVisualPreview {
             siteOrigin: URL(string: "http://localhost:7863")!, sortOrder: 3)
         try repository.upsertAccount(gateway)
         try repository.upsertSnapshot(ProviderSnapshot(accountID: gateway.id, balance: nil,
-            todaySpend: nil, monthSpend: nil, requestCount: nil, capabilities: [.creditBalance], freshness: .fresh,
+            todaySpend: nil, monthSpend: nil, requestCount: 824,
+            modelUsages: [ModelUsageSummary(modelName: "gateway-model", tokenCount: 1_900_000, requestCount: 824,
+                cacheHitRate: Decimal(string: "0.43"), spend: MoneyValue(amount: 1280, currency: .cny))],
+            capabilities: [.creditBalance, .modelUsage], freshness: .fresh,
             rate: AccountRate(accountID: gateway.id, source: .providerNativeCurrency, nativeCurrency: .cny),
             subAccounts: [
                 ProviderSubAccountSnapshot(parentAccountID: gateway.id, externalID: "preview-1", displayName: "开发子账户",
                     availablePoints: 10_000, consecutiveFailures: 0),
                 ProviderSubAccountSnapshot(parentAccountID: gateway.id, externalID: "preview-2", displayName: "测试子账户",
                     availablePoints: 2480, consecutiveFailures: 2)
-            ]))
+            ], workBuddyStats: WorkBuddyStatsSnapshot(since: now.addingTimeInterval(-86400),
+                total: WorkBuddyStatsCounter(requests: 824, totalTokens: 1_900_000, credit: 1280))))
         let store = RelayStore(repository: repository, credentialStore: InMemoryCredentialStore(),
             adapters: ProviderAdapterRegistry(adapters: []), automaticallyRefresh: false)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 680, height: 700),
@@ -85,6 +95,12 @@ private struct RelayPreviewGallery: View {
                 Text("浅色").tag(false)
                 Text("深色").tag(true)
             }.pickerStyle(.segmented).frame(width: 140)
+            if page == "账户详情" {
+                Picker("预览账户", selection: Binding(get: { selectedAccountID ?? store.accounts.first?.id ?? "" },
+                    set: { selectedAccountID = $0 })) {
+                    ForEach(previewAccounts) { Text($0.name).tag($0.id) }
+                }.frame(width: 320)
+            }
             Spacer(minLength: 0)
             preview(colorScheme: darkAppearance ? .dark : .light, title: "\(Int(previewSize.width)) × \(Int(previewSize.height)) pt")
             Spacer(minLength: 0)
@@ -101,6 +117,10 @@ private struct RelayPreviewGallery: View {
         case "设置", "批量整理": return CGSize(width: RelayVisualStyle.settingsPanelWidth, height: RelayVisualStyle.settingsPanelHeight)
         default: return CGSize(width: RelayVisualStyle.panelWidth, height: RelayVisualStyle.panelHeight)
         }
+    }
+
+    private var previewAccounts: [AccountModel] {
+        store.accounts + store.dashboardAccounts.filter { item in !store.accounts.contains { $0.id == item.id } }
     }
 
     private func preview(colorScheme: ColorScheme, title: String) -> some View {
